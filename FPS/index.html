@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/retro.css">
+  <title>FPS La Grieta — Jugando en La Grieta</title>
+</head>
+<body>
+
+  <canvas id="gameCanvas"></canvas>
+  <div id="rg-crt"></div>
+  <div id="hud">
+    <div id="crosshair">+</div>
+    <div id="stats">Vida: 100</div>
+    <div id="firebaseui-auth-container" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,0.8); padding:20px; border-radius:8px;"></div>
+    <div id="toolHud" style="position:absolute; bottom:10px; right:10px;">Herramienta: Pistola </div>
+    <div id="weaponHud" style="position:absolute; bottom:20px; right:10px;">
+        <div id="weaponInfo"></div>
+        <div id="ammoType"></div>
+        <div id="ammo"></div>
+    </div>
+        <div id="inventoryHud" style="position:absolute; top:10px; right:10px;">
+        <div id="inventory" class="hud-element"></div>
+        <div id="resources" class="hud-element" style="text-align:right;"></div>
+    </div>
+  </div>
+
+  <!-- Mobile Controls -->
+  <div id="mobileControls">
+    <div id="joystickLeft">
+      <div id="joystickKnob"></div>
+    </div>
+    <div id="rightTouchArea"></div>
+    <div id="mobileButtons">
+      <div class="mobileBtn" id="actionBtn">?</div>
+      <div class="mobileBtn" id="jumpBtn">↑</div>
+    </div>
+  </div>
+
+  <div id="quickSlots" class="quick-slots-container">
+      <div class="quick-slot" data-slot="0"></div>
+      <div class="quick-slot" data-slot="1"></div>
+      <div class="quick-slot" data-slot="2"></div>
+      <div class="quick-slot" data-slot="3"></div>
+  </div>
+
+
+  <div id="interactionPrompt" style="
+      position: fixed;
+      bottom: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 10px 20px;
+      border-radius: 5px;
+      font-family: Arial, sans-serif;
+      transition: opacity 0.3s;
+      opacity: 0;
+      pointer-events: none;
+      z-index: 100;
+  "></div>
+
+  <div id="gameOver" class="rg-overlay">
+      <h2 class="rg-title danger">☠ MORISTE</h2>
+      <div id="gameOverStats" class="rg-stats"></div>
+      <div>
+        <button onclick="respawnPlayer()" class="rg-btn rg-btn-primary">Reaparecer</button>
+        <button onclick="window.location.reload()" class="rg-btn">Reiniciar</button>
+      </div>
+      <div class="rg-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
+  </div>
+
+  <div id="invModal" class="rg-overlay" style="justify-content:center; align-items:center;">
+    <div class="rg-panel rg-modalbox">
+      <h2 class="rg-title">🎒 Mochila</h2>
+      <div style="margin-bottom:8px;">
+        <button onclick="invShowTab('items')" class="rg-btn rg-btn-small">Cosas</button>
+        <button onclick="invShowTab('craft')" class="rg-btn rg-btn-small">Crafteo</button>
+        <button onclick="toggleInventory()" class="rg-btn rg-btn-small" style="float:right;">Cerrar (Q)</button>
+      </div>
+      <div id="invItems"></div>
+      <div id="invCraft" style="display:none;"></div>
+      <div id="invFoot" class="rg-stats" style="font-size:18px;"></div>
+      <div id="invMsg" class="rg-status"></div>
+      <div class="rg-hint">Q o ESC para cerrar · Equipar/Comer con el botón · Soltar deja el objeto en el suelo</div>
+    </div>
+  </div>
+
+  <div id="totemModal" class="rg-overlay" style="justify-content:center; align-items:center;">
+    <div class="rg-panel rg-modalbox narrow">
+      <h2 class="rg-title">🗿 Tótem de info</h2>
+      <div id="totemBody" style="font-size:22px; line-height:1.6;"></div>
+      <div style="margin-top:12px;">
+        <button onclick="toggleTotem(false)" class="rg-btn rg-btn-small">Cerrar (E/ESC)</button>
+      </div>
+    </div>
+  </div>
+  <div id="benchModal" class="rg-overlay" style="justify-content:center; align-items:center;">
+    <div class="rg-panel rg-modalbox" style="border-color:var(--rg-amber);">
+      <h2 class="rg-title">🛠 Mesa de trabajo — tu base</h2>
+      <div style="font-size:19px;">Estructura: <span id="benchHpTxt"></span></div>
+      <div class="rg-hpbar"><div id="benchHpBar" style="background:#4CAF50; width:100%;"></div></div>
+      <div id="benchCraft"></div>
+      <div style="margin-top:8px;">
+        <button onclick="repairBench()" class="rg-btn rg-btn-small rg-btn-warn">Reparar +100 (3 madera + 2 piedra)</button>
+        <button onclick="toggleBench(false)" class="rg-btn rg-btn-small" style="float:right;">Cerrar (E/ESC)</button>
+      </div>
+      <div id="benchMsg" class="rg-status"></div>
+      <div class="rg-hint">Si la rompen los enemigos, la perdés. ¡Defendela!</div>
+    </div>
+  </div>
+
+
+  <!-- ✅ UMD-compatible Three.js and controls -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-firestore.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-database.js"></script>
+  <script>
+    // Jugando en La Grieta Firebase config (same project as authService.js).
+    // Initialized synchronously so game code can use firebase.auth()/firestore() immediately.
+    window.LAGRIETA_FIREBASE_CONFIG = {
+      apiKey: "AIzaSyDmRGzi6Vfekya8GkylXpmgMOzqa7npm24",
+      authDomain: "jugandoenlagrieta.firebaseapp.com",
+      databaseURL: "https://jugandoenlagrieta.firebaseio.com",
+      projectId: "jugandoenlagrieta",
+      storageBucket: "jugandoenlagrieta.appspot.com",
+      messagingSenderId: "675383101263",
+      appId: "1:675383101263:web:1f2e7115af91909d3b673a",
+      measurementId: "G-RPB387PVLE"
+    };
+    try {
+      if (window.firebase && !firebase.apps.length) {
+        firebase.initializeApp(window.LAGRIETA_FIREBASE_CONFIG);
+      }
+    } catch (e) { console.error('Firebase init failed:', e); }
+  </script>
+  <script src="https://www.gstatic.com/firebasejs/ui/4.8.0/firebase-ui-auth__es.js"></script>
+  <script type="module" src="../../js/authService.js"></script>
+
+
+  <!-- Your main game logic -->
+  <!-- LaGrieta FPS: logic split by system. Classic scripts share globals: LOAD ORDER MATTERS. -->
+  <script src="js/01-config.js"></script>
+  <script src="js/02-systems.js"></script>
+  <script src="js/03-worlddata.js"></script>
+  <script src="js/04-character.js"></script>
+  <script src="js/05-inventory.js"></script>
+  <script src="js/06-entities.js"></script>
+  <script src="js/07-spawns.js"></script>
+  <script src="js/08-build.js"></script>
+  <script src="js/09-menu.js"></script>
+  <script src="js/10-init.js"></script>
+  <script src="js/11-controls.js"></script>
+  <script src="js/12-loop.js"></script>
+  <script src="js/13-audio.js"></script>
+  <script src="js/14-serialize.js"></script>
+  <script src="js/15-ui.js"></script>
+  <script src="js/17-net.js"></script>
+  <script src="js/18-trial.js"></script>
+  <script src="js/16-boot.js"></script>
+</body>
+</html>

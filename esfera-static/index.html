@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Esfera — Patio de La Grieta</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <div id="overlay">
+    <div class="card">
+      <h1>Click para entrar</h1>
+      <div class="keys">
+        <span class="key highlight">W A S D</span>
+        <span class="key">Moverse</span>
+      </div>
+      <div class="keys">
+        <span class="key">Mouse</span>
+        <span class="key">Mirar</span>
+        <span class="key highlight">Clic</span>
+        <span class="key">Cosechar, disparar o poner</span>
+      </div>
+      <div class="keys">
+        <span class="key highlight">E</span>
+        <span class="key">Tótem, mesa, puerta</span>
+        <span class="key highlight">Q</span>
+        <span class="key">Mochila</span>
+      </div>
+      <div class="keys">
+        <span class="key highlight">C</span>
+        <span class="key">Material</span>
+        <span class="key highlight">V</span>
+        <span class="key">Escalera</span>
+        <span class="key highlight">Der</span>
+        <span class="key">Borrar bloque</span>
+      </div>
+      <div class="keys">
+        <span class="key highlight">F</span>
+        <span class="key">Plantar antorcha</span>
+        <span class="key highlight">1-5</span>
+        <span class="key">Cinturón, números o rueda</span>
+      </div>
+      <div class="keys">
+        <span class="key highlight">Shift</span>
+        <span class="key">Correr</span>
+        <span class="key highlight">Espacio</span>
+        <span class="key">Saltar</span>
+        <span class="key highlight">Esc</span>
+        <span class="key">Pausa</span>
+      </div>
+      <p class="subtle">Patio de La Grieta sobre la esfera</p>
+    </div>
+  </div>
+
+  <div id="debug-info"></div>
+
+  <!-- Three.js desde CDN, script clásico (no módulo) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <!-- Módulos del juego, cargados en orden de dependencia.
+       Son <script> clásicos (no type="module") a propósito: los módulos ES
+       solo cargan vía HTTP, NUNCA vía file://, así que abrir este archivo
+       con doble click los rompería. Cada archivo se cuelga de un namespace
+       global compartido (window.Game) en vez de usar import/export. -->
+  <script src="src/config.js"></script>
+  <script src="src/settings.js"></script>
+  <script src="src/utils.js"></script>
+  <script src="src/localFrame.js"></script>
+  <script src="src/colliders.js"></script>
+  <script src="src/groundHeight.js"></script>
+  <script src="src/audio.js"></script>
+  <script src="src/playerHealth.js"></script>
+  <script src="src/world.js"></script>
+  <script src="src/torches.js"></script>
+  <script src="src/inventory.js"></script>
+  <script src="src/hud.js"></script>
+  <script src="src/courtyard.js"></script>
+  <script src="src/build.js"></script>
+  <script src="src/projectiles.js"></script>
+  <script src="src/enemies.js"></script>
+  <script src="src/weapon.js"></script>
+  <script src="src/input.js"></script>
+  <script src="src/player.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
