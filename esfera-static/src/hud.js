@@ -378,10 +378,10 @@
       const controls = el('div', 'pause-controls');
       const rows = [
         ['W A S D', 'Moverse'],
-        ['Mouse / Clic', 'Mirar / Cosechar, disparar o poner'],
+        ['Mouse / Clic', 'Mirar / Puño derecho, cosechar, disparar o poner'],
         ['E / Q', 'Tótem, mesa, puerta / Mochila'],
         ['C / V', 'Material / Escalera'],
-        ['Der', 'Borrar bloque (creador: abre el menú)'],
+        ['Der', 'Puño izquierdo, o borrar (creador: abre el menú)'],
         ['F / 1-5', 'Antorcha / Cinturón, números o rueda'],
         ['G / B', 'Creador / Menú'],
         ['Shift / Espacio', 'Correr / Saltar (en creador: volar)'],

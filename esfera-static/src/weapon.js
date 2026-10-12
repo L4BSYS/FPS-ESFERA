@@ -18,23 +18,14 @@
     let reloading = false;
     let lastShot = 0;
 
-    // La mano vive en el espacio de la cámara, abajo a la derecha.
-    // z = -0.72 queda delante del plano cercano (0.5) y lejos de la mira.
-    const REST = { x: 0.28, y: -0.24, z: -0.72 };
+    // Las herramientas se sientan en el puño derecho del muñeco.
+    // El grupo espera a attach(): colgarlo de la cámara lo dejaba flotando.
     const rig = new THREE.Group();
     rig.name = 'viewmodel';
-    rig.position.set(REST.x, REST.y, REST.z);
-    camera.add(rig);
 
     const held = {};
     let current = 'hands';
     let kick = 0;
-    let drop = 0;
-    let swayX = 0;
-    let swayY = 0;
-    let bob = 0;
-    let lastYaw = 0;
-    let lastPitch = 0;
 
     function tune(obj) {
       obj.frustumCulled = false;
@@ -197,36 +188,21 @@
       });
     }
 
-    function update(dt, input) {
-      const yaw = input ? input.yaw : lastYaw;
-      const pitch = input ? input.pitch : lastPitch;
-      const dyaw = Math.max(-0.2, Math.min(0.2, yaw - lastYaw));
-      const dpitch = Math.max(-0.2, Math.min(0.2, pitch - lastPitch));
-      lastYaw = yaw;
-      lastPitch = pitch;
-      const follow = Math.min(1, dt * 8);
-      swayX += (-dyaw * 0.4 - swayX) * follow;
-      swayY += (dpitch * 0.3 - swayY) * follow;
-      const moving = !!(input && (
-        input.isDown('KeyW') || input.isDown('KeyA') || input.isDown('KeyS') || input.isDown('KeyD') ||
-        input.isDown('ArrowUp') || input.isDown('ArrowDown') || input.isDown('ArrowLeft') || input.isDown('ArrowRight')
-      ));
-      if (moving) bob += dt * ((input.isDown('ShiftLeft') || input.isDown('ShiftRight')) ? 14 : 9);
-      const bobY = moving ? Math.sin(bob) * 0.014 : 0;
-      const bobX = moving ? Math.cos(bob * 0.5) * 0.008 : 0;
+    function attach(mount) {
+      if (rig.parent) rig.parent.remove(rig);
+      mount.add(rig);
+      rig.position.set(0, 0, 0);
+      rig.rotation.set(0, 0, 0);
+    }
+
+    function update(dt) {
       kick += (0 - kick) * Math.min(1, dt * 9);
-      drop += (0 - drop) * Math.min(1, dt * 7);
-      rig.position.set(
-        REST.x + swayX + bobX,
-        REST.y + swayY + bobY - drop,
-        REST.z + kick * 0.045
-      );
-      rig.rotation.z = -swayX * 0.35;
-      rig.rotation.x = swayY * 0.25;
+      rig.position.z = -kick * 0.05;
     }
 
     return {
-      shoot, startReload, addReserve, takeReserve, ensureReserve, update, setTool,
+      shoot, startReload, addReserve, takeReserve, ensureReserve, update, setTool, attach,
+      tools: held,
       get mag() { return currentMag; },
       get reserve() { return reserveAmmo; },
       get reloading() { return reloading; },
