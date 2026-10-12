@@ -4,54 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Esfera — Patio de La Grieta</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="src/style.css">
 </head>
 <body>
-  <div id="overlay">
-    <div class="card">
-      <h1>Click para entrar</h1>
-      <div class="keys">
-        <span class="key highlight">W A S D</span>
-        <span class="key">Moverse</span>
-      </div>
-      <div class="keys">
-        <span class="key">Mouse</span>
-        <span class="key">Mirar</span>
-        <span class="key highlight">Clic</span>
-        <span class="key">Cosechar, disparar o poner</span>
-      </div>
-      <div class="keys">
-        <span class="key highlight">E</span>
-        <span class="key">Tótem, mesa, puerta</span>
-        <span class="key highlight">Q</span>
-        <span class="key">Mochila</span>
-      </div>
-      <div class="keys">
-        <span class="key highlight">C</span>
-        <span class="key">Material</span>
-        <span class="key highlight">V</span>
-        <span class="key">Escalera</span>
-        <span class="key highlight">Der</span>
-        <span class="key">Borrar bloque</span>
-      </div>
-      <div class="keys">
-        <span class="key highlight">F</span>
-        <span class="key">Plantar antorcha</span>
-        <span class="key highlight">1-5</span>
-        <span class="key">Cinturón, números o rueda</span>
-      </div>
-      <div class="keys">
-        <span class="key highlight">Shift</span>
-        <span class="key">Correr</span>
-        <span class="key highlight">Espacio</span>
-        <span class="key">Saltar</span>
-        <span class="key highlight">Esc</span>
-        <span class="key">Pausa</span>
-      </div>
-      <p class="subtle">Patio de La Grieta sobre la esfera</p>
-    </div>
-  </div>
-
+  <div id="crt"></div>
   <div id="debug-info"></div>
 
   <!-- Three.js desde CDN, script clásico (no módulo) -->
@@ -76,6 +35,7 @@
   <script src="src/hud.js"></script>
   <script src="src/courtyard.js"></script>
   <script src="src/build.js"></script>
+  <script src="src/creator.js"></script>
   <script src="src/projectiles.js"></script>
   <script src="src/enemies.js"></script>
   <script src="src/weapon.js"></script>

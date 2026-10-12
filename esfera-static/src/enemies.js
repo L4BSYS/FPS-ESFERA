@@ -168,6 +168,7 @@
     ];
     const enemies = specs.map(spawnEnemy);
     let kills = 0;
+    let passive = false;
 
     function spawnAt(points, count) {
       const pts = (points && points.length) ? points : specs;
@@ -211,6 +212,15 @@
 
     function update(dt, t, playerWorldPos) {
       if (PlayerHealth && PlayerHealth.isDead) return;
+      // Modo creador (como el FPS): los enemigos no atacan ni persiguen.
+      if (passive) {
+        enemies.forEach((e) => {
+          if (!e.alive) return;
+          window.Game.Utils.placeOnFrame(e.mesh, frame, e.localX, e.localZ, 0.8);
+          if (e.col) syncBody(e);
+        });
+        return;
+      }
       const { x: px, z: pz } = frame.worldToLocalXZ(playerWorldPos);
       const eye = frame.worldToLocal(playerWorldPos);
       const aimH = Math.max(0.4, eye.h - 0.4);
@@ -348,6 +358,80 @@
         enemy.alive = false;
       });
       enemies.length = 0;
+      creatorEnemies.length = 0;
+    }
+
+    // --- Creador: poner/sacar robots a mano ---
+    const creatorEnemies = [];
+
+    function spawnOne(x, z, fromCreator) {
+      const enemy = spawnEnemy({ x: x, z: z, speed: 2.2, sight: 14, chase: 46, attack: 3.2, hp: 100 });
+      enemies.push(enemy);
+      if (fromCreator) {
+        enemy.creator = true;
+        creatorEnemies.push(enemy);
+      }
+      return enemy;
+    }
+
+    function removeEnemy(enemy) {
+      if (!enemy) return false;
+      enemy.alive = false;
+      try { scene.remove(enemy.mesh); } catch (e) {}
+      if (enemy.col && Colliders) {
+        try { Colliders.remove(enemy.col); } catch (e) {}
+      }
+      const at = enemies.indexOf(enemy);
+      if (at >= 0) enemies.splice(at, 1);
+      const ct = creatorEnemies.indexOf(enemy);
+      if (ct >= 0) creatorEnemies.splice(ct, 1);
+      return true;
+    }
+
+    function tryDeleteAimed(camera) {
+      if (!camera) return null;
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera({ x: 0, y: 0 }, camera);
+      raycaster.far = 16;
+      const meshes = enemies.filter((e) => e.alive).map((e) => e.mesh);
+      if (!meshes.length) return null;
+      const hits = raycaster.intersectObjects(meshes, false);
+      if (!hits.length) return null;
+      for (let i = 0; i < enemies.length; i++) {
+        if (enemies[i].mesh === hits[0].object) {
+          removeEnemy(enemies[i]);
+          return { ok: true, text: 'Robot destruido' };
+        }
+      }
+      return null;
+    }
+
+    function clearCreatorEnemies() {
+      for (let i = creatorEnemies.length - 1; i >= 0; i--) {
+        removeEnemy(creatorEnemies[i]);
+      }
+    }
+
+    function snapshotCreatorEnemies() {
+      const out = [];
+      for (let i = 0; i < creatorEnemies.length; i++) {
+        const e = creatorEnemies[i];
+        if (!e.alive) continue;
+        out.push({ x: Math.round(e.localX * 100) / 100, z: Math.round(e.localZ * 100) / 100 });
+      }
+      return out;
+    }
+
+    function restoreCreatorEnemies(list) {
+      if (!Array.isArray(list)) return 0;
+      let n = 0;
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        if (!d || typeof d.x !== 'number' || typeof d.z !== 'number') continue;
+        spawnOne(Math.round(d.x), Math.round(d.z), true);
+        n += 1;
+      }
+      return n;
     }
 
     return {
@@ -359,6 +443,19 @@
         return n;
       },
       spawnAt: spawnAt,
+      spawnOne: spawnOne,
+      canSpawnAt(x, z) {
+        try {
+          return freeAt(x, z, null);
+        } catch (e) {
+          return true;
+        }
+      },
+      removeEnemy: removeEnemy,
+      tryDeleteAimed: tryDeleteAimed,
+      clearCreatorEnemies: clearCreatorEnemies,
+      snapshotCreatorEnemies: snapshotCreatorEnemies,
+      restoreCreatorEnemies: restoreCreatorEnemies,
       update: update,
       damageEnemy: damageEnemy,
       dispose: dispose,
@@ -367,6 +464,8 @@
         if (opts && opts.benches) benchSource = opts.benches;
         if (opts && opts.hurtBench) hurtBench = opts.hurtBench;
       },
+      setPassive(on) { passive = !!on; },
+      isPassive() { return passive; },
     };
   };
 

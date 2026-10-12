@@ -46,6 +46,8 @@
       this.coyote = Config.COYOTE_TIME;
       this._wasGrounded = true;
       this.stepClock = 0;
+      // Modo creador (como el FPS): volar con Espacio/Shift.
+      this.creatorFly = false;
     }
 
     _seedAt(up) {
@@ -140,6 +142,20 @@
       }
       this.position.copy(candidate);
 
+      // Vuelo creador: Espacio sube (radial afuera), Shift baja. Sin gravedad
+      // ni choque vertical: la altura la maneja currentRadialDistance.
+      if (this.creatorFly) {
+        const flySpeed = isRunning ? 18 : 10;
+        if (input.isDown('Space')) this.currentRadialDistance += flySpeed * dt;
+        if (input.isDown('ShiftLeft') || input.isDown('ShiftRight')) {
+          this.currentRadialDistance = Math.max(
+            Config.TARGET_DISTANCE, this.currentRadialDistance - flySpeed * dt);
+        }
+        this.isGrounded = false;
+        this.verticalVelocity = 0;
+        this.coyote = Config.COYOTE_TIME;
+      } else {
+
       // El piso puede ser la esfera o la tapa de un bloque / escalón del chart.
       const GroundHeight = window.Game.GroundHeight;
       const extraGround = GroundHeight ? GroundHeight.get(this.position) : 0;
@@ -187,14 +203,17 @@
       }
 
       if (this.isGrounded && inputLen > 0.001) {
+        // Cadencia según velocidad real: correr pisa más seguido.
+        const speedNow = this.tangentVelocity.length();
         this.stepClock -= dt;
         if (this.stepClock <= 0) {
-          if (Audio) Audio.footstep();
-          this.stepClock = isRunning ? 0.28 : 0.42;
+          if (Audio) Audio.footstep(isRunning);
+          this.stepClock = speedNow > 16 ? 0.24 : (isRunning ? 0.28 : 0.34);
         }
       } else {
         this.stepClock = 0;
       }
+      } // fin vuelo normal
 
       const newRadialDir = this.position.clone().normalize();
       if (newRadialDir.length() < 0.001) {

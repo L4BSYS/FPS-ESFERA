@@ -738,8 +738,7 @@
     console.error(err);
   }
 
-  const overlay = document.getElementById('overlay');
-  const input = new window.Game.InputManager(canvas, overlay);
+  const input = new window.Game.InputManager(canvas, null);
   const player = new window.Game.Player();
   player.position.copy(courtyard.frame.localToWorld(0, -2, Config.EYE_HEIGHT));
   player.currentRadialDistance = player.position.length();
@@ -828,6 +827,41 @@
   courtyard.setWeapon(weapon);
   courtyard.setCamera(camera);
   const waves = window.Game.createWaves(enemiesSystem, courtyard.enemySpawns);
+  // Modo Creador (port del FPS): gratis + volar + paleta + guardado.
+  // El load se hace después de los self-tests para no ocuparles las celdas.
+  const Creator = window.Game.createCreator
+    ? window.Game.createCreator({ build: build, courtyard: courtyard, enemies: enemiesSystem, player: player, camera: camera, canvas: canvas, scene: scene })
+    : null;
+  if (Creator && Creator.setCamera) Creator.setCamera(camera);
+  // La zona se cablea después de los self-tests (usan su propio build y
+  // celdas fuera de la zona, p. ej. 12,4 en selfTestLife).
+  if (HUD.setCreatorHandlers && Creator) {
+    HUD.setCreatorHandlers({
+      isOn: () => Creator.isOn(),
+      isFly: () => Creator.isFly(),
+      toggle: () => Creator.toggle(),
+      fly: () => Creator.setFly(!Creator.isFly()),
+      palette: () => Creator.togglePalette(true),
+      clear: () => {
+        if (window.confirm('¿Vaciar lo construido? El patio fijo queda.')) {
+          const r = Creator.clearWorld();
+          if (r && r.text) HUD.flash(r.text);
+        }
+      },
+      save: () => HUD.flash(Creator.save() ? 'Mundo guardado' : 'No se pudo guardar'),
+      status: () => {
+        try {
+          const st = courtyard.territoryStatus();
+          const base = st.active
+            ? ('Zona activa: radio ' + st.radius + ' alrededor de tu mesa (' + st.centers.length + ').')
+            : 'Zona perdida: poné un workbench para reclamar y frenar el decaimiento.';
+          return base + (Creator.isOn() ? ' Creador SÍ.' : ' Creador NO (G lo prende).');
+        } catch (e) {
+          return '';
+        }
+      },
+    });
+  }
   const Settings = window.Game.Settings;
   const spawnPos = player.position.clone();
   let runStart = performance.now();
@@ -850,6 +884,17 @@
     if (Audio && !Audio.isReady()) Audio.init();
     if (!(input.pointerLocked || input.fallbackMode)) return;
     if (HUD.isModalOpen() || HUD.isPaused() || PlayerHealth.isDead) return;
+    if (Creator && Creator.isOn()) {
+      // En creador la paleta puede estar abierta: el clic ya eligió.
+      if (Creator.isPaletteOpen()) {
+        Creator.togglePalette(false);
+        try { canvas.requestPointerLock(); } catch (err) {}
+        return;
+      }
+      const placed = Creator.place(player.position);
+      if (placed && placed.text) HUD.flash(placed.text);
+      return;
+    }
     if (Inventory.activeTool === 'hammer') {
       const placed = build.tryPlace(player.position);
       if (placed && placed.text) HUD.flash(placed.text);
@@ -866,10 +911,32 @@
     if (e.button !== 2) return;
     if (!(input.pointerLocked || input.fallbackMode)) return;
     if (HUD.isModalOpen() || HUD.isPaused() || PlayerHealth.isDead) return;
+    if (Creator && Creator.isOn()) {
+      // Como el FPS: el derecho abre el menú de construcción.
+      // Para sacar, elegí ❌ y hacé clic.
+      Creator.togglePalette(true);
+      return;
+    }
     if (Inventory.activeTool !== 'hammer') return;
     const removed = build.tryDelete();
     if (removed && removed.text) HUD.flash(removed.text);
   });
+
+  function unlockForModal() {
+    // Con pointer lock el mouse no puede clicar botones: se suelta al abrir
+    // un menú (mesa, mochila, tótem) y se recupera al cerrarlo.
+    try {
+      document.exitPointerLock();
+    } catch (err) {}
+  }
+
+  function relockAfterModal() {
+    try {
+      if (!input.pointerLocked && !input.fallbackMode && !HUD.isPaused()) {
+        canvas.requestPointerLock();
+      }
+    } catch (err) {}
+  }
 
   function showCraft() {
     HUD.openCraft(courtyard.recipes(), (index) => {
@@ -877,10 +944,10 @@
       if (result.message) HUD.flash(result.message);
       if (HUD.isCraftOpen()) showCraft();
     }, courtyard.benchHeading());
+    unlockForModal();
   }
 
   function showPack() {
-    const snap = Inventory.state;
     HUD.openPack({
       wood: snap.resources.wood,
       stone: snap.resources.stone,
@@ -910,6 +977,7 @@
         if (HUD.isPackOpen()) showPack();
       },
     });
+    unlockForModal();
   }
 
   function runClock() {
@@ -948,8 +1016,14 @@
     }
     if (e.code === 'Escape') {
       if (PlayerHealth.isDead || HUD.isDeathOpen()) return;
+      if (Creator && Creator.isPaletteOpen()) {
+        Creator.togglePalette(false);
+        try { canvas.requestPointerLock(); } catch (err) {}
+        return;
+      }
       if (HUD.isModalOpen()) {
         HUD.closeModal();
+        relockAfterModal();
         return;
       }
       if (!HUD.isPaused()) {
@@ -960,14 +1034,16 @@
     }
     if (HUD.isPaused() || PlayerHealth.isDead) return;
     if (e.code === Settings.code('pack')) {
-      if (HUD.isPackOpen()) HUD.closeModal();
-      else {
+      if (HUD.isPackOpen()) {
+        HUD.closeModal();
+        relockAfterModal();
+      } else {
         HUD.closeModal();
         showPack();
       }
       return;
     }
-    if (HUD.isCraftOpen() && /^Digit[1-8]$/.test(e.code)) {
+    if (HUD.isCraftOpen() && /^Digit[1-9]$/.test(e.code)) {
       HUD.pickCraft(Number(e.code.slice(5)) - 1);
       return;
     }
@@ -979,6 +1055,15 @@
     }
     if (HUD.isModalOpen()) return;
     const playing = input.pointerLocked || input.fallbackMode;
+    // Modo Creador: G prende/apaga, B abre la paleta (como el FPS).
+    if (Creator && playing && e.code === 'KeyG') {
+      Creator.toggle();
+      return;
+    }
+    if (Creator && Creator.isOn() && playing && e.code === 'KeyB') {
+      Creator.togglePalette();
+      return;
+    }
     if (playing && toolByCode[e.code]) {
       if (!Inventory.setTool(toolByCode[e.code])) HUD.flash('Todavía no tenés esa herramienta');
     }
@@ -1162,6 +1247,37 @@
     console.error(err);
   }
 
+  try {
+    if (Creator) {
+      const restored = Creator.load();
+      if (restored > 0) console.log('Mundo creador restaurado:', restored);
+    }
+  } catch (err) { console.error(err); }
+
+  // La zona de construcción la da el banco del jugador (ver territoryStatus).
+  if (build.setTerritoryProvider) {
+    build.setTerritoryProvider(() => courtyard.territoryStatus());
+  }
+
+  // Sin overlay inicial: el menú de pausa es la entrada.
+  // Arranca en pausa con los controles a la vista; Seguir pide el mouse.
+  if (HUD.setResumeHandler) {
+    HUD.setResumeHandler(() => {
+      try {
+        if (Audio && !Audio.isReady()) Audio.init();
+      } catch (e) {}
+      try {
+        if (!input.pointerLocked && !input.fallbackMode) canvas.requestPointerLock();
+      } catch (e) {}
+    });
+  }
+  if (!HUD.isPaused()) HUD.togglePause();
+
+  let hadTerritory = true;
+  try {
+    hadTerritory = courtyard.territoryStatus().active;
+  } catch (e) {}
+
   function animate() {
     requestAnimationFrame(animate);
 
@@ -1179,7 +1295,29 @@
       projectiles.update(dt);
       weapon.update(dt, input);
       build.update(dt, Inventory.activeTool, player.position);
-      const waveEvent = waves.update(dt);
+      if (Creator && Creator.update) {
+        try {
+          Creator.update(dt, Inventory.activeTool, player.position);
+        } catch (e) {}
+      }
+      // Territorio del banco: sin mesa se pierden los derechos y decae.
+      try {
+        const st = courtyard.territoryStatus();
+        if (st.active !== hadTerritory) {
+          hadTerritory = st.active;
+          if (!st.active) {
+            HUD.flash('¡Mesa destruida! Sin zona lo construido decae. Poné otra mesa.');
+          } else {
+            HUD.flash('Zona reclamada: la construcción se estabiliza.');
+          }
+        }
+        if (build.setDecayActive) {
+          build.setDecayActive(!st.active && (build.blockCount() > 0 || build.stairCount() > 0));
+        }
+      } catch (e) {}
+      // En creador (como el FPS) no avanzan las oleadas.
+      const creatorOn = !!(Creator && Creator.isOn());
+      const waveEvent = creatorOn ? null : waves.update(dt);
       if (waveEvent && waveEvent.type === 'clear') HUD.flash('Oleada superada. La próxima en 5 s.');
       if (waveEvent && waveEvent.type === 'spawn') {
         HUD.flash('Oleada ' + waveEvent.wave + ': ' + waveEvent.count + ' enemigos.');
@@ -1198,24 +1336,34 @@
     }
 
     if (HUD.isPaused()) {
+      let terrTxt = '';
+      try {
+        const st = courtyard.territoryStatus();
+        terrTxt = st.active ? '  ·  Zona SÍ' : '  ·  Zona NO';
+      } catch (e) {}
       HUD.setPauseStats(
         'Vida ' + Math.round(PlayerHealth.hp) +
         '  ·  Bloques ' + build.blockCount() +
         '  ·  Enemigos ' + enemiesSystem.aliveCount() +
         '  ·  Oleada ' + waves.number +
-        '  ·  Tiempo ' + runClock()
+        '  ·  Tiempo ' + runClock() + terrTxt +
+        (Creator && Creator.isOn() ? '  ·  Creador SÍ (G apaga, derecho menú)' : '')
       );
     }
 
     if (!isDead && !HUD.isPaused()) {
       const eDown = input.isDown(Settings.code('interact'));
       if (eDown && !ePrevDown) {
-        if (HUD.isModalOpen()) HUD.closeModal();
-        else {
+        if (HUD.isModalOpen()) {
+          HUD.closeModal();
+          relockAfterModal();
+        } else {
           const action = courtyard.tryInteract(player.position);
           if (action.type === 'open-craft') showCraft();
-          else if (action.type === 'totem') HUD.openTotem(action.lines);
-          else if (action.type === 'flash') HUD.flash(action.text);
+          else if (action.type === 'totem') {
+            HUD.openTotem(action.lines);
+            unlockForModal();
+          } else if (action.type === 'flash') HUD.flash(action.text);
         }
       }
       ePrevDown = eDown;
@@ -1252,9 +1400,25 @@
     let prompt = '';
     if (isDead) prompt = 'Reaparecer conserva el patio. Reiniciar borra todo.';
     else if (HUD.isPaused()) prompt = 'Esc sigue';
-    else if (HUD.isCraftOpen()) prompt = 'Números 1-8 craftean · ' + interactKey + ' cierra';
+    else if (HUD.isCraftOpen()) prompt = 'Números 1-9 craftean · clic/toque también · ' + interactKey + ' cierra';
     else if (HUD.isPackOpen()) prompt = '1 comida · 2 toxina · ' + packKey + ' cierra';
     else if (HUD.isTotemOpen()) prompt = interactKey + ' cierra';
+    else if (Creator && Creator.isOn()) {
+      const mode = Creator.getPlaceMode();
+      const what = mode.kind === 'block' ? ('bloque ' + mode.id)
+        : mode.kind === 'stairs' ? 'escalera'
+        : mode.kind === 'bench' ? 'mesa'
+        : mode.kind === 'item' ? mode.id
+        : mode.kind === 'enemy' ? 'robot'
+        : 'borrar (clic saca)';
+      let terr = '';
+      try {
+        const st = courtyard.territoryStatus();
+        terr = st.active ? '' : ' · ¡SIN ZONA! poné una mesa';
+      } catch (e) {}
+      prompt = 'Creador: clic pone ' + what + ' · derecho menú · B menú · G apaga'
+        + (player.creatorFly ? ' · Espacio/Shift volar' : '') + terr;
+    }
     else prompt = courtyard.getPrompt(player.position);
     const toolName = Inventory.activeTool === 'hammer'
       ? (Inventory.toolName(inv.active) + ' (' + build.materialName() + ')')

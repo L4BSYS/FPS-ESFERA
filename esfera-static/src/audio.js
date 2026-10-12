@@ -93,17 +93,28 @@
     });
   }
 
-  function playFootstep() {
+  function playFootstep(running) {
     if (!audible()) return;
     const t0 = audioCtx.currentTime;
+    // Paso con cuerpo (ruido filtrado) + leve tono, alterna un poco el pitch.
     const osc = audioCtx.createOscillator();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(85 + Math.random() * 20, t0);
+    osc.frequency.setValueAtTime((running ? 95 : 80) + Math.random() * 22, t0);
     const g = audioCtx.createGain();
-    g.gain.setValueAtTime(0.13, t0);
-    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.09);
+    g.gain.setValueAtTime(running ? 0.24 : 0.18, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.11);
     osc.connect(g).connect(masterGain);
-    osc.start(t0); osc.stop(t0 + 0.09);
+    osc.start(t0); osc.stop(t0 + 0.11);
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = createNoiseBuffer(0.07);
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = running ? 900 : 650;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(running ? 0.16 : 0.11, t0);
+    ng.gain.exponentialRampToValueAtTime(0.001, t0 + 0.07);
+    noise.connect(filter).connect(ng).connect(masterGain);
+    noise.start(t0); noise.stop(t0 + 0.07);
   }
 
   function playJump() {

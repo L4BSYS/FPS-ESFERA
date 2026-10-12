@@ -141,7 +141,7 @@
       pistol: ['la pistola', '5'],
     };
 
-    function toolPickup(id, x, z, listed) {
+    function toolPickup(id, x, z, listed, fromCreator) {
       const label = TOOL_LABEL[id] || [id, '?'];
       const group = new THREE.Group();
       if (id === 'pistol') {
@@ -170,8 +170,9 @@
         group.add(handle, head);
       }
       if (listed !== false) toolIds.push(id);
-      addPickup({
+      const spec = {
         mesh: group, x, z, base: 0.55, phase: x, alive: true, radius: 1.7,
+        creator: !!fromCreator,
         prompt() { return 'E agarrar ' + label[0]; },
         use() {
           this.alive = false;
@@ -180,42 +181,51 @@
           if (Audio) Audio.pickup('ammo');
           return { type: 'flash', text: 'Agarraste ' + label[0] + '. Tecla ' + label[1] + '.' };
         },
-      });
+      };
+      addPickup(spec);
+      return spec;
     }
 
-    const medkit = new THREE.Group();
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(0.42, 0.32, 0.42),
-      new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x882222, emissiveIntensity: 0.55, roughness: 0.4 })
-    );
-    const cross = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.08, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xaa0000, emissiveIntensity: 0.8 })
-    );
-    cross.position.z = 0.22;
-    const crossFront = cross.clone();
-    crossFront.position.z = -0.22;
-    medkit.add(box, cross, crossFront);
-    addPickup({
-      mesh: medkit, x: 0, z: 4, base: 0.4, phase: 1, alive: true, radius: 1.6,
-      prompt() { return 'E botiquín'; },
-      use() {
-        if (PlayerHealth.hp >= PlayerHealth.maxHp) {
-          return { type: 'flash', text: 'La vida ya está llena' };
-        }
-        this.alive = false;
-        scene.remove(this.mesh);
-        PlayerHealth.heal(30);
-        if (Audio) Audio.pickup('health');
-        return { type: 'flash', text: 'Botiquín +30' };
-      },
-    });
+    function spawnMedkit(x, z, fromCreator) {
+      const kit = new THREE.Group();
+      const kitBox = new THREE.Mesh(
+        new THREE.BoxGeometry(0.42, 0.32, 0.42),
+        new THREE.MeshStandardMaterial({ color: 0xf2f2f2, emissive: 0x882222, emissiveIntensity: 0.55, roughness: 0.4 })
+      );
+      const kitCross = new THREE.Mesh(
+        new THREE.BoxGeometry(0.22, 0.08, 0.08),
+        new THREE.MeshStandardMaterial({ color: 0xff3333, emissive: 0xaa0000, emissiveIntensity: 0.8 })
+      );
+      kitCross.position.z = 0.22;
+      const kitCrossFront = kitCross.clone();
+      kitCrossFront.position.z = -0.22;
+      kit.add(kitBox, kitCross, kitCrossFront);
+      const spec = {
+        mesh: kit, x: x, z: z, base: 0.4, phase: x + z, alive: true, radius: 1.6,
+        creator: !!fromCreator, kind: 'medkit',
+        prompt() { return 'E botiquín'; },
+        use() {
+          if (PlayerHealth.hp >= PlayerHealth.maxHp) {
+            return { type: 'flash', text: 'La vida ya está llena' };
+          }
+          this.alive = false;
+          scene.remove(this.mesh);
+          PlayerHealth.heal(30);
+          if (Audio) Audio.pickup('health');
+          return { type: 'flash', text: 'Botiquín +30' };
+        },
+      };
+      addPickup(spec);
+      return spec;
+    }
+
+    spawnMedkit(0, 4, false);
 
     toolPickup('axe', -2.4, 7.2);
     toolPickup('pickaxe', 2.4, 7.2);
     toolPickup('pistol', 2.2, 10.2);
 
-    function spawnKey(x, z) {
+    function spawnKey(x, z, fromCreator) {
       const key = new THREE.Group();
       const bow = new THREE.Mesh(
         new THREE.TorusGeometry(0.16, 0.04, 8, 14),
@@ -228,8 +238,9 @@
       );
       shaft.position.y = -0.28;
       key.add(bow, shaft);
-      addPickup({
+      const spec = {
         mesh: key, x: x, z: z, base: 0.7, phase: x, alive: true, radius: 1.7,
+        creator: !!fromCreator, kind: 'key',
         prompt() { return 'E agarrar la llave dorada'; },
         use() {
           this.alive = false;
@@ -238,7 +249,9 @@
           if (Audio) Audio.pickup('ammo');
           return { type: 'flash', text: 'Llave dorada. La puerta está al oeste.' };
         },
-      });
+      };
+      addPickup(spec);
+      return spec;
     }
 
     spawnKey(-6.2, 15.4);
@@ -288,6 +301,12 @@
       },
     });
 
+    // --- Territorio: la zona se centra en las mesas vivas del jugador ---
+    // (declarado antes de makeBench porque la primera mesa lo usa).
+    const TERRITORY_RADIUS = 9;
+    let territoryRing = null;
+    let territorySig = '';
+
     function makeBench(x, z) {
       const group = new THREE.Group();
       const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4428, roughness: 0.75, emissive: 0x2a1408, emissiveIntensity: 0.35 });
@@ -310,7 +329,7 @@
       Utils.placeOnFrame(group, frame, x, z, 0);
       scene.add(group);
       const col = Colliders.add(frame, x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95);
-      const bench = { x: x, z: z, mesh: group, bar: bar, col: col, hp: 300, maxHp: 300, alive: true };
+      const bench = { x: x, z: z, mesh: group, bar: bar, col: col, hp: 300, maxHp: 300, alive: true, owner: 'player' };
       col.kind = 'bench';
       col.ref = bench;
       benches.push(bench);
@@ -323,6 +342,7 @@
           return { type: 'open-craft' };
         },
       });
+      updateTerritoryRing();
       return bench;
     }
 
@@ -333,6 +353,143 @@
     }
 
     makeBench(0, 16.2);
+    benches[0].creator = false;
+
+    // --- Territorio: helpers (el anillo sigue a la mesa viva) ---
+
+    function aliveBenches() {
+      return benches.filter((bench) => bench && bench.alive && bench.hp > 0);
+    }
+
+    function territoryStatus() {
+      const alive = aliveBenches();
+      return {
+        active: alive.length > 0,
+        radius: TERRITORY_RADIUS,
+        centers: alive.map((bench) => ({ x: bench.x, z: bench.z })),
+      };
+    }
+
+    function isInTerritory(ix, iz) {
+      const alive = aliveBenches();
+      if (!alive.length) return false;
+      for (let i = 0; i < alive.length; i++) {
+        if (Math.hypot(ix - alive[i].x, iz - alive[i].z) <= TERRITORY_RADIUS) return true;
+      }
+      return false;
+    }
+
+    function updateTerritoryRing() {
+      try {
+        const alive = aliveBenches();
+        if (!alive.length) {
+          if (territoryRing) territoryRing.visible = false;
+          territorySig = 'none';
+          return;
+        }
+        // Una marca por mesa viva: la principal sigue a la primera.
+        if (!territoryRing) {
+          territoryRing = new THREE.Mesh(
+            new THREE.RingGeometry(TERRITORY_RADIUS - 0.35, TERRITORY_RADIUS, 56),
+            new THREE.MeshBasicMaterial({
+              color: 0x33ff66, transparent: true, opacity: 0.5,
+              side: THREE.DoubleSide, depthWrite: false,
+            })
+          );
+          territoryRing.raycast = function () {};
+          scene.add(territoryRing);
+        }
+        const main = alive[0];
+        Utils.placeOnFrame(territoryRing, frame, main.x, main.z, 0.07);
+        territoryRing.rotateX(-Math.PI / 2);
+        territoryRing.visible = true;
+        territorySig = alive.map((bench) => bench.x + ',' + bench.z).join(';');
+      } catch (e) {}
+    }
+
+    // --- API Creador (como el FPS): poner/sacar mesas sin costo ---
+    function placeBenchAt(ix, iz, fromCreator) {
+      const x = ix;
+      const z = iz;
+      const list = Colliders.all();
+      for (let i = 0; i < list.length; i++) {
+        const c = list[i];
+        if (!c.active || c.frame !== frame) continue;
+        if (x + 0.75 <= c.minX || x - 0.75 >= c.maxX || z + 0.45 <= c.minZ || z - 0.45 >= c.maxZ) continue;
+        const top = c.maxH == null ? 100 : c.maxH;
+        const bottom = c.minH == null ? -1 : c.minH;
+        if (top <= 0 || bottom >= 0.95) continue;
+        return { ok: false, text: 'Ese lugar está ocupado' };
+      }
+      const bench = makeBench(x, z);
+      bench.creator = !!fromCreator;
+      paintBench(bench);
+      return { ok: true, text: 'Mesa puesta', bench: bench };
+    }
+
+    function removeBench(bench) {
+      const at = benches.indexOf(bench);
+      if (at < 0) return false;
+      scene.remove(bench.mesh);
+      if (bench.col) Colliders.remove(bench.col);
+      for (let i = interactables.length - 1; i >= 0; i--) {
+        if (interactables[i].bench === bench) interactables.splice(i, 1);
+      }
+      benches.splice(at, 1);
+      updateTerritoryRing();
+      return true;
+    }
+
+    function tryDeleteBench() {
+      if (!aimCamera) return null;
+      raycaster.setFromCamera({ x: 0, y: 0 }, aimCamera);
+      const meshes = benches.map((bench) => bench.mesh);
+      if (!meshes.length) return null;
+      const hits = raycaster.intersectObjects(meshes, true);
+      if (!hits.length || hits[0].distance > 16) return null;
+      let p = hits[0].object;
+      while (p) {
+        for (let i = 0; i < benches.length; i++) {
+          if (benches[i].mesh === p) {
+            const bench = benches[i];
+            removeBench(bench);
+            return { ok: true, text: 'Mesa destruida' };
+          }
+        }
+        p = p.parent;
+      }
+      return null;
+    }
+
+    function clearCreatorBenches() {
+      for (let i = benches.length - 1; i >= 0; i--) {
+        if (benches[i].creator) removeBench(benches[i]);
+      }
+    }
+
+    function snapshotBenches() {
+      return benches
+        .filter((bench) => bench.creator)
+        .map((bench) => ({ x: bench.x, z: bench.z, hp: Math.round(bench.hp) }));
+    }
+
+    function restoreBenches(list) {
+      if (!Array.isArray(list)) return 0;
+      let n = 0;
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        if (typeof d.x !== 'number' || typeof d.z !== 'number') continue;
+        const r = placeBenchAt(Math.round(d.x), Math.round(d.z), true);
+        if (r.ok) {
+          if (typeof d.hp === 'number') {
+            r.bench.hp = Math.max(1, Math.min(r.bench.maxHp, d.hp));
+            paintBench(r.bench);
+          }
+          n += 1;
+        }
+      }
+      return n;
+    }
 
     function placeTotem(lines, x, z) {
       const group = new THREE.Group();
@@ -362,7 +519,7 @@
     placeTotem(['Hacha: madera.', 'Pico: piedra y metal.', 'Q abre la mochila.'], 3.6, 8.6);
     placeTotem(['Martillo: clic pone, derecho borra.', 'C cambia el material. V escalera.', 'La puerta del oeste pide llave.'], 3.5, 14.6);
 
-    function pocketPickup(id, x, z, promptText, fullText, gotText) {
+    function pocketPickup(id, x, z, promptText, fullText, gotText, fromCreator) {
       const group = new THREE.Group();
       const mesh = new THREE.Mesh(
         new THREE.CylinderGeometry(0.22, 0.22, 0.32, 8),
@@ -374,8 +531,9 @@
         })
       );
       group.add(mesh);
-      addPickup({
+      const spec = {
         mesh: group, x: x, z: z, base: 0.4, phase: x + z, alive: true, radius: 1.7,
+        creator: !!fromCreator, kind: id,
         prompt() { return promptText; },
         use() {
           const added = Inventory.addStack(id, 1);
@@ -385,21 +543,25 @@
           if (Audio) Audio.pickup(id === 'food' ? 'health' : 'ammo');
           return { type: 'flash', text: gotText };
         },
-      });
-      return group;
+      };
+      addPickup(spec);
+      if (id === 'toxin' && !fromCreator) spec.hazard = true;
+      if (id === 'toxin' && fromCreator) spec.hazard = true;
+      return spec;
     }
 
     pocketPickup('food', 1.6, 5.6, 'E agarrar comida', 'No entra más comida', 'Comida en la mochila. Q para usarla.');
     pocketPickup('toxin', 4.4, 13.2, 'E agarrar toxina', 'No entra más toxina', 'Toxina guardada. No la uses.');
     pickups[pickups.length - 1].hazard = true;
 
-    function spawnAmmo(x, z, rounds) {
+    function spawnAmmo(x, z, rounds, fromCreator) {
       const ammoBox = new THREE.Mesh(
         new THREE.BoxGeometry(0.28, 0.16, 0.42),
         new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.4, roughness: 0.45, emissive: 0x222222, emissiveIntensity: 0.4 })
       );
-      addPickup({
+      const spec = {
         mesh: ammoBox, x: x, z: z, base: 0.28, phase: x + z, alive: true, radius: 1.6, rounds: rounds,
+        creator: !!fromCreator, kind: 'ammo',
         prompt() { return 'E agarrar balas'; },
         use() {
           this.alive = false;
@@ -408,7 +570,9 @@
           if (Audio) Audio.pickup('ammo');
           return { type: 'flash', text: 'Balas +' + (this.rounds || 12) };
         },
-      });
+      };
+      addPickup(spec);
+      return spec;
     }
 
     spawnAmmo(0, 9, 12);
@@ -420,17 +584,113 @@
     gateLight.position.copy(frame.localToWorld(-6, 17, 2.6));
     scene.add(gateLight);
 
-    // Una sola losa, un pelo sobre la esfera, para que el patio se lea en la niebla.
-    // En los bordes flota ~0.2 (la esfera se aleja del plano tangente). Sin juntas.
-    const pad = new THREE.Mesh(
-      new THREE.BoxGeometry(22, 0.08, 30),
-      new THREE.MeshStandardMaterial({
-        color: 0x4a4036, roughness: 1, metalness: 0, emissive: 0x3a3028, emissiveIntensity: 0.9,
-      })
-    );
-    pad.raycast = function () {};
-    Utils.placeOnFrame(pad, frame, 2, 10, 0.04);
-    scene.add(pad);
+    // Sin losa rectangular: el piso es la esfera misma. La losa vieja
+    // (22x30) flotaba ~0.2 en los bordes porque la esfera se curva.
+
+    // --- Pickups del Creador: herramientas, arma, comida, toxina, balas, llave, botiquín ---
+    const CREATOR_PICKUP_KINDS = ['axe', 'pickaxe', 'hammer', 'pistol', 'food', 'toxin', 'ammo', 'key', 'medkit'];
+    const CREATOR_PICKUP_NAMES = {
+      axe: 'hacha', pickaxe: 'pico', hammer: 'martillo', pistol: 'pistola',
+      food: 'comida', toxin: 'toxina', ammo: 'balas', key: 'llave', medkit: 'botiquín',
+    };
+
+    function placeCreatorPickup(kind, ix, iz) {
+      if (CREATOR_PICKUP_KINDS.indexOf(kind) < 0) return { ok: false, text: 'Eso no se puede poner' };
+      const x = ix;
+      const z = iz;
+      for (let i = 0; i < pickups.length; i++) {
+        const p = pickups[i];
+        if (!p.alive || !p.creator) continue;
+        if (Math.abs(p.x - x) < 0.9 && Math.abs(p.z - z) < 0.9) {
+          return { ok: false, text: 'Ese lugar está ocupado' };
+        }
+      }
+      // Igual que los bloques: no poner dentro de puerta, bloques, mesas o nodos.
+      if (buildRef && buildRef.occupies && buildRef.occupies(ix, iz, 0)) {
+        return { ok: false, text: 'Ese lugar está ocupado' };
+      }
+      try {
+        const probe = frame.localToWorld(x, z, 0.5);
+        if (Colliders && Colliders.blocked(probe, 0.3, { feet: 0, top: 1.0 })) {
+          return { ok: false, text: 'Ese lugar está ocupado' };
+        }
+      } catch (e) {}
+      let spec = null;
+      if (TOOL_LABEL[kind]) spec = toolPickup(kind, x, z, false, true);
+      else if (kind === 'food') spec = pocketPickup('food', x, z, 'E agarrar comida', 'No entra más comida', 'Comida en la mochila. Q para usarla.', true);
+      else if (kind === 'toxin') spec = pocketPickup('toxin', x, z, 'E agarrar toxina', 'No entra más toxina', 'Toxina guardada. No la uses.', true);
+      else if (kind === 'ammo') spec = spawnAmmo(x, z, 12, true);
+      else if (kind === 'key') spec = spawnKey(x, z, true);
+      else if (kind === 'medkit') spec = spawnMedkit(x, z, true);
+      if (!spec) return { ok: false, text: 'No se pudo poner' };
+      return { ok: true, text: 'Puesto: ' + (CREATOR_PICKUP_NAMES[kind] || kind), pickup: spec };
+    }
+
+    function removeCreatorPickup(spec) {
+      if (!spec) return false;
+      spec.alive = false;
+      try { scene.remove(spec.mesh); } catch (e) {}
+      const at = interactables.indexOf(spec);
+      if (at >= 0) interactables.splice(at, 1);
+      return true;
+    }
+
+    function tryDeleteCreatorPickupAt(ix, iz) {
+      let best = null;
+      let bestD = Infinity;
+      for (let i = 0; i < pickups.length; i++) {
+        const p = pickups[i];
+        if (!p.alive || !p.creator) continue;
+        const d = Math.hypot(p.x - ix, p.z - iz);
+        if (d < 1.1 && d < bestD) {
+          best = p;
+          bestD = d;
+        }
+      }
+      if (!best) return null;
+      removeCreatorPickup(best);
+      return { ok: true, text: 'Saque: ' + (CREATOR_PICKUP_NAMES[best.kind] || best.kind || 'cosa') };
+    }
+
+    function clearCreatorPickups() {
+      for (let i = pickups.length - 1; i >= 0; i--) {
+        if (pickups[i].creator && pickups[i].alive) removeCreatorPickup(pickups[i]);
+      }
+    }
+
+    function snapshotCreatorPickups() {
+      const out = [];
+      for (let i = 0; i < pickups.length; i++) {
+        const p = pickups[i];
+        if (!p.alive || !p.creator) continue;
+        let kind = p.kind;
+        if (!kind) {
+          // Herramientas viejas del creador: deducir por prompt.
+          try {
+            const pr = p.prompt ? p.prompt() : '';
+            if (pr.indexOf('hacha') >= 0) kind = 'axe';
+            else if (pr.indexOf('pico') >= 0) kind = 'pickaxe';
+            else if (pr.indexOf('martillo') >= 0) kind = 'hammer';
+            else if (pr.indexOf('pistola') >= 0) kind = 'pistol';
+          } catch (e) {}
+        }
+        if (!kind) continue;
+        out.push({ kind: kind, x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100 });
+      }
+      return out;
+    }
+
+    function restoreCreatorPickups(list) {
+      if (!Array.isArray(list)) return 0;
+      let n = 0;
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        if (!d || typeof d.x !== 'number' || typeof d.z !== 'number') continue;
+        const r = placeCreatorPickup(d.kind, Math.round(d.x), Math.round(d.z));
+        if (r.ok) n += 1;
+      }
+      return n;
+    }
 
     function nearest(playerWorldPos) {
       const local = frame.worldToLocalXZ(playerWorldPos);
@@ -556,6 +816,21 @@
       setCamera(camera) { aimCamera = camera; },
       setBuild(build) { buildRef = build; },
       benches: benches,
+      placeBenchAt: placeBenchAt,
+      removeBench: removeBench,
+      tryDeleteBench: tryDeleteBench,
+      clearCreatorBenches: clearCreatorBenches,
+      snapshotBenches: snapshotBenches,
+      restoreBenches: restoreBenches,
+      placeCreatorPickup: placeCreatorPickup,
+      tryDeleteCreatorPickupAt: tryDeleteCreatorPickupAt,
+      clearCreatorPickups: clearCreatorPickups,
+      snapshotCreatorPickups: snapshotCreatorPickups,
+      restoreCreatorPickups: restoreCreatorPickups,
+      territoryStatus: territoryStatus,
+      isInTerritory: isInTerritory,
+      updateTerritoryRing: updateTerritoryRing,
+      territoryRadius() { return TERRITORY_RADIUS; },
       hurtBench(bench, amount) {
         if (!bench || bench.hp <= 0) return;
         bench.hp = Math.max(0, bench.hp - amount);
@@ -564,15 +839,58 @@
         bench.alive = false;
         bench.col.active = false;
         bench.mesh.visible = false;
+        updateTerritoryRing();
       },
       benchHeading() {
         if (!openBench) return 'Mesa de trabajo';
         return 'Mesa ' + Math.max(0, Math.round(openBench.hp)) + ' / ' + openBench.maxHp;
       },
 
-      recipes() { return RECIPES.map(recipeRow); },
+      recipes() {
+        const rows = RECIPES.map(recipeRow);
+        // Vaciar la zona sin costo: borra bloques, escaleras y cosas del
+        // creador alrededor del banco. Las mesas quedan (son el reclamo).
+        let built = 0;
+        try {
+          if (buildRef) built += (buildRef.blockCount() || 0) + (buildRef.stairCount() || 0);
+          for (let i = 0; i < pickups.length; i++) {
+            if (pickups[i].alive && pickups[i].creator) { built += 1; break; }
+          }
+        } catch (e) {}
+        rows.push({
+          index: RECIPES.length,
+          label: '🧹 Vaciar zona (las mesas quedan)',
+          enabled: built > 0,
+          reason: built > 0 ? '' : 'nada que borrar',
+        });
+        return rows;
+      },
+
+      clearBuildArea() {
+        let n = 0;
+        try {
+          if (buildRef) {
+            n += buildRef.blockCount() || 0;
+            n += buildRef.stairCount() || 0;
+            if (buildRef.clearAll) buildRef.clearAll();
+          }
+          for (let i = pickups.length - 1; i >= 0; i--) {
+            if (pickups[i].creator && pickups[i].alive) {
+              removeCreatorPickup(pickups[i]);
+              n += 1;
+            }
+          }
+        } catch (e) {}
+        return n;
+      },
 
       craft(index) {
+        // Fila extra del menú: vaciar la zona (sin costo).
+        if (index === RECIPES.length) {
+          const n = this.clearBuildArea ? this.clearBuildArea() : 0;
+          if (Audio) Audio.pickup('ammo');
+          return { message: n > 0 ? ('Zona vaciada (' + n + '). Las mesas quedan.') : 'Nada que borrar' };
+        }
         const recipe = RECIPES[index];
         if (!recipe) return { message: '' };
         const gate = canCraft(recipe);
@@ -724,6 +1042,15 @@
 
       update(dt, t, worldPos) {
         playerPos = worldPos || playerPos;
+        // El anillo sigue a la mesa viva (reclamo de zona).
+        try {
+          const alive = aliveBenches();
+          const sig = alive.map((bench) => bench.x + ',' + bench.z).join(';') || 'none';
+          if (sig !== territorySig) updateTerritoryRing();
+          if (territoryRing && territoryRing.visible) {
+            territoryRing.material.opacity = 0.38 + Math.sin(t * 2.2) * 0.12;
+          }
+        } catch (e) {}
         if (playerPos) {
           const local = frame.worldToLocal(playerPos);
           pickups.forEach((item) => {

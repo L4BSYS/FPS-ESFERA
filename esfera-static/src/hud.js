@@ -5,6 +5,8 @@
   let pickCb = null;
   let onTool = null;
   let onRespawn = null;
+  let onResume = null;
+  let creatorHooks = null;
   let flashTimer = 0;
   let prevHp = 100;
   let paused = false;
@@ -107,6 +109,10 @@
       tabSettings.type = 'button';
       tabSettings.className = 'sheet-btn small';
       tabSettings.textContent = 'Ajustes';
+      const tabCreator = document.createElement('button');
+      tabCreator.type = 'button';
+      tabCreator.className = 'sheet-btn small';
+      tabCreator.textContent = 'Creador';
       tabStatus.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -119,7 +125,13 @@
         pauseTab = 'settings';
         paintPause();
       });
-      tabRow.append(tabStatus, tabSettings);
+      tabCreator.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        pauseTab = 'creator';
+        paintPause();
+      });
+      tabRow.append(tabStatus, tabSettings, tabCreator);
       els.pauseStats = el('p', 'craft-copy');
       els.pauseBody = el('div', 'pause-body');
       const resumeBtn = document.createElement('button');
@@ -130,9 +142,10 @@
         event.preventDefault();
         event.stopPropagation();
         closePause();
+        if (onResume) onResume();
       });
       const pauseHint = el('p', 'craft-hint');
-      pauseHint.textContent = 'Esc sigue. WASD, espacio, shift y 1-5 quedan fijos.';
+      pauseHint.textContent = 'Esc sigue. WASD, espacio, shift y 1-5 quedan fijos. G creador, B paleta.';
       pauseCard.append(pauseTitle, tabRow, els.pauseStats, els.pauseBody, resumeBtn, pauseHint);
       els.pause.appendChild(pauseCard);
 
@@ -142,6 +155,16 @@
     },
 
     setToolHandler(fn) { onTool = fn; },
+
+    setResumeHandler(fn) { onResume = fn; },
+
+    setCreatorHandlers(hooks) { creatorHooks = hooks || null; },
+
+    setBeltVisible(v) {
+      try {
+        if (els.belt) els.belt.style.display = v ? '' : 'none';
+      } catch (e) {}
+    },
 
     sync(state) {
       els.health.textContent = 'Vida ' + Math.round(state.hp) + ' / ' + state.maxHp;
@@ -181,14 +204,23 @@
       els.panel.hidden = false;
       els.title.textContent = titleText || 'Mesa de trabajo';
       const interactKey = window.Game.Settings ? window.Game.Settings.label('interact') : 'E';
-      els.hint.textContent = 'Números 1 a 8 craftean. ' + interactKey + ' cierra.';
+      els.hint.textContent = 'Números 1 a ' + rows.length + ' craftean. Clic o toque también vale. ' + interactKey + ' cierra.';
       els.list.textContent = '';
       rows.forEach((row) => {
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = (row.index + 1) + '   ' + row.label + (row.reason ? ' — ' + row.reason : '');
         button.disabled = !row.enabled;
-        button.addEventListener('click', () => onPick(row.index));
+        const pick = (event) => {
+          if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+          if (button.disabled) return;
+          onPick(row.index);
+        };
+        button.addEventListener('click', pick);
+        button.addEventListener('touchstart', pick, { passive: false });
         els.list.appendChild(button);
       });
     },
@@ -334,10 +366,33 @@
     if (!els.pauseBody) return;
     const Settings = window.Game.Settings;
     els.pauseBody.textContent = '';
+    if (pauseTab === 'creator') {
+      paintCreatorTab();
+      return;
+    }
     if (pauseTab !== 'settings') {
       const note = el('p', 'craft-copy');
       note.textContent = 'El patio queda quieto. Seguir vuelve al juego.';
       els.pauseBody.appendChild(note);
+      // Controles antes en el overlay inicial: ahora viven acá.
+      const controls = el('div', 'pause-controls');
+      const rows = [
+        ['W A S D', 'Moverse'],
+        ['Mouse / Clic', 'Mirar / Cosechar, disparar o poner'],
+        ['E / Q', 'Tótem, mesa, puerta / Mochila'],
+        ['C / V', 'Material / Escalera'],
+        ['Der', 'Borrar bloque (creador: abre el menú)'],
+        ['F / 1-5', 'Antorcha / Cinturón, números o rueda'],
+        ['G / B', 'Creador / Menú'],
+        ['Shift / Espacio', 'Correr / Saltar (en creador: volar)'],
+        ['Esc', 'Pausa'],
+      ];
+      rows.forEach(([keys, action]) => {
+        const line = el('p', 'craft-copy');
+        line.textContent = keys + ' — ' + action;
+        controls.appendChild(line);
+      });
+      els.pauseBody.appendChild(controls);
       return;
     }
 
@@ -404,6 +459,65 @@
       row.append(name, button);
       els.pauseBody.appendChild(row);
     });
+  }
+
+  function paintCreatorTab() {
+    const hooks = creatorHooks || {};
+    const info = el('p', 'craft-copy');
+    info.textContent = typeof hooks.status === 'function'
+      ? hooks.status()
+      : 'El creador construye gratis alrededor de tu mesa.';
+    els.pauseBody.appendChild(info);
+    const flow = el('p', 'craft-copy');
+    flow.textContent = 'Clic derecho abre el menú, elegí el item y hacé clic para ponerlo. Con ❌ el clic saca.';
+    els.pauseBody.appendChild(flow);
+    function action(label, run) {
+      const row = el('div', 'sheet-line');
+      const name = el('span');
+      name.textContent = label;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sheet-btn small';
+      button.textContent = 'Hacer';
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          run();
+        } catch (e) {}
+        paintPause();
+      });
+      row.append(name, button);
+      els.pauseBody.appendChild(row);
+    }
+    function toggle(label, isOn, run) {
+      const row = el('div', 'sheet-line');
+      const name = el('span');
+      name.textContent = label;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sheet-btn small';
+      button.textContent = isOn ? 'SÍ' : 'NO';
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          run();
+        } catch (e) {}
+        paintPause();
+      });
+      row.append(name, button);
+      els.pauseBody.appendChild(row);
+    }
+    const isOn = typeof hooks.isOn === 'function' ? hooks.isOn() : false;
+    const isFly = typeof hooks.isFly === 'function' ? hooks.isFly() : false;
+    toggle('Modo creador (G)', isOn, () => hooks.toggle && hooks.toggle());
+    if (isOn) {
+      toggle('Volar (Espacio/Shift)', isFly, () => hooks.fly && hooks.fly());
+      action('Abrir menú (clic derecho)', () => hooks.palette && hooks.palette());
+      action('Vaciar lo construido', () => hooks.clear && hooks.clear());
+      action('Guardar mundo', () => hooks.save && hooks.save());
+    }
   }
 
   function paintBelt(tools, active) {

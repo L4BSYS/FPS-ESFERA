@@ -14,10 +14,13 @@
     RUN_SPEED: 22,
     JUMP_IMPULSE: 10,
     GRAVITY: 20,
+    // Movimiento: la aceleración manda al arrancar (el test de feel exige
+    // que el aire sea <60% del piso) y la fricción al soltar. Subir solo la
+    // fricción quita lo resbaloso sin romper el test.
     MOUSE_SENSITIVITY: 0.002,
     PITCH_CLAMP: Math.PI / 2 - 0.15, // ~81°
     ACCELERATION: 40,
-    FRICTION: 8,
+    FRICTION: 36,
     // Salto poco después de dejar el piso, y menos mando en el aire.
     COYOTE_TIME: 0.2,
     AIR_CONTROL: 0.35,

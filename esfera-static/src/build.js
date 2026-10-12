@@ -32,8 +32,18 @@
     const blocks = [];
     const grid = new Map();
     const stairs = [];
+    const stairsMeta = [];
     let material = 'wood';
     let aimCamera = null;
+    let creator = false;
+    let reach = REACH;
+    // Territorio: lo provee el patio (bancos del jugador). null = sin límite
+    // (los self-tests crean su propio build sin proveedor).
+    let territoryProvider = null;
+    // Decaimiento: sin banco, lo construido se deshace poco a poco.
+    let decayActive = false;
+    let decayTimer = 0;
+    const DECAY_EVERY = 2.5;
 
     const ghost = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
@@ -85,6 +95,26 @@
       };
     }
 
+    function territoryAt(ix, iz) {
+      if (!territoryProvider) return { ok: true, active: true };
+      let t = null;
+      try {
+        t = territoryProvider();
+      } catch (e) {
+        return { ok: true, active: true };
+      }
+      if (!t) return { ok: true, active: true };
+      if (!t.active) return { ok: false, active: false, text: 'Sin mesa: poné un workbench para reclamar la zona' };
+      const centers = t.centers || [];
+      const radius = t.radius || 9;
+      for (let i = 0; i < centers.length; i++) {
+        if (Math.hypot(ix - centers[i].x, iz - centers[i].z) <= radius) {
+          return { ok: true, active: true };
+        }
+      }
+      return { ok: false, active: true, text: 'Fuera de tu zona: construí cerca de tu mesa' };
+    }
+
     function reject(ix, iz, level, playerPos) {
       if (!inChart(ix, iz)) return 'Fuera del patio';
       if (level < 0 || level > 6) return 'Muy alto';
@@ -92,6 +122,11 @@
       const box = boxOf(ix, iz, level);
       if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH)) return 'Ese lugar está ocupado';
       if (hitsPlayer(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH, playerPos)) return 'Estás en el medio';
+      const terr = territoryAt(ix, iz);
+      if (!terr.ok) return terr.text;
+      // Modo creador (como el FPS): gratis y sin pedir apoyo, pero sin
+      // encimar ni atrapar al jugador.
+      if (creator) return '';
       if (level > 0 && !grid.has(cellKey(ix, iz, level - 1))) return 'No tiene apoyo';
       return '';
     }
@@ -193,12 +228,12 @@
       }
       if (meshes.length) {
         raycaster.set(origin, dir);
-        raycaster.far = REACH;
+        raycaster.far = reach;
         const hits = raycaster.intersectObjects(meshes, false);
         if (hits.length) {
           const normal = hits[0].face.normal.clone().transformDirection(hits[0].object.matrixWorld);
           const point = hits[0].point.clone().addScaledVector(normal, 0.51);
-          if (origin.distanceTo(point) <= REACH + 0.4) {
+          if (origin.distanceTo(point) <= reach + 0.4) {
             const loc = frame.worldToLocal(point);
             return {
               ix: Math.round(loc.x),
@@ -208,7 +243,7 @@
           }
         }
       }
-      for (let t = 0.4; t <= REACH; t += 0.2) {
+      for (let t = 0.4; t <= reach; t += 0.2) {
         const point = origin.clone().addScaledVector(dir, t);
         const loc = frame.worldToLocal(point);
         if (loc.h <= 0.15) {
@@ -228,6 +263,7 @@
     }
 
     function spend(type, amount) {
+      if (creator) return true;
       if (Inventory.count(type) < amount) return false;
       const cost = {};
       cost[type] = amount;
@@ -262,7 +298,7 @@
       }
       if (!meshes.length) return null;
       raycaster.set(origin, dir);
-      raycaster.far = REACH;
+      raycaster.far = reach;
       const hits = raycaster.intersectObjects(meshes, false);
       if (!hits.length) return null;
       const block = hits[0].object.userData.block;
@@ -296,6 +332,8 @@
 
     function placeStairs(ix, iz, yaw, playerPos) {
       if (!inChart(ix, iz)) return { ok: false, text: 'Fuera del patio' };
+      const terr = territoryAt(ix, iz);
+      if (!terr.ok) return { ok: false, text: terr.text };
       const spots = [];
       for (let i = 0; i < STAIR_COUNT; i++) {
         const center = stepCenter(ix, iz, yaw, i);
@@ -336,6 +374,7 @@
         flight.push({ mesh: mesh, col: col });
       }
       stairs.push(flight);
+      stairsMeta.push({ ix: ix, iz: iz, yaw: yaw });
       return { ok: true, text: 'Escalera puesta', flight: flight };
     }
 
@@ -361,6 +400,24 @@
           ghost.material.color.setHex(free ? 0x88ff88 : 0xff6655);
           Utils.placeOnFrame(ghost, frame, cell.ix, cell.iz, cell.level + 0.5);
         }
+      }
+
+      // Sin banco la zona se pierde: lo construido decae de a poco hasta
+      // que el jugador reclame con una mesa nueva.
+      if (decayActive && dt > 0) {
+        decayTimer += dt;
+        if (decayTimer >= DECAY_EVERY && (blocks.length || stairs.length)) {
+          decayTimer = 0;
+          if (blocks.length && (stairs.length === 0 || Math.random() < 0.7)) {
+            const oldest = blocks[0];
+            removeBlock(oldest);
+            try { dropUnsupported(); } catch (e) {}
+          } else if (stairs.length) {
+            removeFlight(stairs[0]);
+          }
+        }
+      } else {
+        decayTimer = 0;
       }
 
       const falling = blocks.filter((block) => block.falling).sort((a, b) => a.h - b.h);
@@ -392,12 +449,123 @@
         }
       }
       stairs.length = 0;
+      stairsMeta.length = 0;
       scene.remove(ghost);
+    }
+
+    function removeFlight(flight) {
+      const at = stairs.indexOf(flight);
+      if (at < 0) return false;
+      for (let s = 0; s < flight.length; s++) {
+        scene.remove(flight[s].mesh);
+        Colliders.remove(flight[s].col);
+      }
+      stairs.splice(at, 1);
+      if (stairsMeta[at]) stairsMeta.splice(at, 1);
+      return true;
+    }
+
+    function tryDeleteStairs() {
+      if (!aimCamera) return null;
+      const meshes = [];
+      for (let i = 0; i < stairs.length; i++) {
+        for (let s = 0; s < stairs[i].length; s++) meshes.push(stairs[i][s].mesh);
+      }
+      if (!meshes.length) return null;
+      const origin = aimCamera.position.clone();
+      const dir = new THREE.Vector3();
+      aimCamera.getWorldDirection(dir);
+      raycaster.set(origin, dir);
+      raycaster.far = reach;
+      const hits = raycaster.intersectObjects(meshes, false);
+      if (!hits.length) return null;
+      for (let i = 0; i < stairs.length; i++) {
+        for (let s = 0; s < stairs[i].length; s++) {
+          if (stairs[i][s].mesh === hits[0].object) {
+            removeFlight(stairs[i]);
+            return { ok: true, text: 'Escalera destruida' };
+          }
+        }
+      }
+      return null;
+    }
+
+    // Saca todo lo del jugador (bloques + escaleras). El patio fijo queda.
+    function clearAll() {
+      while (blocks.length) {
+        const block = blocks[0];
+        grid.delete(cellKey(block.ix, block.iz, block.level));
+        scene.remove(block.mesh);
+        Colliders.remove(block.col);
+        blocks.splice(0, 1);
+      }
+      while (stairs.length) removeFlight(stairs[0]);
+    }
+
+    function snapshot() {
+      return {
+        blocks: blocks
+          .filter((block) => !block.falling)
+          .map((block) => ({ ix: block.ix, iz: block.iz, level: block.level, type: block.type })),
+        stairs: stairsMeta.slice(),
+      };
+    }
+
+    function restore(data) {
+      if (!data) return 0;
+      const wasCreator = creator;
+      const wasTerritory = territoryProvider;
+      creator = true;
+      territoryProvider = null;
+      let n = 0;
+      try {
+        const list = Array.isArray(data.blocks) ? data.blocks : [];
+      for (let i = 0; i < list.length; i++) {
+        const d = list[i];
+        if (typeof d.ix !== 'number' || typeof d.iz !== 'number' || typeof d.level !== 'number') continue;
+        if (!LOOK[d.type]) continue;
+        if (grid.has(cellKey(d.ix, d.iz, d.level))) continue;
+        addBlock(d.ix, d.iz, d.level, d.type);
+        n += 1;
+      }
+      const st = Array.isArray(data.stairs) ? data.stairs : [];
+      for (let i = 0; i < st.length; i++) {
+        const d = st[i];
+        if (typeof d.ix !== 'number' || typeof d.iz !== 'number') continue;
+        const r = placeStairs(d.ix, d.iz, typeof d.yaw === 'number' ? d.yaw : 0, null);
+        if (r.ok) n += 1;
+      }
+      return n;
+      } finally {
+        creator = wasCreator;
+        territoryProvider = wasTerritory;
+      }
     }
 
     return {
       setCamera(camera) { aimCamera = camera; },
+      setCreator(on, longReach) {
+        creator = !!on;
+        reach = creator ? (longReach || 14) : REACH;
+        raycaster.far = reach;
+      },
+      isCreator() { return creator; },
+      getReach() { return reach; },
       materialName() { return NAMES[material]; },
+      setTerritoryProvider(fn) { territoryProvider = (typeof fn === 'function') ? fn : null; },
+      setDecayActive(b) {
+        decayActive = !!b;
+        if (!decayActive) decayTimer = 0;
+      },
+      isDecayActive() { return decayActive; },
+      territoryCheck(ix, iz) { return territoryAt(ix, iz); },
+      setMaterial(type) {
+        if (ORDER.indexOf(type) >= 0) {
+          material = type;
+          return 'Bloque: ' + NAMES[material];
+        }
+        return '';
+      },
       cycleMaterial() {
         material = ORDER[(ORDER.indexOf(material) + 1) % ORDER.length];
         return 'Bloque: ' + NAMES[material];
@@ -405,17 +573,25 @@
       aimCell: aim,
       tryPlace: tryPlace,
       tryDelete: tryDelete,
+      tryDeleteStairs: tryDeleteStairs,
+      tryErase() { return tryDelete() || tryDeleteStairs(); },
       tryStairs: tryStairs,
       placeCell: placeCell,
       placeStairs: placeStairs,
       removeBlock: removeBlock,
+      removeFlight: removeFlight,
       hurtBlock: hurtBlock,
       dropUnsupported: dropUnsupported,
       update: update,
       dispose: dispose,
+      clearAll: clearAll,
+      snapshot: snapshot,
+      restore: restore,
       occupies(ix, iz, level) { return grid.has(cellKey(ix, iz, level)); },
       blockCount() { return blocks.length; },
+      stairCount() { return stairs.length; },
       blocks: blocks,
+      stairsList() { return stairs; },
     };
   };
 })();

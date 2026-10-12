@@ -10,7 +10,7 @@
   class InputManager {
     constructor(canvas, overlay) {
       this.canvas = canvas;
-      this.overlay = overlay;
+      this.overlay = overlay || null;
 
       this.keys = {};
       this.yaw = 0;
@@ -95,15 +95,15 @@
         this.fallbackMode = true;
         this.pointerLocked = false;
         this._updateOverlay();
-        const subtleEl = this.overlay.querySelector('.subtle');
-        if (subtleEl) {
-          subtleEl.textContent = 'Click y arrastrar para mirar | WASD | F antorcha | Q mochila | Shift | Espacio';
-        }
       });
     }
 
     _updateOverlay() {
-      this.overlay.classList.toggle('hidden', this.pointerLocked);
+      // Sin overlay inicial: el menú de pausa es la entrada.
+      if (!this.overlay) return;
+      if (this.overlay.classList) {
+        this.overlay.classList.toggle('hidden', this.pointerLocked);
+      }
     }
 
     _bindResize() {

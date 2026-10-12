@@ -1,5 +1,13 @@
 :root {
   --bg: #0a0a0a;
+  --rg-green: #33ff66;
+  --rg-green-dim: #1a7a34;
+  --rg-amber: #ffb300;
+  --rg-red: #ff4444;
+  --rg-panel: #10140e;
+  --rg-ink: #d6ffd6;
+  --rg-dim: #8aa88a;
+  --rg-line: #2c4a2c;
 }
 
 * {
@@ -11,13 +19,28 @@
 body {
   background: var(--bg);
   overflow: hidden;
-  font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'VT323', 'Courier New', monospace;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
   height: 100vh;
   width: 100vw;
   cursor: default;
+}
+
+/* CRT: scanlines + viñeta encima de todo, sin capturar clicks */
+#crt {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2000;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0px,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.14) 3px
+  );
+  box-shadow: inset 0 0 120px rgba(0, 0, 0, 0.55);
 }
 
 canvas {
@@ -361,3 +384,309 @@ canvas {
 .sheet-line input[type="range"] { width: 140px; }
 
 .pause-body { margin: 0.4rem 0 0.8rem; }
+
+/* Modo creador (como La Grieta FPS): botón flotante + paleta + vuelo */
+#creatorToggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 45;
+  background: rgba(12, 10, 8, 0.9);
+  color: #f3e6c8;
+  border: 1px solid rgba(215, 177, 115, 0.45);
+  border-radius: 8px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+#creatorToggle.on {
+  background: rgba(80, 160, 90, 0.3);
+  border-color: rgba(140, 220, 150, 0.6);
+}
+
+#creatorFly {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  z-index: 45;
+  background: rgba(12, 10, 8, 0.9);
+  color: #f3e6c8;
+  border: 1px solid rgba(215, 177, 115, 0.45);
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+#creatorFly.on {
+  background: rgba(90, 140, 200, 0.3);
+}
+
+#creatorBar {
+  position: fixed;
+  left: 50%;
+  bottom: 76px;
+  transform: translateX(-50%);
+  z-index: 35;
+  display: none;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  max-width: min(640px, calc(100vw - 24px));
+  background: rgba(12, 10, 8, 0.92);
+  border: 1px solid rgba(215, 177, 115, 0.45);
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  pointer-events: auto;
+}
+
+.creator-group {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.creator-label {
+  color: #a89474;
+  font-size: 0.78rem;
+  margin-right: 0.15rem;
+}
+
+.creator-pick {
+  width: 38px;
+  height: 38px;
+  font-size: 20px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f3e6c8;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.creator-pick.on {
+  border-color: #7dffb2;
+  background: rgba(51, 255, 102, 0.16);
+  box-shadow: 0 0 8px rgba(51, 255, 102, 0.4);
+}
+
+.creator-pick.creator-action {
+  border-color: rgba(255, 200, 120, 0.4);
+}
+
+#creatorHint {
+  width: 100%;
+  text-align: center;
+  color: #a89474;
+  font-size: 0.78rem;
+}
+
+/* ============ RETRO GAME (fósforo verde + ámbar, como La Grieta FPS) ============ */
+.hud {
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 20px;
+  color: var(--rg-ink);
+  text-shadow: 2px 2px 0 #000;
+}
+
+.hud-health.low {
+  color: var(--rg-red);
+  animation: rg-blink 0.8s steps(2) infinite;
+}
+
+@keyframes rg-blink {
+  50% { opacity: 0.45; }
+}
+
+.hud-tool {
+  color: var(--rg-amber);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.crosshair {
+  border: 2px solid var(--rg-green);
+  box-shadow: 0 0 6px rgba(51, 255, 102, 0.6), 0 0 0 1px #000;
+}
+
+.hud-prompt {
+  font-family: 'VT323', 'Courier New', monospace;
+  background: rgba(0, 0, 0, 0.72);
+  border: 2px solid var(--rg-line);
+  border-radius: 4px;
+  color: var(--rg-ink);
+  text-shadow: 2px 2px 0 #000;
+}
+
+.hud-flash {
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 22px;
+  color: var(--rg-amber);
+  text-shadow: 2px 2px 0 #000;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid var(--rg-line);
+  border-radius: 4px;
+  padding: 4px 12px;
+}
+
+.sheet-card,
+.craft-panel {
+  background: var(--rg-panel);
+  border: 3px solid var(--rg-green-dim);
+  border-radius: 6px;
+  box-shadow: 6px 6px 0 #000, 0 0 24px rgba(51, 255, 102, 0.12);
+  color: var(--rg-ink);
+  font-family: 'VT323', 'Courier New', monospace;
+}
+
+.sheet-card h2,
+.craft-panel h2 {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 15px;
+  color: var(--rg-green);
+  text-shadow: 2px 2px 0 #000;
+  letter-spacing: 1px;
+}
+
+.death-title {
+  color: var(--rg-red);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 16px;
+}
+
+.sheet-btn,
+.craft-list button {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+  background: #0b0e0b;
+  color: var(--rg-ink);
+  border: 2px solid var(--rg-green-dim);
+  border-radius: 4px;
+  box-shadow: 3px 3px 0 #000;
+  text-shadow: 1px 1px 0 #000;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sheet-btn:hover,
+.craft-list button:hover:not(:disabled) {
+  background: var(--rg-green-dim);
+  color: #061206;
+  text-shadow: none;
+}
+
+.sheet-btn.primary {
+  background: rgba(255, 179, 0, 0.16);
+  border-color: var(--rg-amber);
+  color: var(--rg-amber);
+}
+
+.sheet-btn.primary:hover {
+  background: var(--rg-amber);
+  color: #1a1000;
+}
+
+.craft-copy,
+.craft-hint,
+.pause-body {
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 19px;
+}
+
+.pause-controls .craft-copy {
+  line-height: 1.25;
+  color: var(--rg-dim);
+}
+
+.belt-slot {
+  border: 2px solid var(--rg-line);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.78);
+  box-shadow: 3px 3px 0 #000;
+}
+
+.belt-slot.active {
+  border-color: var(--rg-green);
+  background: rgba(51, 255, 102, 0.16);
+  box-shadow: 0 0 10px rgba(51, 255, 102, 0.45), 3px 3px 0 #000;
+  transform: translateY(-3px);
+}
+
+/* Creador en retro */
+#creatorToggle,
+#creatorFly {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  background: #0b0e0b;
+  color: var(--rg-ink);
+  border: 2px solid var(--rg-green-dim);
+  border-radius: 4px;
+  box-shadow: 3px 3px 0 #000;
+}
+
+#creatorToggle.on {
+  background: rgba(51, 255, 102, 0.18);
+  border-color: var(--rg-green);
+  color: var(--rg-green);
+}
+
+#creatorFly.on {
+  background: rgba(255, 179, 0, 0.18);
+  border-color: var(--rg-amber);
+  color: var(--rg-amber);
+}
+
+#creatorBar {
+  background: rgba(11, 14, 11, 0.95);
+  border: 3px solid var(--rg-green-dim);
+  border-radius: 6px;
+  box-shadow: 5px 5px 0 #000;
+}
+
+.creator-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--rg-dim);
+}
+
+.creator-pick {
+  border: 2px solid var(--rg-line);
+  border-radius: 4px;
+  background: #0b0e0b;
+  box-shadow: 2px 2px 0 #000;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.creator-pick:hover {
+  border-color: var(--rg-green);
+}
+
+.creator-pick.on {
+  border-color: var(--rg-green);
+  background: rgba(51, 255, 102, 0.18);
+  box-shadow: 0 0 8px rgba(51, 255, 102, 0.5), 2px 2px 0 #000;
+}
+
+.creator-pick.creator-action {
+  border-color: var(--rg-amber);
+}
+
+#creatorHint {
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 18px;
+  color: var(--rg-dim);
+}
+
+#debug-info {
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 15px;
+  color: var(--rg-dim);
+}
