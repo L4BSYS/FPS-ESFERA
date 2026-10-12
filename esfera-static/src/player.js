@@ -46,6 +46,10 @@
       this.coyote = Config.COYOTE_TIME;
       this._wasGrounded = true;
       this.stepClock = 0;
+      // Adelante horizontal, el mismo vector con el que camina. El muñeco
+      // lo lee de acá: no recalcula el yaw por su cuenta.
+      this.facing = new THREE.Vector3();
+      this.facing.copy(this.basisZ);
     }
 
     _seedAt(up) {
@@ -216,6 +220,7 @@
 
       const lookTarget = this.position.clone().add(lookDirection);
 
+      this.facing.copy(fwdDir);
       camera.up.copy(updatedLocalUp);
       camera.position.copy(this.position);
       camera.lookAt(lookTarget);

@@ -619,10 +619,7 @@
       const cam = new THREE.PerspectiveCamera(75, 1, 0.5, 100);
       const view = window.Game.createWeapon(cam, { spawn() {} });
       view.setTool('hammer');
-      const byName = {};
-      cam.traverse((child) => {
-        if (child.userData && child.userData.tool) byName[child.userData.tool] = child;
-      });
+      const byName = view.tools;
       ['axe', 'pickaxe', 'hammer', 'pistol'].forEach((id) => {
         if (!byName[id]) throw new Error('falta el modelo de ' + id);
       });
@@ -671,10 +668,13 @@
   }
 
   const scene = new THREE.Scene();
+  // 0.08: el choque deja el ojo a 0.4 m de una pared. Con 0.5 esa cara
+  // caía detrás del plano cercano y, al dibujarse solo por fuera, desaparecía.
+  // El hombro está a ~0.35 m, así que el mismo corte rebanaba los brazos.
   const camera = new THREE.PerspectiveCamera(
     75,
     window.innerWidth / window.innerHeight,
-    0.5,
+    0.08,
     800
   );
 
@@ -746,9 +746,27 @@
 
   const projectiles = window.Game.createProjectiles(scene);
   const weapon = window.Game.createWeapon(camera, projectiles);
-  // El renderer solo dibuja la escena. Si la cámara no está adentro,
-  // la mano que cuelga de ella existe y nunca se ve.
+  const body = window.Game.createBody(scene);
+  weapon.attach(body.toolMount);
+  // El renderer solo dibuja la escena. La cámara va adentro para la luz
+  // del disparo, que sigue siendo hija de ella.
   scene.add(camera);
+
+  function bodyState(dead) {
+    const look = new THREE.Vector3();
+    camera.getWorldDirection(look);
+    return {
+      eye: player.position,
+      up: player.localUp,
+      facing: player.facing,
+      grounded: player.isGrounded,
+      speed: player.tangentVelocity.length(),
+      running: input.isDown('ShiftLeft') || input.isDown('ShiftRight'),
+      look: look,
+      dead: !!dead,
+      camera: camera,
+    };
+  }
 
   function selfTestViewmodel() {
     const fake = {
@@ -759,6 +777,7 @@
       consume() {},
     };
     player.update(0.016, fake, camera);
+    body.update(0.016, bodyState(false));
     weapon.update(0.016, fake);
     const gl = renderer.getContext();
     const w = gl.drawingBufferWidth;
@@ -783,18 +802,27 @@
     for (let i = 0; i < bare.length; i += 64) lit += bare[i] + bare[i + 1] + bare[i + 2];
     if (lit < 200) throw new Error('la vista no se dibujó');
     weapon.setTool('pistol');
+    body.update(0.016, bodyState(false));
     weapon.update(0.016, fake);
     const pistolDiff = differ(bare, shot());
-    if (pistolDiff < 20000) throw new Error('la pistola no aparece en la mira (' + pistolDiff + ')');
+    if (pistolDiff < 20000) {
+      const pistol = weapon.tools.pistol;
+      const at = new THREE.Vector3();
+      pistol.getWorldPosition(at);
+      throw new Error('la pistola no aparece en la mira (' + pistolDiff + ') d=' + at.distanceTo(camera.position).toFixed(2) + ' vis=' + pistol.visible);
+    }
     weapon.setTool('axe');
+    body.update(0.016, bodyState(false));
     weapon.update(0.016, fake);
     const axeDiff = differ(bare, shot());
     if (axeDiff < 20000) throw new Error('el hacha no aparece en la mira (' + axeDiff + ')');
     weapon.setTool('hammer');
+    body.update(0.016, bodyState(false));
     weapon.update(0.016, fake);
     const hammerDiff = differ(bare, shot());
     if (hammerDiff < 20000) throw new Error('el martillo no aparece en la mira (' + hammerDiff + ')');
     weapon.setTool('pickaxe');
+    body.update(0.016, bodyState(false));
     weapon.update(0.016, fake);
     const pickDiff = differ(bare, shot());
     if (pickDiff < 20000) throw new Error('el pico no aparece en la mira (' + pickDiff + ')');
@@ -808,6 +836,127 @@
     document.documentElement.dataset.view = err.message || String(err);
     console.error(err);
   }
+
+  function selfTestBody() {
+    const frame = courtyard.frame;
+    const level = {
+      yaw: 0, pitch: 0, keys: {},
+      isDown() { return false; },
+      consume() {},
+    };
+    function place(pitch) {
+      level.pitch = pitch;
+      player.update(0.05, level, camera);
+      body.update(0.05, bodyState(false));
+    }
+    function ahead(point) {
+      const camFwd = new THREE.Vector3();
+      camera.getWorldDirection(camFwd);
+      return point.clone().sub(camera.position).dot(camFwd);
+    }
+    place(0);
+    if (camera.near > 0.1) throw new Error('el plano cercano corta de cerca');
+    if (body.root.parent !== scene) throw new Error('el muñeco no está en el mundo');
+    if (body.head.visible) throw new Error('se ve la cabeza desde adentro');
+    const up = player.localUp;
+    const right = new THREE.Vector3().crossVectors(player.facing, up);
+    const rightHand = body.fist('right');
+    const leftHand = body.fist('left');
+    const rightDot = rightHand.clone().sub(player.position).dot(right);
+    const leftDot = leftHand.clone().sub(player.position).dot(right);
+    if (rightDot < leftDot + 0.15) {
+      throw new Error('las manos están cruzadas r=' + rightDot.toFixed(2) + ' l=' + leftDot.toFixed(2));
+    }
+    const fistDist = body.fist('right').distanceTo(player.position);
+    if (fistDist < 0.55) throw new Error('el puño entra en la cámara (' + fistDist.toFixed(2) + ')');
+    if (ahead(body.foot('right')) > 0.45) throw new Error('los pies se ven mirando al frente');
+
+    place(-1.15);
+    const footAhead = ahead(body.foot('right'));
+    if (footAhead < 0.8) throw new Error('mirar abajo no muestra los pies (' + footAhead.toFixed(2) + ')');
+    place(0);
+
+    let separated = 0;
+    for (let i = 0; i < 10; i++) {
+      body.update(0.08, {
+        eye: player.position,
+        up: player.localUp,
+        facing: player.facing,
+        grounded: true,
+        speed: 8,
+        running: false,
+        look: player.facing,
+        dead: false,
+        camera: camera,
+      });
+      const gap = Math.abs(
+        body.foot('right').sub(player.position).dot(player.facing) -
+        body.foot('left').sub(player.position).dot(player.facing)
+      );
+      if (gap > separated) separated = gap;
+    }
+    if (separated < 0.04) throw new Error('las piernas no caminan');
+    place(0);
+
+    const guard = body.fist('right').sub(player.position).dot(player.facing);
+    if (guard < 0.25) throw new Error('la guardia no está adelante (' + guard.toFixed(2) + ')');
+    if (!body.tryPunch('right')) throw new Error('el puño derecho no salió');
+    for (let i = 0; i < 5; i++) body.update(0.03, bodyState(false));
+    const extended = body.fist('right').sub(player.position).dot(player.facing);
+    body.takeStrike();
+    if (extended < guard + 0.12) {
+      throw new Error('el puño no avanza (' + guard.toFixed(2) + '→' + extended.toFixed(2) + ')');
+    }
+    if (body.tryPunch('right')) throw new Error('el mismo puño salió dos veces');
+    if (body.tryPunch('left')) throw new Error('el otro puño salió antes de tiempo');
+    body.update(0.2, bodyState(false));
+    body.takeStrike();
+    if (!body.tryPunch('left')) throw new Error('no dejó alternar');
+    if (body.tryPunch('right')) throw new Error('la derecha no esperó su vuelta');
+    body.update(0.6, bodyState(false));
+    body.update(0.6, bodyState(false));
+    body.takeStrike();
+
+    const here = frame.worldToLocal(player.position);
+    const fx = player.facing.dot(frame.tangentX);
+    const fz = player.facing.dot(frame.tangentZ);
+    const before = window.Game.Colliders.all().length;
+    const foes = window.Game.createEnemies(scene, frame, [{
+      x: here.x + fx * 1.15,
+      z: here.z + fz * 1.15,
+      hp: 40,
+    }]);
+    try {
+      if (!body.tryPunch('right')) throw new Error('el golpe de prueba no salió');
+      let strike = null;
+      for (let i = 0; i < 8; i++) {
+        body.update(0.03, bodyState(false));
+        strike = body.takeStrike() || strike;
+      }
+      if (!strike) throw new Error('el golpe no tuvo impacto');
+      const end = strike.origin.clone().addScaledVector(strike.direction, body.reach);
+      const hit = window.Game.Colliders.segment(strike.origin, end);
+      if (!hit || hit.col.kind !== 'enemy') throw new Error('el puño no encontró al robot');
+      foes.damageEnemy(hit.col.ref, body.damage);
+      if (hit.col.ref.hp !== 30) throw new Error('el puño pegó ' + (40 - hit.col.ref.hp));
+    } finally {
+      foes.dispose();
+    }
+    if (window.Game.Colliders.all().length !== before) {
+      throw new Error('el robot de prueba dejó su caja');
+    }
+    place(0);
+    weapon.setTool(Inventory.activeTool);
+  }
+
+  try {
+    selfTestBody();
+    document.documentElement.dataset.body = 'ok';
+  } catch (err) {
+    document.documentElement.dataset.body = err.message || String(err);
+    console.error(err);
+  }
+
   projectiles.setHandlers({
     onEnemy(enemy, amount) { return enemiesSystem.damageEnemy(enemy, amount); },
     onBlock(block) { build.hurtBlock(block); },
@@ -850,6 +999,10 @@
     if (Audio && !Audio.isReady()) Audio.init();
     if (!(input.pointerLocked || input.fallbackMode)) return;
     if (HUD.isModalOpen() || HUD.isPaused() || PlayerHealth.isDead) return;
+    if (Inventory.activeTool === 'hands') {
+      body.tryPunch('right');
+      return;
+    }
     if (Inventory.activeTool === 'hammer') {
       const placed = build.tryPlace(player.position);
       if (placed && placed.text) HUD.flash(placed.text);
@@ -864,11 +1017,15 @@
 
   canvas.addEventListener('mousedown', (e) => {
     if (e.button !== 2) return;
+    if (Audio && !Audio.isReady()) Audio.init();
     if (!(input.pointerLocked || input.fallbackMode)) return;
     if (HUD.isModalOpen() || HUD.isPaused() || PlayerHealth.isDead) return;
-    if (Inventory.activeTool !== 'hammer') return;
-    const removed = build.tryDelete();
-    if (removed && removed.text) HUD.flash(removed.text);
+    if (Inventory.activeTool === 'hammer') {
+      const removed = build.tryDelete();
+      if (removed && removed.text) HUD.flash(removed.text);
+      return;
+    }
+    body.tryPunch('left');
   });
 
   function showCraft() {
@@ -1174,6 +1331,19 @@
     const paused = HUD.isModalOpen() || HUD.isPaused();
     if (!isDead && !paused) {
       player.update(dt, input, camera);
+      body.update(dt, bodyState(false));
+      const strike = body.takeStrike();
+      if (strike) {
+        const end = strike.origin.clone().addScaledVector(strike.direction, body.reach);
+        const hit = window.Game.Colliders.segment(strike.origin, end);
+        if (hit && hit.col.kind === 'enemy' && hit.col.ref) {
+          const killed = enemiesSystem.damageEnemy(hit.col.ref, body.damage);
+          if (Audio && Audio.isReady()) {
+            if (killed) Audio.kill();
+            else Audio.hit();
+          }
+        }
+      }
       courtyard.update(dt, t, player.position);
       enemiesSystem.update(dt, t, player.position);
       projectiles.update(dt);
@@ -1193,6 +1363,9 @@
       } else {
         heartIn = 0.4;
       }
+    } else if (isDead) {
+      body.update(dt, bodyState(true));
+      if (build) build.update(0, 'hands', player.position);
     } else if (build) {
       build.update(0, 'hands', player.position);
     }
