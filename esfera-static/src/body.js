@@ -15,9 +15,11 @@
    * El tronco no se acuesta con la mirada: +Y es el radio y +Z es
    * player.facing. +X es up × facing, el mismo lado que basisX del
    * jugador (basisX × up = facing). La derecha del movimiento, KeyD,
-   * es facing × up, o sea el -X local. La cámara sigue en los ojos,
-   * así que mirar abajo muestra los pies y los brazos salen de los hombros.
+   * es facing × up, o sea el -X local. La cámara sigue en los ojos
+   * y los brazos salen de los hombros (lo demás se calcula igual).
    * La cabeza no se dibuja: la cámara vive ahí adentro.
+   * Tronco y piernas tampoco: en primera persona solo tapan la mira y el
+   * fantasma (el día del online se prenden para los otros).
    * Las poses son locales. Por la red, el día que exista, viaja el id de
    * la pose, no estos huesos.
    */
@@ -57,10 +59,12 @@
 
     const pelvis = voxel(0.34, 0.18, 0.2, PANTS);
     pelvis.position.set(0, 0.92, 0);
+    pelvis.visible = false;
     const torso = new THREE.Group();
     torso.position.set(0, 1.02, 0);
     const chest = voxel(0.42, 0.4, 0.22, SHIRT);
     chest.position.y = 0.2;
+    chest.visible = false;
     torso.add(chest);
     const head = voxel(0.28, 0.28, 0.28, SKIN);
     head.position.set(0, 1.62, 0.02);
@@ -90,12 +94,15 @@
       hip.position.set(x, 0.86, 0);
       const thigh = voxel(0.14, 0.36, 0.14, PANTS);
       thigh.position.y = -0.18;
+      thigh.visible = false;
       const knee = new THREE.Group();
       knee.position.y = -0.36;
       const shin = voxel(0.12, 0.34, 0.12, PANTS);
       shin.position.y = -0.17;
+      shin.visible = false;
       const foot = voxel(0.13, 0.08, 0.24, SHOE);
       foot.position.set(0, -0.36, 0.06);
+      foot.visible = false;
       knee.add(shin, foot);
       hip.add(thigh, knee);
       root.add(hip);
@@ -156,12 +163,14 @@
         arm.elbow.position.set(0.05 * sign, -0.34, 0.06);
         arm.hand.position.set(0, -0.28, 0.04);
       } else {
+        // Guardia baja en reposo: los puños (y la herramienta) quedan abajo
+        // y a los costados, fuera de la mira. Al pegar se estira igual.
         arm.elbow.position.set(
-          0.04 * sign,
-          -0.06 + extend * 0.08 + swing * 0.03,
-          0.3 + extend * 0.12
+          0.07 * sign,
+          -0.16 + extend * 0.18 + swing * 0.03,
+          0.26 + extend * 0.16
         );
-        arm.hand.position.set(0, -0.02 + extend * 0.05, 0.28 + extend * 0.18);
+        arm.hand.position.set(0.10 * sign, -0.14 + extend * 0.17, 0.30 + extend * 0.16);
       }
       stretch(arm.upper, arm.elbow.position, 0.3);
       stretch(arm.forearm, arm.hand.position, 0.26);

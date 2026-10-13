@@ -458,6 +458,12 @@
       restoreCreatorEnemies: restoreCreatorEnemies,
       update: update,
       damageEnemy: damageEnemy,
+      healEnemy(enemy, amount) {
+        if (!enemy || !enemy.alive) return false;
+        enemy.hp = Math.min(enemy.maxHp, enemy.hp + amount);
+        paintBar(enemy);
+        return true;
+      },
       dispose: dispose,
       setCombat(opts) {
         guns = opts && opts.projectiles;
@@ -471,13 +477,22 @@
 
   // Cuando no queda nadie, espera 5 s y suelta la siguiente oleada.
   // La cuenta sigue a La Grieta: min(2 + oleada, 6).
-  window.Game.createWaves = function (enemies, points) {
+  // Con grace, el spawn arranca en calma N segundos antes del ciclo.
+  window.Game.createWaves = function (enemies, points, grace) {
     let number = 0;
     let timer = 0;
     let pending = false;
+    let calm = (typeof grace === 'number' && grace > 0) ? grace : 0;
 
     function update(dt) {
-      if (enemies.aliveCount() > 0) {
+      if (calm > 0) {
+        calm -= dt;
+        if (calm <= 0) {
+          calm = 0;
+          return { type: 'wake' };
+        }
+        return null;
+      }      if (enemies.aliveCount() > 0) {
         timer = 0;
         pending = false;
         return null;
@@ -500,6 +515,7 @@
     return {
       update: update,
       get number() { return number; },
+      calmLeft() { return Math.max(0, calm); },
     };
   };
 })();

@@ -19,6 +19,7 @@
     pickaxe: '⛏',
     hammer: '🔨',
     pistol: '🔫',
+    torch: '🔥',
   };
 
   const els = {};
@@ -145,7 +146,7 @@
         if (onResume) onResume();
       });
       const pauseHint = el('p', 'craft-hint');
-      pauseHint.textContent = 'Esc sigue. WASD, espacio, shift y 1-5 quedan fijos. G creador, B paleta.';
+      pauseHint.textContent = 'Esc sigue. WASD, espacio, shift y 1-6 quedan fijos. G creador, B paleta.';
       pauseCard.append(pauseTitle, tabRow, els.pauseStats, els.pauseBody, resumeBtn, pauseHint);
       els.pause.appendChild(pauseCard);
 
@@ -171,8 +172,7 @@
       els.health.classList.toggle('low', state.hp <= state.maxHp * 0.3);
       els.tool.textContent = 'Herramienta: ' + state.toolName;
       els.res.textContent = 'Madera ' + state.wood + '    Piedra ' + state.stone + '    Metal ' + state.metal;
-      els.stacks.textContent = 'Comida ' + state.food + '/' + state.foodMax +
-        '    Toxina ' + state.toxin + '/' + state.toxinMax;
+      els.stacks.textContent = 'Antorchas ' + (state.torch || 0) + '/' + (state.torchMax || 0);
       els.key.textContent = state.hasKey ? 'Llave dorada: sí' : 'Llave dorada: no';
       els.ammo.textContent = state.showAmmo
         ? (state.reloading ? 'Recargando…' : ('Balas ' + state.mag + ' / ' + state.reserve))
@@ -232,11 +232,33 @@
       els.title.textContent = 'Mochila';
       const packKey = window.Game.Settings ? window.Game.Settings.label('pack') : 'Q';
       const interact = window.Game.Settings ? window.Game.Settings.label('interact') : 'E';
-      els.hint.textContent = '1 usa comida. 2 usa toxina. ' + packKey + ' o ' + interact + ' cierra.';
+      els.hint.textContent = '1-5 craftea lo básico. Clic o toque también vale. ' + packKey + ' o ' + interact + ' cierra.';
       els.list.textContent = '';
       const mats = el('p', 'craft-copy');
       mats.textContent = 'Madera ' + state.wood + '   Piedra ' + state.stone + '   Metal ' + state.metal;
       els.list.appendChild(mats);
+      if (state.basic && state.basic.length) {
+        const basicTitle = el('p', 'craft-copy');
+        basicTitle.textContent = 'Crafteo básico (sin mesa)';
+        els.list.appendChild(basicTitle);
+        state.basic.forEach((row, i) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = (i + 1) + '   ' + row.label + (row.reason ? ' — ' + row.reason : '');
+          button.disabled = !row.enabled;
+          const craftIt = (event) => {
+            if (event) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            if (button.disabled) return;
+            actions.craftBasic(row.index);
+          };
+          button.addEventListener('click', craftIt);
+          button.addEventListener('touchstart', craftIt, { passive: false });
+          els.list.appendChild(button);
+        });
+      }
       function line(label, buttons) {
         const row = el('div', 'sheet-line');
         const name = el('span');
@@ -255,22 +277,18 @@
         });
         els.list.appendChild(row);
       }
-      line('Comida ' + state.food + ' / ' + state.foodMax, [
-        { label: 'Usar', run: () => actions.use('food') },
-        { label: 'Soltar', run: () => actions.drop('food') },
-      ]);
-      line('Toxina ' + state.toxin + ' / ' + state.toxinMax, [
-        { label: 'Usar', run: () => actions.use('toxin') },
-        { label: 'Soltar', run: () => actions.drop('toxin') },
-      ]);
       line('Balas de reserva ' + (state.reserve || 0), [
         { label: 'Soltar', run: () => actions.drop('ammo') },
       ]);
+      if (state.torchMax) {
+        line('Antorchas ' + (state.torch || 0) + ' / ' + state.torchMax, []);
+      }
       if (state.hasKey) {
         line('Llave dorada', [{ label: 'Soltar', run: () => actions.drop('key') }]);
       }
       (state.tools || []).forEach((tool) => {
-        if (!tool.owned || tool.id === 'hands') return;
+        // La antorcha es un desbloqueo permanente: no se suelta.
+        if (!tool.owned || tool.id === 'hands' || tool.id === 'torch') return;
         line(tool.name, [{ label: 'Soltar', run: () => actions.drop(tool.id) }]);
       });
     },
@@ -379,10 +397,14 @@
       const rows = [
         ['W A S D', 'Moverse'],
         ['Mouse / Clic', 'Mirar / Puño derecho, cosechar, disparar o poner'],
-        ['E / Q', 'Tótem, mesa, puerta / Mochila'],
+        ['E / Q', 'Tótem, mesa, puerta / Mochila y crafteo'],
+        ['Mesa en mano', 'Clic la pone · Esc la guarda'],
+        ['Mantener clic', 'Paredes rápidas con martillo (y en creador)'],
+        ['Anillo ámbar', 'Spawn: se arranca, no se construye'],
         ['C / V', 'Material / Escalera'],
         ['Der', 'Puño izquierdo, o borrar (creador: abre el menú)'],
-        ['F / 1-5', 'Antorcha / Cinturón, números o rueda'],
+        ['F (antorcha en mano)', 'Plantar antorcha (gasta 1)'],
+        ['1-6', 'Cinturón, números o rueda'],
         ['G / B', 'Creador / Menú'],
         ['Shift / Espacio', 'Correr / Saltar (en creador: volar)'],
         ['Esc', 'Pausa'],

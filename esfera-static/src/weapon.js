@@ -26,6 +26,8 @@
     const held = {};
     let current = 'hands';
     let kick = 0;
+    let torchTime = 0;
+    let torchFire = null;
 
     function tune(obj) {
       obj.frustumCulled = false;
@@ -107,11 +109,40 @@
       mount('pistol', group);
     }
 
+    function makeTorch() {
+      const group = new THREE.Group();
+      const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.03, 0.46, 7), woodMat());
+      const wrap = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.035, 0.035, 0.09, 7),
+        new THREE.MeshStandardMaterial({ color: 0x5a4a2a, roughness: 0.9 })
+      );
+      wrap.position.y = 0.2;
+      const flame = new THREE.Mesh(
+        new THREE.ConeGeometry(0.055, 0.16, 7),
+        new THREE.MeshBasicMaterial({ color: 0xffb347 })
+      );
+      flame.position.y = 0.32;
+      const glow = new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 8, 6),
+        new THREE.MeshBasicMaterial({ color: 0xffe0a0, transparent: true, opacity: 0.85 })
+      );
+      glow.position.y = 0.28;
+      // Fuego que alumbra: el mundo es oscuro y la antorcha guía la base.
+      const fire = new THREE.PointLight(0xff9a3c, 1.5, 14, 2);
+      fire.position.y = 0.34;
+      group.add(stick, wrap, flame, glow, fire);
+      group.rotation.set(0.35, 0.2, 0.25);
+      group.userData.flame = flame;
+      torchFire = fire;
+      mount('torch', group);
+    }
+
     tune(rig);
     makeAxe();
     makePickaxe();
     makeHammer();
     makePistol();
+    makeTorch();
 
     function setTool(id) {
       const next = held[id] ? id : 'hands';
@@ -198,6 +229,18 @@
     function update(dt) {
       kick += (0 - kick) * Math.min(1, dt * 9);
       rig.position.z = -kick * 0.05;
+      // Parpadeo del fuego en la mano.
+      torchTime += dt;
+      if (torchFire && held.torch && held.torch.visible) {
+        torchFire.intensity = 1.35 + Math.sin(torchTime * 13) * 0.22 + Math.sin(torchTime * 41) * 0.1;
+        const flame = held.torch.userData.flame;
+        if (flame) {
+          const s = 1 + Math.sin(torchTime * 17) * 0.08;
+          flame.scale.set(s, 1 + (s - 1) * 1.5, s);
+        }
+      } else if (torchFire) {
+        torchFire.intensity = 0;
+      }
     }
 
     return {

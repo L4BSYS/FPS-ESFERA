@@ -10,14 +10,15 @@
   const RES_ES = { wood: 'madera', stone: 'piedra', metal: 'metal' };
 
   const RECIPES = [
-    { name: 'Martillo', cost: { wood: 4, stone: 2 }, need: null, tool: 'hammer' },
-    { name: 'Hacha', cost: { wood: 4, stone: 3 }, need: 'hammer', tool: 'axe' },
-    { name: 'Pico', cost: { wood: 2, stone: 6 }, need: 'axe', tool: 'pickaxe' },
-    { name: 'Pistola (+6 balas)', cost: { metal: 10, wood: 4 }, need: 'pickaxe', tool: 'pistol', ammo: 6 },
-    { name: 'Mesa de trabajo', cost: { wood: 6, stone: 4 }, placeBench: true },
-    { name: 'Balas x12', cost: { metal: 3, wood: 2 }, ammo: 12 },
-    { name: 'Venda (+30 vida)', cost: { wood: 4, stone: 2 }, heal: 30 },
-    { name: 'Reparar mesa (+100)', cost: { wood: 3, stone: 2 }, repair: true },
+    { name: '🔨 Martillo', cost: { wood: 4, stone: 2 }, need: null, tool: 'hammer' },
+    { name: '🪓 Hacha', cost: { wood: 4, stone: 3 }, need: 'hammer', tool: 'axe' },
+    { name: '⛏ Pico', cost: { wood: 2, stone: 6 }, need: 'axe', tool: 'pickaxe' },
+    { name: '🔥 Antorcha x2', cost: { wood: 2 }, need: null, tool: 'torch', torch: 2 },
+    { name: '🔫 Pistola (+6 balas)', cost: { metal: 10, wood: 4 }, need: 'pickaxe', tool: 'pistol', ammo: 6 },
+    { name: '🛠 Mesa de trabajo', cost: { wood: 6, stone: 4 }, placeBench: true },
+    { name: '📦 Balas x12', cost: { metal: 3, wood: 2 }, ammo: 12 },
+    { name: '➕ Venda (+30 vida)', cost: { wood: 4, stone: 2 }, heal: 30 },
+    { name: '🔧 Reparar mesa (+100)', cost: { wood: 3, stone: 2 }, repair: true },
   ];
   window.Game.CraftRecipes = RECIPES;
 
@@ -39,6 +40,12 @@
     const PlayerHealth = window.Game.PlayerHealth;
 
     const frame = window.Game.LocalFrame(new THREE.Vector3(0, Config.PLANET_RADIUS, 0));
+    // Avanzada en las antípodas del spawn: puerta + llave al otro lado del
+    // planeta. Tiene marco propio porque el chart del patio no llega.
+    const outFrame = (function () {
+      const spawnSurface = frame.localToWorld(Config.SPAWN_X || 0, Config.SPAWN_Z || -2, 0);
+      return window.Game.LocalFrame(spawnSurface.clone().negate());
+    })();
     const nodes = [];
     const pickups = [];
     const interactables = [];
@@ -52,14 +59,15 @@
     let playerPos = null;
     let lastHarvest = 0;
 
-    function addBlock(x, z, w, h, d, color) {
+    function addBlock(x, z, w, h, d, color, useFrame) {
+      const F = useFrame || frame;
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(w, h, d),
         new THREE.MeshStandardMaterial({ color, roughness: 0.78, metalness: 0.04, emissive: 0x1a1008, emissiveIntensity: 0.4 })
       );
-      Utils.placeOnFrame(mesh, frame, x, z, h / 2);
+      Utils.placeOnFrame(mesh, F, x, z, h / 2);
       scene.add(mesh);
-      Colliders.add(frame, x - w / 2, x + w / 2, z - d / 2, z + d / 2, 0, h);
+      Colliders.add(F, x - w / 2, x + w / 2, z - d / 2, z + d / 2, 0, h);
       return mesh;
     }
 
@@ -126,7 +134,8 @@
     }
 
     function addPickup(spec) {
-      Utils.placeOnFrame(spec.mesh, frame, spec.x, spec.z, spec.base);
+      const F = spec.frame || frame;
+      Utils.placeOnSphere(spec.mesh, F, spec.x, spec.z, spec.base);
       spec.mesh.traverse((child) => { child.raycast = function () {}; });
       scene.add(spec.mesh);
       pickups.push(spec);
@@ -225,7 +234,7 @@
     toolPickup('pickaxe', 2.4, 7.2);
     toolPickup('pistol', 2.2, 10.2);
 
-    function spawnKey(x, z, fromCreator) {
+    function spawnKey(x, z, fromCreator, useFrame) {
       const key = new THREE.Group();
       const bow = new THREE.Mesh(
         new THREE.TorusGeometry(0.16, 0.04, 8, 14),
@@ -240,6 +249,7 @@
       key.add(bow, shaft);
       const spec = {
         mesh: key, x: x, z: z, base: 0.7, phase: x, alive: true, radius: 1.7,
+        frame: useFrame || frame,
         creator: !!fromCreator, kind: 'key',
         prompt() { return 'E agarrar la llave dorada'; },
         use() {
@@ -247,37 +257,39 @@
           scene.remove(this.mesh);
           Inventory.setKey(true);
           if (Audio) Audio.pickup('ammo');
-          return { type: 'flash', text: 'Llave dorada. La puerta está al oeste.' };
+          return { type: 'flash', text: 'Llave dorada. La puerta está en las antípodas.' };
         },
       };
       addPickup(spec);
       return spec;
     }
 
-    spawnKey(-6.2, 15.4);
+    // La llave espera cerca de la puerta, al otro lado del planeta.
+    const outpostKey = spawnKey(3, 1, false, outFrame);
 
     addNode('wood', -3.4, 11);
     addNode('metal', 0, 11.4);
     addNode('stone', 3.4, 11);
 
-    addBlock(-5.4, 13.2, 1, 1, 1, 0x8b5a2b);
-    addBlock(-6.4, 13.2, 1, 1, 1, 0x8b5a2b);
-    addBlock(-7.7, 18.2, 1, 2.4, 1, 0x5a3d28);
-    addBlock(-4.3, 18.2, 1, 2.4, 1, 0x5a3d28);
+    addBlock(0.6, -3, 1, 1, 1, 0x8b5a2b, outFrame);
+    addBlock(-0.4, -3, 1, 1, 1, 0x8b5a2b, outFrame);
+    addBlock(-1.7, 2, 1, 2.4, 1, 0x5a3d28, outFrame);
+    addBlock(1.7, 2, 1, 2.4, 1, 0x5a3d28, outFrame);
 
-    const door = { x: -6, z: 18.2, w: 1.6, h: 2.5, d: 0.28, state: 'closed', lift: 0 };
+    const door = { x: 0, z: 2, w: 1.6, h: 2.5, d: 0.28, state: 'closed', lift: 0 };
     const doorMesh = new THREE.Mesh(
       new THREE.BoxGeometry(door.w, door.h, door.d),
-      new THREE.MeshStandardMaterial({ color: 0x8a6232, roughness: 0.6, emissive: 0x553300, emissiveIntensity: 0.45 })
+      new THREE.MeshStandardMaterial({ color: 0x8a6232, roughness: 0.6, emissive: 0x773a08, emissiveIntensity: 0.7 })
     );
     scene.add(doorMesh);
     const doorCol = Colliders.add(
-      frame,
+      outFrame,
       door.x - door.w / 2, door.x + door.w / 2,
       door.z - door.d / 2, door.z + door.d / 2,
       0, door.h
     );
     interactables.push({
+      frame: outFrame,
       x: door.x, z: door.z, radius: 2.3, alive: true,
       prompt() {
         if (!Inventory.hasKey) return 'E puerta — te falta la llave';
@@ -304,8 +316,31 @@
     // --- Territorio: la zona se centra en las mesas vivas del jugador ---
     // (declarado antes de makeBench porque la primera mesa lo usa).
     const TERRITORY_RADIUS = 9;
-    let territoryRing = null;
     let territorySig = '';
+
+    // Geometría compartida del anillo de zona (un anillo por mesa viva,
+    // cada uno clavado a SU mesa: el marco del polo los descentra lejos).
+    let ringGeoShared = null;
+    let ringMatShared = null;
+    function ringAssets() {
+      if (!ringGeoShared) {
+        ringGeoShared = new THREE.RingGeometry(TERRITORY_RADIUS - 0.35, TERRITORY_RADIUS, 56);
+      }
+      if (!ringMatShared) {
+        ringMatShared = new THREE.MeshBasicMaterial({
+          color: 0x33ff66, transparent: true, opacity: 0.45,
+          side: THREE.DoubleSide, depthWrite: false,
+        });
+      }
+      return { geo: ringGeoShared, mat: ringMatShared };
+    }
+
+    function positionRingOnBench(ring, benchMesh) {
+      const radial = benchMesh.position.clone().normalize();
+      ring.position.copy(benchMesh.position).addScaledVector(radial, 0.07);
+      ring.quaternion.copy(benchMesh.quaternion);
+      ring.rotateX(-Math.PI / 2);
+    }
 
     function makeBench(x, z) {
       const group = new THREE.Group();
@@ -326,13 +361,32 @@
       bar.position.y = 1.35;
       bar.raycast = function () {};
       group.add(top, leg, lamp, bar);
-      Utils.placeOnFrame(group, frame, x, z, 0);
+      // Mesa y caja en la tesela: coinciden en todo el planeta.
+      let benchFrame = frame;
+      let blx = x;
+      let blz = z;
+      if (buildRef && buildRef.tileFor) {
+        const t = buildRef.tileFor(x, z);
+        benchFrame = t.frame;
+        blx = x - t.cx;
+        blz = z - t.cz;
+      }
+      Utils.placeOnSphere(group, benchFrame, blx, blz, 0);
       scene.add(group);
-      const col = Colliders.add(frame, x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95);
+      const col = Colliders.add(benchFrame, blx - 0.75, blx + 0.75, blz - 0.45, blz + 0.45, 0, 0.95);
       const bench = { x: x, z: z, mesh: group, bar: bar, col: col, hp: 300, maxHp: 300, alive: true, owner: 'player' };
       col.kind = 'bench';
       col.ref = bench;
       benches.push(bench);
+      try {
+        const assets = ringAssets();
+        const ring = new THREE.Mesh(assets.geo, assets.mat);
+        ring.raycast = function () {};
+        positionRingOnBench(ring, group);
+        ring.visible = true;
+        scene.add(ring);
+        bench.ring = ring;
+      } catch (e) {}
       interactables.push({
         x: x, z: z, radius: 2.5, alive: true, bench: bench,
         prompt() { return bench.hp > 0 ? 'E mesa de trabajo' : ''; },
@@ -352,8 +406,23 @@
       bench.bar.material.color.setHex(ratio > 0.6 ? 0x4CAF50 : (ratio > 0.3 ? 0xFFA500 : 0xff3333));
     }
 
-    makeBench(0, 16.2);
-    benches[0].creator = false;
+    // Sin mesa inicial: el jugador la craftea en la mochila, la posiciona
+    // y recién ahí reclama su zona. El spawn arranca en calma total.
+
+    // Anillo ámbar de la zona de spawn: acá se arranca, no se construye.
+    try {
+      const spawnRing = new THREE.Mesh(
+        new THREE.RingGeometry((Config.SPAWN_SAFE_R || 8) - 0.3, Config.SPAWN_SAFE_R || 8, 56),
+        new THREE.MeshBasicMaterial({
+          color: 0xffb300, transparent: true, opacity: 0.4,
+          side: THREE.DoubleSide, depthWrite: false,
+        })
+      );
+      spawnRing.raycast = function () {};
+      Utils.placeOnSphere(spawnRing, frame, Config.SPAWN_X || 0, Config.SPAWN_Z || -2, 0.07);
+      spawnRing.rotateX(-Math.PI / 2);
+      scene.add(spawnRing);
+    } catch (e) {}
 
     // --- Territorio: helpers (el anillo sigue a la mesa viva) ---
 
@@ -379,47 +448,49 @@
       return false;
     }
 
+    // Sincroniza los anillos con las mesas: cada mesa viva muestra el
+    // suyo clavado; las muertas lo esconden. Sin mesas no hay nada.
     function updateTerritoryRing() {
       try {
         const alive = aliveBenches();
-        if (!alive.length) {
-          if (territoryRing) territoryRing.visible = false;
-          territorySig = 'none';
-          return;
-        }
-        // Una marca por mesa viva: la principal sigue a la primera.
-        if (!territoryRing) {
-          territoryRing = new THREE.Mesh(
-            new THREE.RingGeometry(TERRITORY_RADIUS - 0.35, TERRITORY_RADIUS, 56),
-            new THREE.MeshBasicMaterial({
-              color: 0x33ff66, transparent: true, opacity: 0.5,
-              side: THREE.DoubleSide, depthWrite: false,
-            })
-          );
-          territoryRing.raycast = function () {};
-          scene.add(territoryRing);
-        }
-        const main = alive[0];
-        Utils.placeOnFrame(territoryRing, frame, main.x, main.z, 0.07);
-        territoryRing.rotateX(-Math.PI / 2);
-        territoryRing.visible = true;
-        territorySig = alive.map((bench) => bench.x + ',' + bench.z).join(';');
+        benches.forEach((bench) => {
+          if (bench.ring) bench.ring.visible = !!(bench.alive && bench.hp > 0);
+        });
+        territorySig = alive.map((bench) => bench.x + ',' + bench.z).join(';') || 'none';
       } catch (e) {}
     }
 
     // --- API Creador (como el FPS): poner/sacar mesas sin costo ---
-    function placeBenchAt(ix, iz, fromCreator) {
+    // Dos mesas no pueden quedar pegadas: cada reclamo necesita su lugar.
+    const BENCH_GAP = 7;
+
+    function benchGapOk(x, z) {
+      for (let i = 0; i < benches.length; i++) {
+        const b = benches[i];
+        if (!b || !b.alive || b.hp <= 0) continue;
+        const d = Math.hypot(b.x - x, b.z - z);
+        if (d < BENCH_GAP) {
+          return 'Muy cerca de otra mesa (a ' + (Math.round(d * 10) / 10) + ')';
+        }
+      }
+      return '';
+    }
+
+    function placeBenchAt(ix, iz, fromCreator, skipGap) {
       const x = ix;
       const z = iz;
-      const list = Colliders.all();
-      for (let i = 0; i < list.length; i++) {
-        const c = list[i];
-        if (!c.active || c.frame !== frame) continue;
-        if (x + 0.75 <= c.minX || x - 0.75 >= c.maxX || z + 0.45 <= c.minZ || z - 0.45 >= c.maxZ) continue;
-        const top = c.maxH == null ? 100 : c.maxH;
-        const bottom = c.minH == null ? -1 : c.minH;
-        if (top <= 0 || bottom >= 0.95) continue;
+      // Misma vara exacta que los bloques, en cualquier marco.
+      if (buildRef && buildRef.overlaps && buildRef.overlaps(x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95)) {
         return { ok: false, text: 'Ese lugar está ocupado' };
+      }
+      if (!skipGap) {
+        const sx = Config.SPAWN_X || 0;
+        const sz = Config.SPAWN_Z || -2;
+        if (Math.hypot(x - sx, z - sz) < (Config.SPAWN_SAFE_R || 8)) {
+          return { ok: false, text: 'Zona de spawn: acá no se construye' };
+        }
+        const gap = benchGapOk(x, z);
+        if (gap) return { ok: false, text: gap };
       }
       const bench = makeBench(x, z);
       bench.creator = !!fromCreator;
@@ -431,6 +502,10 @@
       const at = benches.indexOf(bench);
       if (at < 0) return false;
       scene.remove(bench.mesh);
+      if (bench.ring) {
+        try { scene.remove(bench.ring); } catch (e) {}
+        bench.ring = null;
+      }
       if (bench.col) Colliders.remove(bench.col);
       for (let i = interactables.length - 1; i >= 0; i--) {
         if (interactables[i].bench === bench) interactables.splice(i, 1);
@@ -479,7 +554,8 @@
       for (let i = 0; i < list.length; i++) {
         const d = list[i];
         if (typeof d.x !== 'number' || typeof d.z !== 'number') continue;
-        const r = placeBenchAt(Math.round(d.x), Math.round(d.z), true);
+        // Lo guardado vuelve igual: sin gap (el reclamo ya existía).
+        const r = placeBenchAt(Math.round(d.x), Math.round(d.z), true, true);
         if (r.ok) {
           if (typeof d.hp === 'number') {
             r.bench.hp = Math.max(1, Math.min(r.bench.maxHp, d.hp));
@@ -515,11 +591,17 @@
       });
     }
 
-    placeTotem(['Agarrá el hacha, el pico y la pistola con E.', '1 a 5, la rueda o el cinturón los equipan.', 'Clic en un nodo cosecha.'], -3.5, 2.4);
-    placeTotem(['Hacha: madera.', 'Pico: piedra y metal.', 'Q abre la mochila.'], 3.6, 8.6);
-    placeTotem(['Martillo: clic pone, derecho borra.', 'C cambia el material. V escalera.', 'La puerta del oeste pide llave.'], 3.5, 14.6);
+    placeTotem(['Agarrá el hacha, el pico y la pistola con E.', '1 a 6, la rueda o el cinturón los equipan.', 'Clic en un nodo cosecha.'], -3.5, 2.4);
+    placeTotem(['Hacha: madera.', 'Pico: piedra y metal.', 'Comida y toxina se consumen solas.'], 3.6, 8.6);
+    placeTotem(['Martillo: clic pone, derecho borra.', 'C cambia el material. V escalera.', 'La puerta de las antípodas pide llave.'], 3.5, 14.6);
 
-    function pocketPickup(id, x, z, promptText, fullText, gotText, fromCreator) {
+    // Comida y toxina: no son inventario. Se consumen al tocarlas, tanto
+    // vos (cura/daño) como los robots (los atrae y los cura o los quema).
+    // Reaparecen al rato en el mismo lugar.
+    const EDIBLE_RESPAWN = 30;
+    const notices = [];
+
+    function spawnEdible(id, x, z, fromCreator) {
       const group = new THREE.Group();
       const mesh = new THREE.Mesh(
         new THREE.CylinderGeometry(0.22, 0.22, 0.32, 8),
@@ -533,26 +615,31 @@
       group.add(mesh);
       const spec = {
         mesh: group, x: x, z: z, base: 0.4, phase: x + z, alive: true, radius: 1.7,
-        creator: !!fromCreator, kind: id,
-        prompt() { return promptText; },
-        use() {
-          const added = Inventory.addStack(id, 1);
-          if (!added) return { type: 'flash', text: fullText };
-          this.alive = false;
-          scene.remove(this.mesh);
-          if (Audio) Audio.pickup(id === 'food' ? 'health' : 'ammo');
-          return { type: 'flash', text: gotText };
-        },
+        creator: !!fromCreator, kind: id, edible: id, respawn: 0,
+        noInteract: true,
+        prompt() { return ''; },
+        use() { return { type: 'none' }; },
       };
       addPickup(spec);
-      if (id === 'toxin' && !fromCreator) spec.hazard = true;
-      if (id === 'toxin' && fromCreator) spec.hazard = true;
       return spec;
     }
 
-    pocketPickup('food', 1.6, 5.6, 'E agarrar comida', 'No entra más comida', 'Comida en la mochila. Q para usarla.');
-    pocketPickup('toxin', 4.4, 13.2, 'E agarrar toxina', 'No entra más toxina', 'Toxina guardada. No la uses.');
-    pickups[pickups.length - 1].hazard = true;
+    spawnEdible('food', 1.6, 5.6, false);
+    spawnEdible('toxin', 4.4, 13.2, false);
+
+    // El que toca un comestible lo consume: devuelve 'food' o 'toxin'.
+    function eatEdibleAt(x, z) {
+      for (let i = 0; i < pickups.length; i++) {
+        const p = pickups[i];
+        if (!p.alive || !p.edible) continue;
+        if (Math.hypot(p.x - x, p.z - z) >= 1.0) continue;
+        p.alive = false;
+        try { scene.remove(p.mesh); } catch (e) {}
+        p.respawn = EDIBLE_RESPAWN;
+        return p.edible;
+      }
+      return null;
+    }
 
     function spawnAmmo(x, z, rounds, fromCreator) {
       const ammoBox = new THREE.Mesh(
@@ -577,21 +664,73 @@
 
     spawnAmmo(0, 9, 12);
 
+    // Material suelto para arrancar a mano, sin herramientas: la progresión
+    // es juntar → craftear básico en la mochila → mesa → reclamar la zona.
+    const MAT_INFO = {
+      wood: { label: 'rama seca', amount: 2, color: 0x8B5A2B, emissive: 0x2a1408 },
+      stone: { label: 'piedra suelta', amount: 2, color: 0x9a9a9a, emissive: 0x3a3a3a },
+      metal: { label: 'chatarra', amount: 1, color: 0x7a8288, emissive: 0x22262a },
+    };
+
+    function spawnMat(res, x, z, fromCreator) {
+      const info = MAT_INFO[res];
+      if (!info) return null;
+      const mesh = new THREE.Mesh(
+        new THREE.DodecahedronGeometry(0.24, 0),
+        new THREE.MeshStandardMaterial({
+          color: info.color, emissive: info.emissive, emissiveIntensity: 0.5,
+          roughness: 0.85, metalness: res === 'metal' ? 0.6 : 0.05,
+        })
+      );
+      const spec = {
+        mesh: mesh, x: x, z: z, base: 0.3, phase: x + z, alive: true, radius: 1.7,
+        creator: !!fromCreator, kind: 'mat-' + res,
+        prompt() { return 'E agarrar ' + info.label + ' (a mano)'; },
+        use() {
+          this.alive = false;
+          try { scene.remove(this.mesh); } catch (e) {}
+          Inventory.addResource(res, info.amount);
+          if (Audio) Audio.pickup('ammo');
+          return { type: 'flash', text: '+' + info.amount + ' ' + RES_ES[res] + ' (a mano)' };
+        },
+      };
+      addPickup(spec);
+      return spec;
+    }
+
+    spawnMat('wood', -2, 1, false);
+    spawnMat('wood', 2, 0.5, false);
+    spawnMat('wood', 0.5, 4, false);
+    spawnMat('stone', -3, 4, false);
+    spawnMat('stone', 3, 5, false);
+    spawnMat('metal', 1, 6.5, false);
+
     const yardLight = new THREE.PointLight(0xfff1d6, 6, 70, 1);
     yardLight.position.copy(frame.localToWorld(0, 12, 4));
     scene.add(yardLight);
-    const gateLight = new THREE.PointLight(0xffbb77, 3, 22, 1);
-    gateLight.position.copy(frame.localToWorld(-6, 17, 2.6));
+    const gateLight = new THREE.PointLight(0xffbb77, 4, 30, 1);
+    gateLight.position.copy(outFrame.localToWorld(0, 1, 2.6));
     scene.add(gateLight);
+
+    // Faro de la meta: atraviesa la niebla para guiar la travesía.
+    // Desde el spawn lo tapa el planeta (es la antípoda); aparece al acercarse.
+    const beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.35, 0.55, 60, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffb300, transparent: true, opacity: 0.5, fog: false, depthWrite: false })
+    );
+    beacon.raycast = function () {};
+    Utils.placeOnFrame(beacon, outFrame, 0, 2, 30);
+    scene.add(beacon);
 
     // Sin losa rectangular: el piso es la esfera misma. La losa vieja
     // (22x30) flotaba ~0.2 en los bordes porque la esfera se curva.
 
-    // --- Pickups del Creador: herramientas, arma, comida, toxina, balas, llave, botiquín ---
-    const CREATOR_PICKUP_KINDS = ['axe', 'pickaxe', 'hammer', 'pistol', 'food', 'toxin', 'ammo', 'key', 'medkit'];
+    // --- Pickups del Creador: herramientas, arma, comida, toxina, balas, llave, botiquín, material ---
+    const CREATOR_PICKUP_KINDS = ['axe', 'pickaxe', 'hammer', 'pistol', 'food', 'toxin', 'ammo', 'key', 'medkit', 'mat-wood', 'mat-stone', 'mat-metal'];
     const CREATOR_PICKUP_NAMES = {
       axe: 'hacha', pickaxe: 'pico', hammer: 'martillo', pistol: 'pistola',
       food: 'comida', toxin: 'toxina', ammo: 'balas', key: 'llave', medkit: 'botiquín',
+      'mat-wood': 'rama', 'mat-stone': 'piedra', 'mat-metal': 'chatarra',
     };
 
     function placeCreatorPickup(kind, ix, iz) {
@@ -605,23 +744,31 @@
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
       }
-      // Igual que los bloques: no poner dentro de puerta, bloques, mesas o nodos.
-      if (buildRef && buildRef.occupies && buildRef.occupies(ix, iz, 0)) {
-        return { ok: false, text: 'Ese lugar está ocupado' };
-      }
-      try {
-        const probe = frame.localToWorld(x, z, 0.5);
-        if (Colliders && Colliders.blocked(probe, 0.3, { feet: 0, top: 1.0 })) {
+      // Misma vara que los bloques: celda libre y sin solape con puerta,
+      // bloques, mesas o nodos (usa el validador de build cuando está).
+      if (buildRef && buildRef.propSpotFree) {
+        const why = buildRef.propSpotFree(ix, iz);
+        if (why) return { ok: false, text: why };
+      } else {
+        if (buildRef && buildRef.occupies && buildRef.occupies(ix, iz, 0)) {
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
-      } catch (e) {}
+        try {
+          const probe = frame.localToWorld(x, z, 0.5);
+          if (Colliders && Colliders.blocked(probe, 0.3, { feet: 0, top: 1.0 })) {
+            return { ok: false, text: 'Ese lugar está ocupado' };
+          }
+        } catch (e) {}
+      }
       let spec = null;
       if (TOOL_LABEL[kind]) spec = toolPickup(kind, x, z, false, true);
-      else if (kind === 'food') spec = pocketPickup('food', x, z, 'E agarrar comida', 'No entra más comida', 'Comida en la mochila. Q para usarla.', true);
-      else if (kind === 'toxin') spec = pocketPickup('toxin', x, z, 'E agarrar toxina', 'No entra más toxina', 'Toxina guardada. No la uses.', true);
+      else if (kind === 'food' || kind === 'toxin') spec = spawnEdible(kind, x, z, true);
       else if (kind === 'ammo') spec = spawnAmmo(x, z, 12, true);
       else if (kind === 'key') spec = spawnKey(x, z, true);
       else if (kind === 'medkit') spec = spawnMedkit(x, z, true);
+      else if (kind === 'mat-wood') spec = spawnMat('wood', x, z, true);
+      else if (kind === 'mat-stone') spec = spawnMat('stone', x, z, true);
+      else if (kind === 'mat-metal') spec = spawnMat('metal', x, z, true);
       if (!spec) return { ok: false, text: 'No se pudo poner' };
       return { ok: true, text: 'Puesto: ' + (CREATOR_PICKUP_NAMES[kind] || kind), pickup: spec };
     }
@@ -629,6 +776,7 @@
     function removeCreatorPickup(spec) {
       if (!spec) return false;
       spec.alive = false;
+      spec.respawn = 0;
       try { scene.remove(spec.mesh); } catch (e) {}
       const at = interactables.indexOf(spec);
       if (at >= 0) interactables.splice(at, 1);
@@ -693,11 +841,15 @@
     }
 
     function nearest(playerWorldPos) {
-      const local = frame.worldToLocalXZ(playerWorldPos);
       let best = null;
       let bestD = Infinity;
+      const range = Config.FRAME_RANGE || 120;
       interactables.forEach((item) => {
-        if (item.alive === false) return;
+        if (item.alive === false || item.noInteract) return;
+        const F = item.frame || frame;
+        // Sin esto la antípoda atiende la E en el spawn (puerta fantasma).
+        if (F.anchorPosition && F.anchorPosition.distanceTo(playerWorldPos) > range) return;
+        const local = F.worldToLocalXZ(playerWorldPos);
         const dist = Math.hypot(local.x - item.x, local.z - item.z);
         if (dist < item.radius && dist < bestD) {
           best = item;
@@ -718,9 +870,13 @@
     }
 
     function canCraft(recipe) {
-      if (recipe.tool && Inventory.hasTool(recipe.tool)) return { ok: false, reason: 'ya la tenés' };
+      // La antorcha se puede recraftear para más stock (no es única).
+      if (recipe.tool && !recipe.torch && Inventory.hasTool(recipe.tool)) return { ok: false, reason: 'ya la tenés' };
       if (recipe.need && !Inventory.hasTool(recipe.need)) {
         return { ok: false, reason: 'necesitás ' + Inventory.toolName(recipe.need).toLowerCase() };
+      }
+      if (recipe.torch && Inventory.stackCount('torch') >= Inventory.stackMax('torch')) {
+        return { ok: false, reason: 'no entran más antorchas' };
       }
       if (recipe.repair && (!openBench || openBench.hp >= openBench.maxHp)) {
         return { ok: false, reason: 'ya está entera' };
@@ -730,43 +886,107 @@
       return { ok: true, reason: '' };
     }
 
-    function refund(cost) {
-      Object.keys(cost).forEach((key) => Inventory.addResource(key, cost[key]));
-    }
-
-    function tryPlaceBench() {
-      if (!buildRef) return { ok: false, text: 'No se puede poner la mesa' };
-      const cell = buildRef.aimCell(playerPos);
-      if (!cell || cell.level !== 0) return { ok: false, text: 'La mesa va en el piso' };
-      if (buildRef.occupies(cell.ix, cell.iz, 0)) return { ok: false, text: 'Ese lugar está ocupado' };
+    // Valida el hueco sin gastar: lo usan el crafteo directo, el fantasma
+    // y la colocación manual. Devuelve '' si se puede, o el motivo.
+    function benchSpotError(cell, playerPos) {
+      if (!cell || cell.level !== 0) return 'La mesa va en el piso';
+      if (buildRef.occupies(cell.ix, cell.iz, 0)) return 'Ese lugar está ocupado';
       if (playerPos) {
-        const loc = frame.worldToLocal(playerPos);
-        if (Math.abs(loc.x - cell.ix) < 1 && Math.abs(loc.z - cell.iz) < 0.8) {
-          return { ok: false, text: 'Estás en el medio' };
+        // En la tesela de la celda: exacto en todo el planeta.
+        let px = null;
+        let pz = null;
+        if (buildRef.tileFor) {
+          const t = buildRef.tileFor(cell.ix, cell.iz);
+          const loc = t.frame.worldToLocal(playerPos);
+          px = loc.x + t.cx;
+          pz = loc.z + t.cz;
+        } else {
+          const loc = frame.worldToLocal(playerPos);
+          px = loc.x;
+          pz = loc.z;
+        }
+        if (Math.abs(px - cell.ix) < 1 && Math.abs(pz - cell.iz) < 0.8) {
+          return 'Estás en el medio';
         }
       }
       const x = cell.ix;
       const z = cell.iz;
-      const list = Colliders.all();
-      for (let i = 0; i < list.length; i++) {
-        const c = list[i];
-        if (!c.active || c.frame !== frame) continue;
-        if (x + 0.75 <= c.minX || x - 0.75 >= c.maxX || z + 0.45 <= c.minZ || z - 0.45 >= c.maxZ) continue;
-        const top = c.maxH == null ? 100 : c.maxH;
-        const bottom = c.minH == null ? -1 : c.minH;
-        if (top <= 0 || bottom >= 0.95) continue;
-        return { ok: false, text: 'Ese lugar está ocupado' };
+      // Misma vara exacta que los bloques, en cualquier marco.
+      if (buildRef.overlaps && buildRef.overlaps(x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95)) {
+        return 'Ese lugar está ocupado';
       }
-      const bench = makeBench(x, z);
+      const gap = benchGapOk(x, z);
+      if (gap) return gap;
+      const sx = Config.SPAWN_X || 0;
+      const sz = Config.SPAWN_Z || -2;
+      if (Math.hypot(x - sx, z - sz) < (Config.SPAWN_SAFE_R || 8)) {
+        return 'Zona de spawn: acá no se construye';
+      }
+      return '';
+    }
+
+    // Mesa en mano: se craftea sin gastar, se muestra el fantasma y el
+    // jugador decide dónde ponerla (clic) o la guarda (Esc). El gasto es
+    // recién al posicionarla.
+    let carryBench = null;
+    let benchGhost = null;
+
+    function renderBenchGhost() {
+      if (benchGhost) return;
+      benchGhost = new THREE.Mesh(
+        new THREE.BoxGeometry(1.5, 1.0, 0.9),
+        new THREE.MeshBasicMaterial({ color: 0x33ff66, transparent: true, opacity: 0.35, depthWrite: false })
+      );
+      benchGhost.raycast = function () {};
+      benchGhost.visible = false;
+      scene.add(benchGhost);
+    }
+
+    function startBenchCarry(cost) {
+      renderBenchGhost();
+      carryBench = { cost: Object.assign({}, cost) };
+      return true;
+    }
+
+    function isCarryingBench() {
+      return !!carryBench;
+    }
+
+    function hideCarryGhost() {
+      if (benchGhost) benchGhost.visible = false;
+    }
+
+    function cancelBenchCarry() {
+      carryBench = null;
+      hideCarryGhost();
+    }
+
+    function placeCarriedBench(playerPos) {
+      if (!carryBench) return null;
+      if (!buildRef) {
+        cancelBenchCarry();
+        return { ok: false, text: 'No se puede poner la mesa' };
+      }
+      const cell = buildRef.aimCell(playerPos);
+      const err = benchSpotError(cell, playerPos);
+      if (err) return { ok: false, text: err };
+      if (!Inventory.trySpend(carryBench.cost)) {
+        cancelBenchCarry();
+        return { ok: false, text: 'Faltan materiales' };
+      }
+      const bench = makeBench(cell.ix, cell.iz);
+      bench.creator = false;
       paintBench(bench);
-      return { ok: true, text: 'Mesa puesta' };
+      cancelBenchCarry();
+      if (Audio) Audio.pickup('ammo');
+      return { ok: true, text: 'Mesa puesta: defendela' };
     }
 
     function recipeRow(recipe, index) {
       const gate = canCraft(recipe);
       return {
         index,
-        label: recipe.name + ' (' + costText(recipe.cost) + ')',
+        label: (gate.ok ? '✅ ' : '🔒 ') + recipe.name + ' (' + costText(recipe.cost) + ')',
         enabled: gate.ok,
         reason: gate.reason,
       };
@@ -819,6 +1039,10 @@
       placeBenchAt: placeBenchAt,
       removeBench: removeBench,
       tryDeleteBench: tryDeleteBench,
+      isCarryingBench: isCarryingBench,
+      placeCarriedBench: placeCarriedBench,
+      cancelBenchCarry: cancelBenchCarry,
+      hideCarryGhost: hideCarryGhost,
       clearCreatorBenches: clearCreatorBenches,
       snapshotBenches: snapshotBenches,
       restoreBenches: restoreBenches,
@@ -827,10 +1051,32 @@
       clearCreatorPickups: clearCreatorPickups,
       snapshotCreatorPickups: snapshotCreatorPickups,
       restoreCreatorPickups: restoreCreatorPickups,
+      consumeEdibleAt: eatEdibleAt,
+      drainNotices() {
+        if (!notices.length) return [];
+        const out = notices.slice();
+        notices.length = 0;
+        return out;
+      },
       territoryStatus: territoryStatus,
       isInTerritory: isInTerritory,
       updateTerritoryRing: updateTerritoryRing,
       territoryRadius() { return TERRITORY_RADIUS; },
+      // Avanzada de las antípodas para el test E2E y el HUD.
+      outpostStatus() {
+        const doorPos = outFrame.localToWorld(door.x, door.z, door.h / 2);
+        const spawnPos = frame.localToWorld(Config.SPAWN_X || 0, Config.SPAWN_Z || -2, 0);
+        const keyPos = (outpostKey && outpostKey.alive)
+          ? outFrame.localToWorld(outpostKey.x, outpostKey.z, 0.7)
+          : null;
+        return {
+          door: doorPos,
+          spawn: spawnPos,
+          key: keyPos,
+          antipodal: doorPos.clone().normalize().dot(spawnPos.clone().normalize()),
+          keyAlive: !!(outpostKey && outpostKey.alive),
+        };
+      },
       hurtBench(bench, amount) {
         if (!bench || bench.hp <= 0) return;
         bench.hp = Math.max(0, bench.hp - amount);
@@ -843,12 +1089,22 @@
       },
       benchHeading() {
         if (!openBench) return 'Mesa de trabajo';
-        return 'Mesa ' + Math.max(0, Math.round(openBench.hp)) + ' / ' + openBench.maxHp;
+        let head = 'Mesa ' + Math.max(0, Math.round(openBench.hp)) + ' / ' + openBench.maxHp;
+        try {
+          head += ' · 🔥' + Inventory.stackCount('torch') + '/' + Inventory.stackMax('torch');
+        } catch (e) {}
+        return head;
+      },
+
+      // Crafteo básico de la mochila (sin mesa): martillo, hacha, pico,
+      // antorcha y banco. Juntás a mano, crafteás, ponés el banco y reclamás.
+      // Índices reales de RECIPES para que craft() los entienda.
+      basicRecipes() {
+        return [0, 1, 2, 3, 5].map((ri) => recipeRow(RECIPES[ri], ri));
       },
 
       recipes() {
-        const rows = RECIPES.map(recipeRow);
-        // Vaciar la zona sin costo: borra bloques, escaleras y cosas del
+        const rows = RECIPES.map(recipeRow);        // Vaciar la zona sin costo: borra bloques, escaleras y cosas del
         // creador alrededor del banco. Las mesas quedan (son el reclamo).
         let built = 0;
         try {
@@ -899,16 +1155,14 @@
           return { message: reason.charAt(0).toUpperCase() + reason.slice(1) };
         }
         if (recipe.heal && PlayerHealth.hp >= PlayerHealth.maxHp) return { message: 'La vida ya está llena' };
-        if (!Inventory.trySpend(recipe.cost)) return { message: 'Faltan materiales' };
         if (recipe.placeBench) {
-          const placed = tryPlaceBench();
-          if (!placed.ok) {
-            refund(recipe.cost);
-            return { message: placed.text };
-          }
+          // Sin gasto todavía: la mesa queda en mano con fantasma y el
+          // jugador elige dónde ponerla (clic) o la guarda (Esc).
+          startBenchCarry(recipe.cost);
           if (Audio) Audio.pickup('ammo');
-          return { message: placed.text };
+          return { message: 'Mesa en mano: cerrá y hacé clic donde ponerla', carrying: true };
         }
+        if (!Inventory.trySpend(recipe.cost)) return { message: 'Faltan materiales' };
         if (recipe.repair) {
           openBench.hp = Math.min(openBench.maxHp, openBench.hp + 100);
           paintBench(openBench);
@@ -916,6 +1170,7 @@
           return { message: 'Mesa reparada (+100)' };
         }
         if (recipe.tool) Inventory.giveTool(recipe.tool);
+        if (recipe.torch) Inventory.addStack('torch', recipe.torch);
         if (recipe.heal) PlayerHealth.heal(recipe.heal);
         if (recipe.ammo && weaponRef) weaponRef.addReserve(recipe.ammo);
         if (Audio) Audio.pickup(recipe.heal ? 'health' : 'ammo');
@@ -985,30 +1240,11 @@
           const mat = buildRef ? buildRef.materialName() : 'bloque';
           return 'Clic pone ' + mat + ' · derecho borra · ' + materialKey + ' material · ' + stairsKey + ' escalera';
         }
-        return interact + ' interactúa · ' + torch + ' antorcha · ' + pack + ' mochila · 1-5 herramienta · ' + reload + ' recarga';
+        return interact + ' interactúa · ' + torch + ' antorcha (en mano) · ' + pack + ' mochila · 1-6 herramienta · ' + reload + ' recarga';
       },
 
       drop(kind, worldPos, dir) {
         const spot = spotAhead(worldPos, dir);
-        if (kind === 'food' || kind === 'toxin') {
-          if (!Inventory.takeStack(kind, 1)) {
-            return { ok: false, text: kind === 'food' ? 'No tenés comida' : 'No tenés toxina' };
-          }
-          const food = kind === 'food';
-          pocketPickup(
-            kind, spot.x, spot.z,
-            food ? 'E agarrar comida' : 'E agarrar toxina',
-            food ? 'No entra más comida' : 'No entra más toxina',
-            food ? 'Comida en la mochila. Q para usarla.' : 'Toxina guardada. No la uses.'
-          );
-          const spec = pickups[pickups.length - 1];
-          if (!food) spec.hazard = true;
-          return {
-            ok: true,
-            text: food ? 'Soltaste comida' : 'Soltaste toxina',
-            x: spot.x, z: spot.z, pickup: spec,
-          };
-        }
         if (kind === 'key') {
           if (!Inventory.takeKey()) return { ok: false, text: 'No tenés la llave' };
           spawnKey(spot.x, spot.z);
@@ -1042,30 +1278,70 @@
 
       update(dt, t, worldPos) {
         playerPos = worldPos || playerPos;
-        // El anillo sigue a la mesa viva (reclamo de zona).
+        // Fantasma de la mesa en mano: verde si entra, rojo si no.
+        // Va por tesela como los bloques: exacto en todo el planeta.
+        if (carryBench && benchGhost && aimCamera && playerPos) {
+          const cell = buildRef ? buildRef.aimCell(playerPos) : null;
+          if (!cell) {
+            benchGhost.visible = false;
+          } else {
+            benchGhost.visible = true;
+            benchGhost.material.color.setHex(benchSpotError(cell, playerPos) ? 0xff6655 : 0x33ff66);
+            if (buildRef.tileFor) {
+              const t = buildRef.tileFor(cell.ix, cell.iz);
+              Utils.placeOnSphere(benchGhost, t.frame, cell.ix - t.cx, cell.iz - t.cz, 0.5);
+            } else {
+              Utils.placeOnSphere(benchGhost, frame, cell.ix, cell.iz, 0.5);
+            }
+          }
+        } else if (benchGhost) {
+          benchGhost.visible = false;
+        }
+        // Los anillos siguen a sus mesas (reclamo de zona).
         try {
           const alive = aliveBenches();
           const sig = alive.map((bench) => bench.x + ',' + bench.z).join(';') || 'none';
           if (sig !== territorySig) updateTerritoryRing();
-          if (territoryRing && territoryRing.visible) {
-            territoryRing.material.opacity = 0.38 + Math.sin(t * 2.2) * 0.12;
-          }
+          if (ringMatShared) ringMatShared.opacity = 0.38 + Math.sin(t * 2.2) * 0.12;
         } catch (e) {}
         if (playerPos) {
           const local = frame.worldToLocal(playerPos);
           pickups.forEach((item) => {
-            if (!item.alive || !item.hazard) return;
-            if (Math.hypot(local.x - item.x, local.z - item.z) < 0.9) {
+            if (!item.alive || !item.edible) return;
+            if (Math.hypot(local.x - item.x, local.z - item.z) >= 0.9) return;
+            if (item.edible === 'food') {
+              // Llena no se gasta: queda para cuando la necesites.
+              if (PlayerHealth.hp >= PlayerHealth.maxHp) return;
               item.alive = false;
-              scene.remove(item.mesh);
+              try { scene.remove(item.mesh); } catch (e) {}
+              item.respawn = EDIBLE_RESPAWN;
+              PlayerHealth.heal(30);
+              if (Audio) Audio.pickup('health');
+              notices.push('Comida +30 (auto)');
+            } else {
+              item.alive = false;
+              try { scene.remove(item.mesh); } catch (e) {}
+              item.respawn = EDIBLE_RESPAWN;
               PlayerHealth.damage(30);
+              notices.push('¡Toxina! −30 (auto)');
             }
           });
         }
         pickups.forEach((item) => {
-          if (!item.alive) return;
+          if (!item.alive) {
+            // Solo los comestibles vuelven solos; lo demás queda consumido.
+            if (item.edible && item.respawn > 0) {
+              item.respawn -= dt;
+              if (item.respawn <= 0) {
+                item.alive = true;
+                item.respawn = 0;
+                scene.add(item.mesh);
+              }
+            }
+            return;
+          }
           const height = item.base + Math.sin(t * 2 + item.phase) * 0.08;
-          Utils.placeOnFrame(item.mesh, frame, item.x, item.z, height);
+          Utils.placeOnSphere(item.mesh, item.frame || frame, item.x, item.z, height);
           item.mesh.rotateY(t * 1.3 + item.phase);
         });
 
@@ -1080,7 +1356,7 @@
             doorCol.active = true;
           }
         }
-        Utils.placeOnFrame(doorMesh, frame, door.x, door.z, door.h / 2 + door.lift);
+        Utils.placeOnSphere(doorMesh, outFrame, door.x, door.z, door.h / 2 + door.lift);
 
         nodes.forEach((node) => {
           if (node.alive) {

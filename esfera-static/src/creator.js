@@ -102,29 +102,13 @@
       saveSoon();
     }
 
-    function inTerritoryOrBench(ix, iz, kind) {
-      // La mesa reclama la zona: siempre se puede poner una mesa nueva.
-      if (kind === 'bench') return { ok: true };
-      try {
-        if (courtyard && courtyard.isInTerritory) {
-          if (courtyard.isInTerritory(ix, iz)) return { ok: true };
-          const st = courtyard.territoryStatus ? courtyard.territoryStatus() : null;
-          if (st && !st.active) {
-            return { ok: false, text: 'Sin mesa: poné un workbench para reclamar la zona' };
-          }
-          return { ok: false, text: 'Fuera de tu zona: construí cerca de tu mesa' };
-        }
-      } catch (e) {}
-      return { ok: true };
-    }
-
     function creatorPlace(playerPos) {
       if (!on) return null;
       if (placeMode.kind === 'erase') return creatorErase(playerPos);
       const cell = build.aimCell(playerPos);
       if (!cell) return { ok: false, text: 'No hay donde poner' };
-      const terr = inTerritoryOrBench(cell.ix, cell.iz, placeMode.kind);
-      if (!terr.ok) return terr;
+      // Dios en todo el planeta: sin zona. El solape lo valida cada
+      // sistema (build, mesa, cosas) igual que en modo juego.
       let res = null;
       if (placeMode.kind === 'block') {
         res = build.placeCell(cell.ix, cell.iz, cell.level, placeMode.id, playerPos);
@@ -139,7 +123,6 @@
         if (cell.level !== 0) return { ok: false, text: 'Eso va en el piso' };
         res = courtyard.placeCreatorPickup(placeMode.id, cell.ix, cell.iz);
       } else if (placeMode.kind === 'enemy') {
-        if (Math.hypot(cell.ix, cell.iz) > 16) return { ok: false, text: 'Fuera del patio' };
         if (enemies.canSpawnAt && !enemies.canSpawnAt(cell.ix, cell.iz)) {
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
@@ -311,6 +294,9 @@
           pickButton('item', 'toxin', '☠', 'Toxina'),
           pickButton('item', 'medkit', '➕', 'Botiquín'),
           pickButton('item', 'key', '🔑', 'Llave'),
+          pickButton('item', 'mat-wood', '🪵', 'Rama'),
+          pickButton('item', 'mat-stone', '🪨', 'Piedra suelta'),
+          pickButton('item', 'mat-metal', '🔩', 'Chatarra'),
         ]],
         ['Bichos', [
           pickButton('enemy', 'robot', '👾', 'Robot'),
@@ -464,13 +450,15 @@
         const frame = courtyard.frame;
         const h = 0.6;
         marker.position.copy(frame.localToWorld(cell.ix, cell.iz, h));
+        // Verde si entra, rojo si está ocupado (misma vara que al poner).
         let ok = true;
-        if (placeMode.kind === 'erase') {
-          ok = true;
-        } else {
-          const terr = inTerritoryOrBench(cell.ix, cell.iz, placeMode.kind);
-          ok = terr.ok;
-        }
+        try {
+          if (placeMode.kind === 'item' || placeMode.kind === 'bench') {
+            if (build.propSpotFree) ok = !build.propSpotFree(cell.ix, cell.iz);
+          } else if (placeMode.kind === 'enemy') {
+            if (enemies.canSpawnAt) ok = enemies.canSpawnAt(cell.ix, cell.iz);
+          }
+        } catch (e) {}
         marker.material.color.setHex(ok ? 0x33ff66 : 0xff4444);
         marker.rotation.y += (dt || 0.016) * 2;
         marker.visible = true;

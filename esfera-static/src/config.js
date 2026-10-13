@@ -14,7 +14,20 @@
     RUN_SPEED: 22,
     JUMP_IMPULSE: 10,
     GRAVITY: 20,
-    // Movimiento: la aceleración manda al arrancar (el test de feel exige
+    // Localidad de marcos: un collider o interactuable solo vale si su
+    // ancla está a menos de esto del punto consultado. Sin esto, la
+    // antípoda del spawn se proyecta sobre la puerta y atiende la E
+    // (puerta fantasma) y frena donde no hay nada.
+    FRAME_RANGE: 120,
+    // Zona de spawn: los nuevos arrancan acá. Radio grande sin
+    // construcción (estructuras) y campamentos enemigos bien afuera.
+    SPAWN_X: 0,
+    SPAWN_Z: -2,
+    SPAWN_SAFE_R: 8,
+    // Campamentos fuera de vista (14) y de tiro (15) del spawn.
+    CAMP_MIN_SPAWN_DIST: 25,
+    CAMP_MAX_SPAWN_DIST: 40,
+    // La aceleración manda al arrancar (el test de feel exige
     // que el aire sea <60% del piso) y la fricción al soltar. Subir solo la
     // fricción quita lo resbaloso sin romper el test.
     MOUSE_SENSITIVITY: 0.002,

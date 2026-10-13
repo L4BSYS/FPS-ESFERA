@@ -7,12 +7,15 @@
     { id: 'pickaxe', name: 'Pico', key: '3' },
     { id: 'hammer', name: 'Martillo', key: '4' },
     { id: 'pistol', name: 'Pistola', key: '5' },
+    { id: 'torch', name: 'Antorcha', key: '6' },
   ];
 
-  const STACK_MAX = { food: 5, toxin: 3 };
+  // Solo la antorcha vive en pilas. La comida y la toxina se consumen
+  // al tocarlas (vos y los robots): no son inventario.
+  const STACK_MAX = { torch: 6 };
 
   const resources = { wood: 0, stone: 0, metal: 0 };
-  const stacks = { food: 0, toxin: 0 };
+  const stacks = { torch: 0 };
   const keys = {};
   const owned = { hands: true };
   let active = 'hands';
@@ -21,7 +24,7 @@
   function snapshot() {
     return {
       resources: { wood: resources.wood, stone: resources.stone, metal: resources.metal },
-      stacks: { food: stacks.food, toxin: stacks.toxin },
+      stacks: { torch: stacks.torch },
       active,
       hasKey: !!keys.golden_key,
       owned: Object.assign({}, owned),
@@ -37,8 +40,7 @@
     resources.wood = 0;
     resources.stone = 0;
     resources.metal = 0;
-    stacks.food = 0;
-    stacks.toxin = 0;
+    stacks.torch = 0;
     Object.keys(keys).forEach((id) => { delete keys[id]; });
     Object.keys(owned).forEach((id) => { delete owned[id]; });
     owned.hands = true;
@@ -124,23 +126,6 @@
       stacks[id] += added;
       emit();
       return added;
-    },
-
-    useFood() {
-      const health = window.Game.PlayerHealth;
-      if (stacks.food <= 0) return { ok: false, text: 'No tenés comida' };
-      if (!health || health.hp >= health.maxHp) return { ok: false, text: 'La vida ya está llena' };
-      stacks.food -= 1;
-      health.heal(30);
-      emit();
-      return { ok: true, text: 'Comida +30' };
-    },
-
-    useToxin() {
-      if (stacks.toxin <= 0) return { ok: false, text: 'No tenés toxina' };
-      stacks.toxin -= 1;
-      emit();
-      return { ok: true, text: 'La toxina no te hace nada' };
     },
 
     takeStack(id, amount) {

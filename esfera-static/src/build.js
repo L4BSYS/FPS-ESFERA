@@ -1,11 +1,18 @@
 // Construcción en un solo chart. La grilla es x, z y un nivel hacia afuera
 // de la esfera. El apoyo mira ese nivel, no el Y del mundo.
+//
+// Los (ix,iz) son IDENTIDAD gruesa y estable (grilla, apoyo, guardado).
+// La GEOMETRÍA (malla, caja, fantasma) va por teselas de 16: cada celda se
+// dibuja en el marco local de su tesela, exacto en todo el planeta. Con el
+// marco único del polo el error es cuadrático con la distancia (mm cerca,
+// metros lejos) y el fantasma se separaba de la mira.
+// Teselas de 16: como mucho 11 m del ancla => error milimétrico.
 (function () {
   window.Game = window.Game || {};
   const Config = window.Game.Config;
 
   const REACH = 5;
-  const LIMIT = 16;
+  const TILE = 16;
   const COSTS = { wood: 2, stone: 3, metal: 5 };
   const HP = { wood: 3, stone: 6, metal: 10 };
   const RESIST = { wood: 1, stone: 2, metal: 3 };
@@ -51,25 +58,100 @@
     );
     ghost.raycast = function () {};
     ghost.visible = false;
+    const ghostEdges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.002, 1.002, 1.002)),
+      new THREE.LineBasicMaterial({ color: 0x00ff00 })
+    );
+    ghostEdges.raycast = function () {};
+    ghost.add(ghostEdges);
     scene.add(ghost);
+
+    // Retículo del centro de vista: marca el punto EXACTO del rayo
+    // (el fantasma, en cambio, ocupa la celda entera que se va a poner).
+    const anchor = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.09),
+      new THREE.MeshBasicMaterial({ color: 0xffd76a, transparent: true, opacity: 0.95, depthTest: false })
+    );
+    anchor.raycast = function () {};
+    anchor.visible = false;
+    anchor.frustumCulled = false;
+    anchor.renderOrder = 999;
+    scene.add(anchor);
 
     const raycaster = new THREE.Raycaster();
     raycaster.far = REACH;
 
-    function inChart(ix, iz) {
-      return ix * ix + iz * iz <= LIMIT * LIMIT;
+    // Tesela de una celda: marco local anclado al centro de su tesela de
+    // 16x16. Determinista para la misma celda (el ancla puede derivar con
+    // la distancia, pero es estable y lo local queda a milímetros: como
+    // mucho 11 m del ancla). Toda la geometría de bloques va por tesela.
+    const tileFrames = new Map();
+    function tileForPX(ix, iz) {
+      const qx = Math.floor(ix / TILE);
+      const qz = Math.floor(iz / TILE);
+      const key = qx + ':' + qz;
+      let t = tileFrames.get(key);
+      if (!t) {
+        const cx = qx * TILE + TILE / 2;
+        const cz = qz * TILE + TILE / 2;
+        const anchor = frame.localToWorld(cx, cz, 0);
+        t = { qx: qx, qz: qz, cx: cx, cz: cz, frame: window.Game.LocalFrame(anchor) };
+        tileFrames.set(key, t);
+      }
+      return t;
     }
 
+    // Números locales (enteros) de una celda dentro de su tesela.
+    function tileLocal(t, ix, iz) {
+      return { lx: ix - t.cx, lz: iz - t.cz };
+    }
+
+    // ¿El candidato pisa alguna caja? Cada caja se testea en SU marco
+    // (las esquinas del candidato viajan al mundo y de ahí al marco de la
+    // caja): vale en todo el planeta, sin importar dónde viva cada uno.
+    // Las alturas son radiales y por eso exactas en cualquier marco.
     function overlaps(minX, maxX, minZ, maxZ, minH, maxH) {
       const list = Colliders.all();
+      const cx = (minX + maxX) / 2;
+      const cz = (minZ + maxZ) / 2;
+      const t = tileForPX(Math.round(cx), Math.round(cz));
+      const clx = cx - t.cx;
+      const clz = cz - t.cz;
+      const center = t.frame.localToWorld(clx, clz, (minH + maxH) / 2);
       for (let i = 0; i < list.length; i++) {
         const c = list[i];
-        if (!c.active || c.frame !== frame) continue;
-        if (maxX <= c.minX + 0.02 || minX >= c.maxX - 0.02 ||
-            maxZ <= c.minZ + 0.02 || minZ >= c.maxZ - 0.02) continue;
+        if (!c.active) continue;
+        const F = c.frame || frame;
+        if (F.anchorPosition && F.anchorPosition.distanceTo(center) > 6) continue;
+        const l = F.worldToLocal(center);
+        const pad = 2;
+        if (l.x < c.minX - pad || l.x > c.maxX + pad ||
+            l.z < c.minZ - pad || l.z > c.maxZ + pad) continue;
+        let mnx = Infinity, mxx = -Infinity;
+        let mnz = Infinity, mxz = -Infinity;
+        let mnh = Infinity, mxh = -Infinity;
+        const xs = [minX, maxX];
+        const zs = [minZ, maxZ];
+        const hs = [minH, maxH];
+        for (let a = 0; a < 2; a++) {
+          for (let b = 0; b < 2; b++) {
+            for (let d = 0; d < 2; d++) {
+              const w = t.frame.localToWorld(xs[a] - t.cx, zs[b] - t.cz, hs[d]);
+              const p = F.worldToLocal(w);
+              if (p.x < mnx) mnx = p.x;
+              if (p.x > mxx) mxx = p.x;
+              if (p.z < mnz) mnz = p.z;
+              if (p.z > mxz) mxz = p.z;
+              if (p.h < mnh) mnh = p.h;
+              if (p.h > mxh) mxh = p.h;
+            }
+          }
+        }
+        if (mxx <= c.minX + 0.02 || mnx >= c.maxX - 0.02 ||
+            mxz <= c.minZ + 0.02 || mnz >= c.maxZ - 0.02) continue;
         const cMin = c.minH == null ? -100 : c.minH;
         const cMax = c.maxH == null ? 1000 : c.maxH;
-        if (maxH <= cMin + 0.02 || minH >= cMax - 0.02) continue;
+        if (mxh <= cMin + 0.02 || mnh >= cMax - 0.02) continue;
         return true;
       }
       return false;
@@ -77,12 +159,17 @@
 
     function hitsPlayer(minX, maxX, minZ, maxZ, minH, maxH, playerPos) {
       if (!playerPos) return false;
-      const loc = frame.worldToLocal(playerPos);
+      // En la tesela del candidato: parientes cercanos se comparan exactos
+      // en cualquier parte del planeta (el marco del polo deforma lejos).
+      const t = tileForPX(Math.round((minX + maxX) / 2), Math.round((minZ + maxZ) / 2));
+      const loc = t.frame.worldToLocal(playerPos);
+      const lx = loc.x + t.cx;
+      const lz = loc.z + t.cz;
       const feet = playerPos.length() - Config.EYE_HEIGHT - Config.PLANET_RADIUS;
       const head = feet + Config.EYE_HEIGHT;
       const radius = Config.PLAYER_RADIUS;
-      if (loc.x + radius <= minX || loc.x - radius >= maxX ||
-          loc.z + radius <= minZ || loc.z - radius >= maxZ) return false;
+      if (lx + radius <= minX || lx - radius >= maxX ||
+          lz + radius <= minZ || lz - radius >= maxZ) return false;
       if (head <= minH || feet >= maxH) return false;
       return true;
     }
@@ -95,8 +182,20 @@
       };
     }
 
-    function territoryAt(ix, iz) {
-      if (!territoryProvider) return { ok: true, active: true };
+    // Zona de spawn: ni bloques ni escaleras en el inicio, en ningún modo.
+    // Solo vale con el juego cableado (los self-tests usan builds sueltos).
+    function spawnBlockReason(ix, iz) {
+      if (!territoryProvider) return '';
+      const sx = Config.SPAWN_X || 0;
+      const sz = Config.SPAWN_Z || -2;
+      const r = Config.SPAWN_SAFE_R || 8;
+      if (Math.hypot(ix - sx, iz - sz) < r) {
+        return 'Zona de spawn: acá no se construye';
+      }
+      return '';
+    }
+
+    function territoryAt(ix, iz) {      if (!territoryProvider) return { ok: true, active: true };
       let t = null;
       try {
         t = territoryProvider();
@@ -116,18 +215,33 @@
     }
 
     function reject(ix, iz, level, playerPos) {
-      if (!inChart(ix, iz)) return 'Fuera del patio';
+      // Sin compuerta de patio: la grilla envuelve la esfera y la zona del
+      // banco manda en juego; el creador llega a todo el planeta.
       if (level < 0 || level > 6) return 'Muy alto';
       if (grid.has(cellKey(ix, iz, level))) return 'Ese lugar está ocupado';
       const box = boxOf(ix, iz, level);
       if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH)) return 'Ese lugar está ocupado';
       if (hitsPlayer(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH, playerPos)) return 'Estás en el medio';
+      const spawnWhy = spawnBlockReason(ix, iz);
+      if (spawnWhy) return spawnWhy;
+      // Modo creador = dios en todo el planeta: gratis, sin apoyo y sin
+      // zona. La zona del banco vale solo en modo juego.
+      if (creator) return '';
       const terr = territoryAt(ix, iz);
       if (!terr.ok) return terr.text;
-      // Modo creador (como el FPS): gratis y sin pedir apoyo, pero sin
-      // encimar ni atrapar al jugador.
-      if (creator) return '';
       if (level > 0 && !grid.has(cellKey(ix, iz, level - 1))) return 'No tiene apoyo';
+      return '';
+    }
+
+    // Misma vara para cosas sobre el piso que para bloques nivel 0:
+    // celda libre y sin solape, en cualquier parte del planeta.
+    // Lo usa el creador y la mesa.
+    function propSpotFree(ix, iz) {
+      if (grid.has(cellKey(ix, iz, 0))) return 'Ese lugar está ocupado';
+      const box = boxOf(ix, iz, 0);
+      if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH)) {
+        return 'Ese lugar está ocupado';
+      }
       return '';
     }
 
@@ -143,9 +257,12 @@
           metalness: look.metalness,
         })
       );
-      Utils.placeOnFrame(mesh, frame, ix, iz, level + 0.5);
+      const t = tileForPX(ix, iz);
+      const l = tileLocal(t, ix, iz);
+      Utils.placeOnSphere(mesh, t.frame, l.lx, l.lz, level + 0.5);
       scene.add(mesh);
-      const col = Colliders.add(frame, ix - 0.5, ix + 0.5, iz - 0.5, iz + 0.5, level, level + 1);
+      // Caja en la misma tesela y mismos números locales: coincide exacto.
+      const col = Colliders.add(t.frame, l.lx - 0.5, l.lx + 0.5, l.lz - 0.5, l.lz + 0.5, level, level + 1);
       col.stand = true;
       const block = {
         ix: ix, iz: iz, level: level, type: type,
@@ -217,7 +334,10 @@
       return level;
     }
 
-    function aim(playerPos) {
+    // Celda + punto exacto de anclaje. La celda es lo que se pone (rejilla
+    // de 1 m); el punto es el centro de vista sobre el rayo: en cara es el
+    // impacto + la normal, en piso es el cruce recortado al alcance.
+    function aimEx(playerPos) {
       if (!aimCamera) return null;
       const origin = aimCamera.position.clone();
       const dir = new THREE.Vector3();
@@ -230,36 +350,60 @@
         raycaster.set(origin, dir);
         raycaster.far = reach;
         const hits = raycaster.intersectObjects(meshes, false);
-        if (hits.length) {
-          const normal = hits[0].face.normal.clone().transformDirection(hits[0].object.matrixWorld);
-          const point = hits[0].point.clone().addScaledVector(normal, 0.51);
-          if (origin.distanceTo(point) <= reach + 0.4) {
-            const loc = frame.worldToLocal(point);
+        if (hits.length && hits[0].distance <= reach + 0.4) {
+          // Celda vecina por TOPOLOGÍA, no por proyección: la cara da el
+          // vecino exacto en cualquier parte del planeta (la proyección del
+          // patio se desfasa lejos del polo y erraba la celda).
+          const block = hits[0].object.userData.block;
+          const n = hits[0].face.normal;
+          if (block && n) {
+            const point = hits[0].point.clone().addScaledVector(
+              n.clone().transformDirection(hits[0].object.matrixWorld), 0.06
+            );
             return {
-              ix: Math.round(loc.x),
-              iz: Math.round(loc.z),
-              level: Math.max(0, Math.round(loc.h - 0.5)),
+              cell: {
+                ix: block.ix + Math.round(n.x),
+                iz: block.iz + Math.round(n.z),
+                level: Math.max(0, block.level + Math.round(n.y)),
+              },
+              point: point,
             };
           }
         }
       }
-      for (let t = 0.4; t <= reach; t += 0.2) {
-        const point = origin.clone().addScaledVector(dir, t);
-        const loc = frame.worldToLocal(point);
-        if (loc.h <= 0.15) {
-          return { ix: Math.round(loc.x), iz: Math.round(loc.z), level: 0 };
+      // 2. Piso: donde mira cae la pared. Se intersecta el rayo con el plano
+      // de los pies y se recorta al alcance: mirar al frente pone lejos,
+      // mirar abajo pone cerca. Mirando muy arriba no hay preview (mejor
+      // esconder el fantasma que mentir con la celda de los pies).
+      // El redondeo es en la tesela del punto (exacto); la identidad que
+      // vuelve es la gruesa del patio, estable para grilla y guardado.
+      if (playerPos) {
+        const up = playerPos.clone().normalize();
+        const denom = dir.dot(up);
+        if (denom <= 0.5) {
+          let d = reach;
+          if (denom < -1e-4) {
+            const t = Config.EYE_HEIGHT / -denom;
+            if (t < d) d = t;
+          }
+          const point = origin.clone().addScaledVector(dir, d);
+          const approx = frame.worldToLocal(point);
+          const tile = tileForPX(Math.round(approx.x), Math.round(approx.z));
+          const fine = tile.frame.worldToLocal(point);
+          const ix = Math.round(tile.cx + Math.round(fine.x));
+          const iz = Math.round(tile.cz + Math.round(fine.z));
+          return {
+            cell: { ix: ix, iz: iz, level: 0 },
+            point: point,
+          };
         }
       }
-      if (!playerPos) return null;
-      const flat = dir.clone();
-      flat.addScaledVector(frame.up, -flat.dot(frame.up));
-      if (flat.lengthSq() < 1e-6) {
-        const eye = frame.worldToLocal(playerPos);
-        return { ix: Math.round(eye.x), iz: Math.round(eye.z), level: 0 };
-      }
-      flat.normalize();
-      const loc = frame.worldToLocal(playerPos.clone().addScaledVector(flat, 2.2));
-      return { ix: Math.round(loc.x), iz: Math.round(loc.z), level: 0 };
+      return null;
+    }
+
+    function aim(playerPos) {
+      const r = aimEx(playerPos);
+      return r ? r.cell : null;
     }
 
     function spend(type, amount) {
@@ -331,15 +475,15 @@
     }
 
     function placeStairs(ix, iz, yaw, playerPos) {
-      if (!inChart(ix, iz)) return { ok: false, text: 'Fuera del patio' };
-      const terr = territoryAt(ix, iz);
-      if (!terr.ok) return { ok: false, text: terr.text };
+      const spawnWhy = spawnBlockReason(ix, iz);
+      if (spawnWhy) return { ok: false, text: spawnWhy };
+      if (!creator) {
+        const terr = territoryAt(ix, iz);
+        if (!terr.ok) return { ok: false, text: terr.text };
+      }
       const spots = [];
       for (let i = 0; i < STAIR_COUNT; i++) {
         const center = stepCenter(ix, iz, yaw, i);
-        if (center.x * center.x + center.z * center.z > LIMIT * LIMIT) {
-          return { ok: false, text: 'Fuera del patio' };
-        }
         const bounds = stepBounds(center.x, center.z, yaw);
         const minH = i * STAIR_RISE;
         const maxH = (i + 1) * STAIR_RISE;
@@ -354,20 +498,27 @@
       if (!spend('wood', STAIR_COUNT)) return { ok: false, text: 'Te falta madera (' + STAIR_COUNT + ')' };
       const flight = [];
       const alongX = Math.abs(Math.cos(yaw)) < 0.5;
+      const stepW = alongX ? 0.68 : 1;
+      const stepD = alongX ? 1 : 0.68;
       for (let i = 0; i < spots.length; i++) {
         const spot = spots[i];
         const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(alongX ? 0.68 : 1, STAIR_RISE, alongX ? 1 : 0.68),
+          new THREE.BoxGeometry(stepW, STAIR_RISE, stepD),
           new THREE.MeshStandardMaterial({
             color: 0x8B4513, emissive: 0x3a2010, emissiveIntensity: 0.45, roughness: 0.82,
           })
         );
-        Utils.placeOnFrame(mesh, frame, spot.center.x, spot.center.z, spot.minH + STAIR_RISE / 2);
+        // Malla y caja en la tesela del peldaño, con sus números locales:
+        // idénticas entre sí en todo el planeta.
+        const st = tileForPX(Math.round(spot.center.x), Math.round(spot.center.z));
+        const slx = spot.center.x - st.cx;
+        const slz = spot.center.z - st.cz;
+        Utils.placeOnSphere(mesh, st.frame, slx, slz, spot.minH + STAIR_RISE / 2);
         scene.add(mesh);
         const col = Colliders.add(
-          frame,
-          spot.bounds.minX, spot.bounds.maxX,
-          spot.bounds.minZ, spot.bounds.maxZ,
+          st.frame,
+          slx - stepW / 2, slx + stepW / 2,
+          slz - stepD / 2, slz + stepD / 2,
           spot.minH, spot.maxH
         );
         col.stand = true;
@@ -387,18 +538,29 @@
     }
 
     function update(dt, tool, playerPos) {
-      const showGhost = aimCamera && tool === 'hammer';
+      // En creador el fantasma va con cualquier herramienta en mano.
+      const showGhost = aimCamera && (tool === 'hammer' || creator);
       if (!showGhost) {
         ghost.visible = false;
+        anchor.visible = false;
       } else {
-        const cell = aim(playerPos);
+        const detail = aimEx(playerPos);
+        const cell = detail && detail.cell;
         if (!cell) {
           ghost.visible = false;
+          anchor.visible = false;
         } else {
           ghost.visible = true;
           const free = !reject(cell.ix, cell.iz, cell.level, playerPos);
-          ghost.material.color.setHex(free ? 0x88ff88 : 0xff6655);
-          Utils.placeOnFrame(ghost, frame, cell.ix, cell.iz, cell.level + 0.5);
+          const tint = free ? 0x88ff88 : 0xff6655;
+          ghost.material.color.setHex(tint);
+          ghostEdges.material.color.setHex(free ? 0x00ff00 : 0xff0000);
+          const gt = tileForPX(cell.ix, cell.iz);
+          const gl = tileLocal(gt, cell.ix, cell.iz);
+          Utils.placeOnSphere(ghost, gt.frame, gl.lx, gl.lz, cell.level + 0.5);
+          anchor.visible = true;
+          anchor.position.copy(detail.point);
+          anchor.material.color.setHex(free ? 0xffd76a : 0xff4444);
         }
       }
 
@@ -436,7 +598,9 @@
           block.col.active = true;
           grid.set(cellKey(block.ix, block.iz, land), block);
         }
-        Utils.placeOnFrame(block.mesh, frame, block.ix, block.iz, block.h + 0.5);
+        const ft = tileForPX(block.ix, block.iz);
+        const fl = tileLocal(ft, block.ix, block.iz);
+        Utils.placeOnSphere(block.mesh, ft.frame, fl.lx, fl.lz, block.h + 0.5);
       }
     }
 
@@ -451,6 +615,7 @@
       stairs.length = 0;
       stairsMeta.length = 0;
       scene.remove(ghost);
+      scene.remove(anchor);
     }
 
     function removeFlight(flight) {
@@ -559,6 +724,7 @@
       },
       isDecayActive() { return decayActive; },
       territoryCheck(ix, iz) { return territoryAt(ix, iz); },
+      propSpotFree(ix, iz) { return propSpotFree(ix, iz); },
       setMaterial(type) {
         if (ORDER.indexOf(type) >= 0) {
           material = type;
@@ -571,6 +737,8 @@
         return 'Bloque: ' + NAMES[material];
       },
       aimCell: aim,
+      aimDetail: aimEx,
+      tileFor(ix, iz) { return tileForPX(ix, iz); },
       tryPlace: tryPlace,
       tryDelete: tryDelete,
       tryDeleteStairs: tryDeleteStairs,
@@ -582,6 +750,7 @@
       removeFlight: removeFlight,
       hurtBlock: hurtBlock,
       dropUnsupported: dropUnsupported,
+      overlaps: overlaps,
       update: update,
       dispose: dispose,
       clearAll: clearAll,

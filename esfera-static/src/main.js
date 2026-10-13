@@ -248,6 +248,166 @@
     console.error(err);
   }
 
+  // Campo salvaje: la misma semilla repite el mapa en cualquier máquina,
+  // otra semilla lo cambia, y los nodos se cosechan con la herramienta justa.
+  function selfTestWilds() {
+    const s1 = new THREE.Scene();
+    const s2 = new THREE.Scene();
+    const a = window.Game.createWilds(s1, 1337);
+    const b = window.Game.createWilds(s2, 1337);
+    try {
+      if (a.nodes.length < 30) throw new Error('faltan nodos salvajes (' + a.nodes.length + ')');
+      for (let i = 0; i < a.nodes.length; i++) {
+        if (a.nodes[i].mesh.position.distanceTo(b.nodes[i].mesh.position) > 0.001) {
+          throw new Error('la semilla no repite el mapa');
+        }
+        if (a.nodes[i].type !== b.nodes[i].type) throw new Error('el tipo no repite');
+      }
+      if (!a.landmarks.length) throw new Error('sin mojones');
+      for (let i = 0; i < a.landmarks.length; i++) {
+        if (a.landmarks[i].mesh.position.distanceTo(b.landmarks[i].mesh.position) > 0.001) {
+          throw new Error('los mojones no repiten');
+        }
+      }
+      if (a.spawnPoints.length < 6) throw new Error('sin campamentos');
+      for (let i = 0; i < a.spawnPoints.length; i++) {
+        if (a.spawnPoints[i].x !== b.spawnPoints[i].x || a.spawnPoints[i].z !== b.spawnPoints[i].z) {
+          throw new Error('los campamentos no repiten');
+        }
+        // Los campamentos quedan lejos del spawn: ni ven (14) ni disparan (15).
+        const ds = Math.hypot(a.spawnPoints[i].x - Config.SPAWN_X, a.spawnPoints[i].z - Config.SPAWN_Z);
+        if (ds < Config.CAMP_MIN_SPAWN_DIST - 0.001 || ds > Config.CAMP_MAX_SPAWN_DIST + 0.001) {
+          throw new Error('campamento mal ubicado (' + ds.toFixed(1) + ')');
+        }
+      }
+      const other = window.Game.createWilds(new THREE.Scene(), 777);
+      try {
+        let same = 0;
+        for (let i = 0; i < a.nodes.length; i++) {
+          if (a.nodes[i].mesh.position.distanceTo(other.nodes[i].mesh.position) < 0.001) same += 1;
+        }
+        if (same === a.nodes.length) throw new Error('otra semilla dio el mismo mapa');
+      } finally {
+        other.dispose();
+      }
+      const wood = a.nodes.filter((node) => node.type === 'wood')[0];
+      if (!wood) throw new Error('sin madera salvaje');
+      Inventory.giveTool('axe');
+      Inventory.setTool('axe');
+      const cam = new THREE.PerspectiveCamera(75, 1, 0.5, 100);
+      const eye = wood.mesh.position.clone().normalize().multiplyScalar(Config.TARGET_DISTANCE);
+      cam.position.copy(eye);
+      cam.up.copy(eye.clone().normalize());
+      cam.lookAt(wood.mesh.position);
+      // Sin render no hay matrices: ni la cámara ni las mallas del escenario
+      // tienen matrixWorld. El rayo saldría del origen y no pega nada.
+      cam.updateMatrixWorld(true);
+      s1.updateMatrixWorld(true);
+      a.setCamera(cam);
+      const before = Inventory.count('wood');
+      const msg = a.tryHarvest();
+      if (!msg) throw new Error('no cosechó el nodo salvaje');
+      if (Inventory.count('wood') !== before + 1) throw new Error('no sumó madera salvaje');
+      if (wood.hp >= wood.maxHp) throw new Error('el nodo no se gastó');
+      if (!a.loosies.length) throw new Error('sin sueltos');
+      if (a.loosies.length !== b.loosies.length) throw new Error('los sueltos no cierran');
+      for (let i = 0; i < a.loosies.length; i++) {
+        if (a.loosies[i].basePos.distanceTo(b.loosies[i].basePos) > 0.001) {
+          throw new Error('los sueltos no repiten');
+        }
+      }
+      const loose = a.loosies[0];
+      const feet = loose.basePos.clone();
+      const eyeAt = feet.clone().add(feet.clone().normalize().multiplyScalar(Config.EYE_HEIGHT));
+      const hadRes = Inventory.count(loose.res);
+      a.update(0.016, 0, eyeAt);
+      if (loose.alive) throw new Error('el suelto no se agarró');
+      if (Inventory.count(loose.res) !== hadRes + loose.amount) {
+        throw new Error('el suelto no sumó material');
+      }
+    } finally {
+      a.dispose();
+      b.dispose();
+      Inventory.reset();
+      if (window.Game.Colliders.all().length !== 0) {
+        throw new Error('el campo de prueba dejó cajas');
+      }
+    }
+  }
+
+  try {
+    selfTestWilds();
+    document.documentElement.dataset.wilds = 'ok';
+  } catch (err) {
+    document.documentElement.dataset.wilds = err.message || String(err);
+    console.error(err);
+  }
+
+  // La mira manda: cara de bloque da la celda vecina, mirar abajo da cerca
+  // y mirar al frente da al alcance (no a los pies). Para paredes rápidas.
+  function selfTestAim() {
+    const frame = window.Game.LocalFrame(new THREE.Vector3(0, Config.PLANET_RADIUS, 0));
+    const scene = new THREE.Scene();
+    const build = window.Game.createBuild(scene, frame);
+    try {
+      Inventory.addResource('wood', 10);
+      const base = build.placeCell(2, 2, 0, 'wood', null);
+      if (!base.ok) throw new Error(base.text || 'no puso base');
+      const cam = new THREE.PerspectiveCamera(75, 1, 0.5, 100);
+      build.setCamera(cam);
+      scene.updateMatrixWorld(true);
+      function look(fromX, fromZ, fromH, atX, atZ, atH) {
+        const eye = frame.localToWorld(fromX, fromZ, fromH);
+        cam.position.copy(eye);
+        cam.up.copy(eye.clone().normalize());
+        cam.lookAt(frame.localToWorld(atX, atZ, atH));
+        cam.updateMatrixWorld(true);
+        scene.updateMatrixWorld(true);
+        return eye;
+      }
+      // Cara sur del bloque: la pared sigue al costado, a nivel 0.
+      let eye = look(2, 0.5, 1.0, 2, 2, 0.5);
+      let cell = build.aimCell(eye);
+      if (!cell || cell.ix !== 2 || cell.iz !== 1 || cell.level !== 0) {
+        throw new Error('la cara no dio (2,1,0): ' + JSON.stringify(cell));
+      }
+      // Mirando abajo: cerca, a nivel 0, a distancia de vista (1.6).
+      eye = look(5, 5, 1.6, 5, 5, 0);
+      cell = build.aimCell(eye);
+      if (!cell || cell.ix !== 5 || cell.iz !== 5 || cell.level !== 0) {
+        throw new Error('abajo no dio (5,5,0): ' + JSON.stringify(cell));
+      }
+      let detail = build.aimDetail(eye);
+      if (!detail || Math.abs(eye.distanceTo(detail.point) - 1.6) > 0.4) {
+        throw new Error('el anclaje de abajo no está a distancia de vista');
+      }
+      // Mirando al frente: al alcance (5), no a los pies (2.2).
+      eye = look(0, 0, 1.6, 10, 0, 1.6);
+      cell = build.aimCell(eye);
+      if (!cell || cell.ix !== 5 || cell.iz !== 0 || cell.level !== 0) {
+        throw new Error('al frente no dio (5,0,0): ' + JSON.stringify(cell));
+      }
+      detail = build.aimDetail(eye);
+      if (!detail || Math.abs(eye.distanceTo(detail.point) - 5) > 0.6) {
+        throw new Error('el anclaje no está al alcance en el centro de vista');
+      }
+    } finally {
+      build.dispose();
+      Inventory.reset();
+      if (window.Game.Colliders.all().length !== 0) {
+        throw new Error('la mira dejó cajas');
+      }
+    }
+  }
+
+  try {
+    selfTestAim();
+    document.documentElement.dataset.aim = 'ok';
+  } catch (err) {
+    document.documentElement.dataset.aim = err.message || String(err);
+    console.error(err);
+  }
+
   // Mochila, costos de La Grieta, bloque con apoyo, columna que cae y escalera.
   // Corre en una escena aparte y la borra: el patio de juego queda vacío.
   function selfTestPackAndBuild() {
@@ -256,13 +416,11 @@
     Inventory.reset();
     let build = null;
     try {
-      if (Inventory.addStack('food', 9) !== 5) throw new Error('la comida no entra de a 5');
-      if (Inventory.addStack('food', 1) !== 0) throw new Error('la comida pasó de 5');
-      if (Inventory.useFood().ok) throw new Error('usó comida con la vida llena');
-      if (Inventory.stackCount('food') !== 5) throw new Error('gastó comida sin usarla');
-      if (Inventory.addStack('toxin', 4) !== 3) throw new Error('la toxina no entra de a 3');
-      const sipped = Inventory.useToxin();
-      if (!sipped.ok || Inventory.stackCount('toxin') !== 2) throw new Error('la toxina no se consumió');
+      if (Inventory.addStack('torch', 9) !== 6) throw new Error('la antorcha no entra de a 6');
+      if (Inventory.addStack('torch', 1) !== 0) throw new Error('la antorcha pasó de 6');
+      if (Inventory.stackCount('torch') !== 6) throw new Error('el stock no quedó en 6');
+      if (Inventory.takeStack('torch', 2) !== 2) throw new Error('no sacó 2 antorchas');
+      if (Inventory.stackCount('torch') !== 4) throw new Error('quedaron mal las antorchas');
       Inventory.setKey(true);
       if (!Inventory.hasKey) throw new Error('el llavero no guardó la llave');
       Inventory.setKey(false);
@@ -331,17 +489,29 @@
       const stairs = build.placeStairs(0, 8, 0, null);
       if (!stairs.ok) throw new Error(stairs.text || 'no puso la escalera');
       const expectH = [0.25, 0.5, 0.75, 1];
+      // Geometría en el mundo (las cajas viven en teselas): cada peldaño a
+      // su altura radial, avanzando 0.8 por paso hacia +z.
+      let prevStep = null;
       for (let i = 0; i < 4; i++) {
         const col = stairs.flight[i].col;
         if (Math.abs(col.maxH - expectH[i]) > 0.001) throw new Error('peldaño ' + i + ' a ' + col.maxH);
-        const centerX = (col.minX + col.maxX) / 2;
-        const centerZ = (col.minZ + col.maxZ) / 2;
-        if (Math.abs(centerX) > 0.05 || Math.abs(centerZ - (8 + i * 0.8)) > 0.05) {
-          throw new Error('la escalera no sigue +z');
+        const p = stairs.flight[i].mesh.position;
+        if (Math.abs(p.length() - (Config.PLANET_RADIUS + (i + 0.5) * 0.25)) > 0.05) {
+          throw new Error('peldaño ' + i + ' fuera de altura');
         }
+        if (prevStep) {
+          const d = p.clone().sub(prevStep);
+          const radial = p.clone().normalize();
+          const dh = d.dot(radial);
+          const flat = d.addScaledVector(radial, -dh).length();
+          if (Math.abs(dh - 0.25) > 0.06) throw new Error('el peldaño no sube');
+          if (Math.abs(flat - 0.8) > 0.1) throw new Error('la escalera no sigue +z');
+        }
+        prevStep = p.clone();
       }
       const stepUp = new THREE.Vector3(0, 1, 0).applyQuaternion(stairs.flight[0].mesh.quaternion);
-      if (stepUp.dot(frame.up) < 0.999) throw new Error('el peldaño no mira para afuera');
+      const radial0 = stairs.flight[0].mesh.position.clone().normalize();
+      if (stepUp.dot(radial0) < 0.9995) throw new Error('el peldaño no mira para afuera');
 
       const player = new window.Game.Player();
       const camera = new THREE.PerspectiveCamera(75, 1, 0.5, 2000);
@@ -620,7 +790,7 @@
       const view = window.Game.createWeapon(cam, { spawn() {} });
       view.setTool('hammer');
       const byName = view.tools;
-      ['axe', 'pickaxe', 'hammer', 'pistol'].forEach((id) => {
+      ['axe', 'pickaxe', 'hammer', 'pistol', 'torch'].forEach((id) => {
         if (!byName[id]) throw new Error('falta el modelo de ' + id);
       });
       if (!byName.hammer.visible || byName.pistol.visible) throw new Error('el martillo no se muestra');
@@ -639,12 +809,12 @@
       HUD.sync({
         hp: 100, maxHp: 100, toolName: 'Hacha',
         wood: 0, stone: 0, metal: 0,
-        food: 0, foodMax: 5, toxin: 0, toxinMax: 3,
+        torch: 0, torchMax: 6,
         hasKey: false, showAmmo: true, mag: 12, reserve: 36, reloading: false,
         prompt: '', tools: tools, active: Inventory.activeTool,
       });
       const slots = document.querySelectorAll('.belt-slot');
-      if (slots.length !== 5) throw new Error('el cinturón no tiene 5 lugares');
+      if (slots.length !== 6) throw new Error('el cinturón no tiene 6 lugares');
       if (!slots[0].classList.contains('owned')) throw new Error('las manos no están en el cinturón');
       if (!slots[1].classList.contains('owned') || !slots[1].classList.contains('active')) {
         throw new Error('el hacha no está marcada');
@@ -653,6 +823,7 @@
       if (slots[2].classList.contains('owned') || slots[3].classList.contains('owned')) {
         throw new Error('apareció una herramienta que no agarraste');
       }
+      if (slots[5].classList.contains('owned')) throw new Error('la antorcha apareció sin craftearla');
     } finally {
       Inventory.reset();
       window.Game.PlayerHealth.reset();
@@ -691,16 +862,14 @@
   document.body.appendChild(renderer.domElement);
   const canvas = renderer.domElement;
 
-  const { referenceObjects, playerLight, secondaryLight } = window.Game.createWorld(scene);
+  // Semilla del mapa (?seed=N): mismo número, mismo planeta en tu máquina
+  // y en la de cualquiera. Sin semilla, es la de fábrica.
+  const wildSeed = window.Game.seedFromUrl ? window.Game.seedFromUrl(1337) : 1337;
+  const { referenceObjects, playerLight, secondaryLight } = window.Game.createWorld(scene, wildSeed);
   try {
-    const minAngle = Config.YARD_CLEARANCE / Config.PLANET_RADIUS;
-    const expect = Config.TOTAL_REFERENCE_OBJECTS + Config.REFERENCE_OBJECTS_NEAR_SPAWN;
-    if (referenceObjects.length !== expect) throw new Error('faltan rocas');
-    referenceObjects.forEach((mesh) => {
-      const angle = Math.acos(Math.min(1, mesh.position.clone().normalize().y));
-      if (angle < minAngle - 0.001) throw new Error('roca en el patio');
-      if (!mesh.userData.solid) throw new Error('roca sin caja');
-    });
+    // El mundo arranca vacío: lo puebla wilds.js con la semilla.
+    if (referenceObjects.length !== 0) throw new Error('el mundo no arrancó vacío');
+    document.documentElement.dataset.empty = 'ok';
   } catch (err) {
     solidsError = solidsError || err.message || String(err);
     console.error(err);
@@ -722,7 +891,11 @@
   const build = window.Game.createBuild(scene, courtyard.frame);
   build.setCamera(camera);
   courtyard.setBuild(build);
-  const enemiesSystem = window.Game.createEnemies(scene, courtyard.frame, courtyard.enemySpawns);
+  // Campo salvaje con la semilla del mapa: mojones, recursos y campamentos
+  // idénticos en todas las máquinas. Las oleadas salen de sus campamentos.
+  const wilds = window.Game.createWilds(scene, wildSeed);
+  wilds.setCamera(camera);
+  const enemiesSystem = window.Game.createEnemies(scene, courtyard.frame, wilds.spawnPoints);
   try {
     const robot = enemiesSystem.enemies[0];
     const at = courtyard.frame.localToWorld(robot.localX, robot.localZ, 1.6);
@@ -825,6 +998,11 @@
     weapon.update(0.016, fake);
     const pickDiff = differ(bare, shot());
     if (pickDiff < 20000) throw new Error('el pico no aparece en la mira (' + pickDiff + ')');
+    weapon.setTool('torch');
+    body.update(0.016, bodyState(false));
+    weapon.update(0.016, fake);
+    const torchDiff = differ(bare, shot());
+    if (torchDiff < 20000) throw new Error('la antorcha no aparece en la mira (' + torchDiff + ')');
     weapon.setTool(Inventory.activeTool);
   }
 
@@ -975,7 +1153,7 @@
   });
   courtyard.setWeapon(weapon);
   courtyard.setCamera(camera);
-  const waves = window.Game.createWaves(enemiesSystem, courtyard.enemySpawns);
+  const waves = window.Game.createWaves(enemiesSystem, wilds.spawnPoints, 60);
   // Modo Creador (port del FPS): gratis + volar + paleta + guardado.
   // El load se hace después de los self-tests para no ocuparles las celdas.
   const Creator = window.Game.createCreator
@@ -1033,6 +1211,12 @@
     if (Audio && !Audio.isReady()) Audio.init();
     if (!(input.pointerLocked || input.fallbackMode)) return;
     if (HUD.isModalOpen() || HUD.isPaused() || PlayerHealth.isDead) return;
+    // Mesa en mano: el jugador decide dónde va con el fantasma.
+    if (courtyard.isCarryingBench()) {
+      const put = courtyard.placeCarriedBench(player.position);
+      if (put && put.text) HUD.flash(put.text);
+      return;
+    }
     if (Creator && Creator.isOn()) {
       // En creador la paleta puede estar abierta: el clic ya eligió.
       if (Creator.isPaletteOpen()) {
@@ -1055,7 +1239,7 @@
     }
     if (Inventory.activeTool === 'pistol') weapon.shoot();
     else {
-      const message = courtyard.tryHarvest();
+      const message = courtyard.tryHarvest() || wilds.tryHarvest();
       if (message) HUD.flash(message);
     }
   });
@@ -1099,20 +1283,25 @@
     HUD.openCraft(courtyard.recipes(), (index) => {
       const result = courtyard.craft(index);
       if (result.message) HUD.flash(result.message);
+      // La mesa queda en mano: se cierra el menú para elegir dónde ponerla.
+      if (result.carrying) {
+        HUD.closeModal();
+        relockAfterModal();
+        return;
+      }
       if (HUD.isCraftOpen()) showCraft();
     }, courtyard.benchHeading());
     unlockForModal();
   }
 
   function showPack() {
+    const snap = Inventory.state;
     HUD.openPack({
       wood: snap.resources.wood,
       stone: snap.resources.stone,
       metal: snap.resources.metal,
-      food: snap.stacks.food,
-      foodMax: Inventory.stackMax('food'),
-      toxin: snap.stacks.toxin,
-      toxinMax: Inventory.stackMax('toxin'),
+      torch: snap.stacks.torch || 0,
+      torchMax: Inventory.stackMax('torch'),
       hasKey: snap.hasKey,
       reserve: weapon.reserve,
       tools: Inventory.TOOLS.map((tool) => ({
@@ -1120,10 +1309,17 @@
         name: tool.name,
         owned: !!snap.owned[tool.id],
       })),
+      basic: courtyard.basicRecipes(),
     }, {
-      use(id) {
-        const result = id === 'food' ? Inventory.useFood() : Inventory.useToxin();
-        if (result.text) HUD.flash(result.text);
+      craftBasic(index) {
+        const result = courtyard.craft(index);
+        if (result.message) HUD.flash(result.message);
+        // La mesa queda en mano: se cierra la mochila para posicionarla.
+        if (result.carrying) {
+          HUD.closeModal();
+          relockAfterModal();
+          return;
+        }
         if (HUD.isPackOpen()) showPack();
       },
       drop(id) {
@@ -1162,7 +1358,7 @@
   HUD.setRespawn(() => revivePlayer(true));
 
   const toolByCode = {
-    Digit1: 'hands', Digit2: 'axe', Digit3: 'pickaxe', Digit4: 'hammer', Digit5: 'pistol',
+    Digit1: 'hands', Digit2: 'axe', Digit3: 'pickaxe', Digit4: 'hammer', Digit5: 'pistol', Digit6: 'torch',
   };
 
   window.addEventListener('keydown', (e) => {
@@ -1173,6 +1369,12 @@
     }
     if (e.code === 'Escape') {
       if (PlayerHealth.isDead || HUD.isDeathOpen()) return;
+      // Mesa en mano: Esc la guarda sin gastar.
+      if (courtyard.isCarryingBench()) {
+        courtyard.cancelBenchCarry();
+        HUD.flash('Mesa guardada');
+        return;
+      }
       if (Creator && Creator.isPaletteOpen()) {
         Creator.togglePalette(false);
         try { canvas.requestPointerLock(); } catch (err) {}
@@ -1200,14 +1402,23 @@
       }
       return;
     }
-    if (HUD.isCraftOpen() && /^Digit[1-9]$/.test(e.code)) {
-      HUD.pickCraft(Number(e.code.slice(5)) - 1);
+    if (HUD.isCraftOpen() && /^Digit[0-9]$/.test(e.code)) {
+      HUD.pickCraft(e.code === 'Digit0' ? 9 : Number(e.code.slice(5)) - 1);
       return;
     }
-    if (HUD.isPackOpen() && (e.code === 'Digit1' || e.code === 'Digit2')) {
-      const used = e.code === 'Digit1' ? Inventory.useFood() : Inventory.useToxin();
-      if (used.text) HUD.flash(used.text);
-      if (HUD.isPackOpen()) showPack();
+    if (HUD.isPackOpen() && /^Digit[1-5]$/.test(e.code)) {
+      const rows = courtyard.basicRecipes();
+      const row = rows[Number(e.code.slice(5)) - 1];
+      if (row) {
+        const made = courtyard.craft(row.index);
+        if (made.message) HUD.flash(made.message);
+        if (made.carrying) {
+          HUD.closeModal();
+          relockAfterModal();
+          return;
+        }
+        if (HUD.isPackOpen()) showPack();
+      }
       return;
     }
     if (HUD.isModalOpen()) return;
@@ -1250,6 +1461,23 @@
   let fPrevDown = false;
   let deathShown = false;
   let heartIn = 0.4;
+  // Paredes rápidas: clic mantenido pone en ráfaga (martillo y creador).
+  // El clic simple da el primer bloque al instante; la ráfaga arranca a
+  // los 220 ms para no duplicarlo.
+  let placingHeld = false;
+  let placeCooldown = 0;
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    placingHeld = true;
+    placeCooldown = 0.22;
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 0) placingHeld = false;
+  });
+  window.addEventListener('blur', () => {
+    placingHeld = false;
+  });
 
   function discardPickup(spec) {
     if (!spec || !spec.alive) return;
@@ -1261,7 +1489,7 @@
     let block = null;
     try {
       Inventory.addResource('wood', 2);
-      Inventory.addStack('food', 2);
+      Inventory.addStack('torch', 2);
       const placed = build.placeCell(12, 4, 0, 'wood', player.position);
       if (!placed.ok) throw new Error(placed.text);
       block = placed.block;
@@ -1277,12 +1505,12 @@
       if (!stats || stats.textContent.indexOf('Bloques ' + blocks) < 0 || stats.textContent.indexOf('Oleada') < 0) {
         throw new Error('las estadísticas no están');
       }
-      if (Inventory.stackCount('food') !== 2 || build.blockCount() !== blocks) {
+      if (Inventory.stackCount('torch') !== 2 || build.blockCount() !== blocks) {
         throw new Error('morir borró el patio');
       }
       revivePlayer(false);
       if (PlayerHealth.isDead || PlayerHealth.hp !== 100) throw new Error('reaparecer no devolvió la vida');
-      if (Inventory.stackCount('food') !== 2 || build.blockCount() !== blocks) {
+      if (Inventory.stackCount('torch') !== 2 || build.blockCount() !== blocks) {
         throw new Error('reaparecer no conservó mochila y bloques');
       }
       if (!sheet.hidden) throw new Error('la pantalla de muerte quedó abierta');
@@ -1331,20 +1559,6 @@
     const origin = courtyard.frame.worldToLocal(player.position);
     let spec = null;
     try {
-      Inventory.addStack('food', 1);
-      const food = courtyard.drop('food', player.position, ahead);
-      spec = food.pickup;
-      if (!food.ok) throw new Error(food.text);
-      if (food.z < origin.z + 1.2) throw new Error('la comida no cayó adelante (' + food.z.toFixed(2) + ')');
-      if (Inventory.stackCount('food') !== 0) throw new Error('la comida siguió en la mochila');
-      const stand = courtyard.frame.localToWorld(food.x, food.z, Config.EYE_HEIGHT);
-      const got = courtyard.tryInteract(stand);
-      if (!got || got.type !== 'flash' || Inventory.stackCount('food') !== 1) {
-        throw new Error('no se volvió a agarrar la comida');
-      }
-      spec = null;
-      Inventory.takeStack('food', 1);
-
       Inventory.setKey(true);
       const key = courtyard.drop('key', player.position, ahead);
       spec = key.pickup;
@@ -1416,6 +1630,229 @@
     build.setTerritoryProvider(() => courtyard.territoryStatus());
   }
 
+  // Sin mesa no hay zona; con mesa propia la zona cubre los 360° donde el
+  // patio deja (lo ocupado fijo no cuenta). El spawn y el afuera quedan
+  // prohibidos, y no deja otra mesa pegada: el reclamo es del primero.
+  function selfTestTerritory() {
+    if (Creator && Creator.isOn()) throw new Error('el creador quedó prendido');
+    const before = Inventory.count('wood');
+    Inventory.addResource('wood', 60);
+    const beforeStone = Inventory.count('stone');
+    Inventory.addResource('stone', 10);
+    const placed = [];
+    let bench = null;
+    try {
+      // Si un mundo guardado ya tiene reclamo, no se puede probar el vacío.
+      if (!courtyard.territoryStatus().active) {
+        const bare = build.placeCell(0, 13, 0, 'wood', null);
+        if (bare.ok || bare.text !== 'Sin mesa: poné un workbench para reclamar la zona') {
+          throw new Error('dejó construir sin mesa (' + (bare.ok ? 'ok' : bare.text) + ')');
+        }
+      }
+      // Horizontal de verdad lejos del polo: el arriba de la mesa es el
+      // radio local aunque el chart mire al polo.
+      let farBench = null;
+      for (const [fx, fz] of [[12, 24], [-12, 24], [12, -24]]) {
+        const attempt = courtyard.placeBenchAt(fx, fz, true);
+        if (attempt.ok) {
+          farBench = attempt.bench;
+          break;
+        }
+      }
+      if (farBench) {
+        try {
+          const up = new THREE.Vector3(0, 1, 0).applyQuaternion(farBench.mesh.quaternion);
+          const radial = farBench.mesh.position.clone().normalize();
+          if (up.dot(radial) < 0.999) {
+            throw new Error('la mesa quedó ladeada (' + up.dot(radial).toFixed(4) + ')');
+          }
+        } finally {
+          try { courtyard.removeBench(farBench); } catch (e) {}
+        }
+      }
+      // Craftear la mesa la deja en mano con fantasma, sin gastar todavía.
+      const benchIdx = window.Game.CraftRecipes.findIndex((r) => r.placeBench);
+      if (benchIdx < 0) throw new Error('sin receta de mesa');
+      const wBeforeCarry = Inventory.count('wood');
+      const sBeforeCarry = Inventory.count('stone');
+      const carryRes = courtyard.craft(benchIdx);
+      if (!carryRes.carrying || !courtyard.isCarryingBench()) {
+        throw new Error('la mesa no quedó en mano');
+      }
+      if (Inventory.count('wood') !== wBeforeCarry || Inventory.count('stone') !== sBeforeCarry) {
+        throw new Error('craftear la mesa gastó antes de ponerla');
+      }
+      courtyard.cancelBenchCarry();
+      if (courtyard.isCarryingBench()) throw new Error('la mesa no se guardó');
+      const benchSpots = [[0, 14], [0, 10], [6, 12], [-6, 12]];
+      for (const [bx, bz] of benchSpots) {
+        const put = courtyard.placeBenchAt(bx, bz, false);
+        if (put.ok) {
+          bench = put.bench;
+          break;
+        }
+      }
+      if (!bench) throw new Error('no pudo poner su mesa de prueba');
+      const bx = bench.x;
+      const bz = bench.z;
+      // El anillo de zona va clavado a SU mesa, no al polo.
+      if (!bench.ring || !bench.ring.visible) throw new Error('la zona no marca su mesa');
+      const rr = bench.mesh.position.clone().normalize();
+      const expectRing = bench.mesh.position.clone().addScaledVector(rr, 0.07);
+      if (bench.ring.position.distanceTo(expectRing) > 0.05) {
+        throw new Error('el anillo no está en la mesa');
+      }
+      // En-chart en los cuatro cuadrantes; lo ocupado ajeno se saltea.
+      const cells = [[3, -1], [-3, -1], [0, -3], [2, -2], [-2, -2], [0, 1], [4, -2], [-4, -2], [0, -4]];
+      cells.forEach(([dx, dz]) => {
+        const ix = Math.round(bx + dx);
+        const iz = Math.round(bz + dz);
+        if (ix * ix + iz * iz > 256) return;
+        if (Math.hypot(ix - Config.SPAWN_X, iz - Config.SPAWN_Z) < Config.SPAWN_SAFE_R) return;
+        const r = build.placeCell(ix, iz, 0, 'wood', null);
+        if (r.ok) {
+          placed.push(r.block);
+          return;
+        }
+        if (r.text !== 'Ese lugar está ocupado') {
+          throw new Error('celda ' + ix + ',' + iz + ': ' + r.text);
+        }
+      });
+      if (placed.length < 3) throw new Error('casi no puso bloques en la zona (' + placed.length + ')');
+      // Lejos de todo reclamo pero dentro del patio y fuera del spawn.
+      const farSpots = [[10, 8], [-10, 8], [0, -10], [10, -6], [-10, -6]];
+      let zoneChecked = false;
+      for (const [ix, iz] of farSpots) {
+        if (ix * ix + iz * iz > 256) continue;
+        if (Math.hypot(ix - Config.SPAWN_X, iz - Config.SPAWN_Z) < Config.SPAWN_SAFE_R) continue;
+        const st = courtyard.territoryStatus();
+        const inside = st.centers.some((c) => Math.hypot(ix - c.x, iz - c.z) <= st.radius);
+        if (inside) continue;
+        const out = build.placeCell(ix, iz, 0, 'wood', null);
+        if (out.ok) throw new Error('dejó construir fuera de la zona en ' + ix + ',' + iz);
+        if (out.text === 'Ese lugar está ocupado') continue;
+        if (out.text !== 'Fuera de tu zona: construí cerca de tu mesa') {
+          throw new Error('mensaje raro fuera de zona: ' + out.text);
+        }
+        zoneChecked = true;
+        break;
+      }
+      if (!zoneChecked) throw new Error('no encontró dónde probar fuera de zona');
+      const spawn = build.placeCell(0, -2, 0, 'wood', null);
+      if (spawn.ok || (spawn.text !== 'Zona de spawn: acá no se construye' && spawn.text !== 'Ese lugar está ocupado')) {
+        throw new Error('dejó construir en el spawn (' + (spawn.ok ? 'ok' : spawn.text) + ')');
+      }
+      const patio = build.placeCell(0, 17, 0, 'wood', null);
+      if (!patio.ok && patio.text !== 'Ese lugar está ocupado') {
+        throw new Error('celda 0,17: ' + patio.text);
+      }
+      if (patio.ok) placed.push(patio.block);
+      // Dios en creador: bloques en cualquier parte del planeta.
+      const godSpots = [[30, -40], [-35, -30], [40, 25]];
+      let farPlaced = false;
+      build.setCreator(true);
+      try {
+        for (const [ix, iz] of godSpots) {
+          const r = build.placeCell(ix, iz, 0, 'stone', null);
+          if (r.ok) {
+            placed.push(r.block);
+            farPlaced = true;
+            break;
+          }
+          if (r.text !== 'Ese lugar está ocupado') {
+            throw new Error('celda lejana ' + ix + ',' + iz + ': ' + r.text);
+          }
+        }
+      } finally {
+        build.setCreator(false);
+      }
+      if (!farPlaced) throw new Error('el creador no llega lejos');
+      let gapChecked = false;
+      const gapSpots = [[2, 0], [-2, 0], [0, 2], [0, -2]];
+      for (const [dx, dz] of gapSpots) {
+        const near = courtyard.placeBenchAt(Math.round(bx + dx), Math.round(bz + dz), true);
+        if (near.ok) {
+          try { courtyard.removeBench(near.bench); } catch (e) {}
+          throw new Error('dejó otra mesa pegada');
+        }
+        if (near.text === 'Ese lugar está ocupado') continue;
+        if (near.text.indexOf('cerca') < 0) throw new Error('aviso raro de cercanía: ' + near.text);
+        gapChecked = true;
+        break;
+      }
+      if (!gapChecked) throw new Error('no pudo probar cercanía de mesas');
+    } finally {
+      placed.forEach((block) => {
+        try { build.removeBlock(block); } catch (e) {}
+      });
+      if (bench) {
+        try { courtyard.removeBench(bench); } catch (e) {}
+      }
+      try {
+        const diff = Inventory.count('wood') - before;
+        if (diff > 0) Inventory.trySpend({ wood: diff });
+        const diffStone = Inventory.count('stone') - beforeStone;
+        if (diffStone > 0) Inventory.trySpend({ stone: diffStone });
+      } catch (e) {}
+    }
+  }
+
+  try {
+    selfTestTerritory();
+    document.documentElement.dataset.territory = 'ok';
+  } catch (err) {
+    document.documentElement.dataset.territory = err.message || String(err);
+    console.error(err);
+  }
+
+  // Avanzada real: la puerta está en la antípoda, frena de verdad y la E
+  // la entiende (marco propio). La llave espera al lado, visible.
+  function selfTestOutpost() {
+    const st = courtyard.outpostStatus ? courtyard.outpostStatus() : null;
+    if (!st) throw new Error('sin avanzada');
+    if (st.antipodal > -0.98) {
+      throw new Error('la puerta no está en la antípoda (' + st.antipodal.toFixed(3) + ')');
+    }
+    if (Math.abs(st.door.length() - Config.PLANET_RADIUS - 1.25) > 0.6) {
+      throw new Error('la puerta flota o está enterrada');
+    }
+    if (!window.Game.Colliders.blocked(st.door, 0.2, { feet: 0, top: 2 })) {
+      throw new Error('la puerta no frena');
+    }
+    if (!st.keyAlive || !st.key) throw new Error('falta la llave de la avanzada');
+    if (Math.abs(st.key.length() - Config.PLANET_RADIUS - 0.7) > 0.6) {
+      throw new Error('la llave flota o está enterrada');
+    }
+    const savedPos = player.position.clone();
+    try {
+      // En el spawn no hay puerta fantasma: ni la E la ve ni frena nada.
+      player.position.copy(courtyard.frame.localToWorld(Config.SPAWN_X, Config.SPAWN_Z, Config.EYE_HEIGHT));
+      const home = courtyard.tryInteract(player.position);
+      if (home && home.type === 'flash' && home.text.indexOf('llave') >= 0) {
+        throw new Error('la puerta fantasma atiende en el spawn');
+      }
+      if (window.Game.Colliders.blocked(player.position, Config.PLAYER_RADIUS, { feet: 0, top: Config.EYE_HEIGHT })) {
+        throw new Error('pared fantasma en el spawn');
+      }
+      // Pararse ante la puerta: la E tiene que pedir la llave (sin tenerla).
+      player.position.copy(st.door.clone().normalize().multiplyScalar(Config.TARGET_DISTANCE));
+      const locked = courtyard.tryInteract(player.position);
+      if (!locked || locked.type !== 'flash' || locked.text.indexOf('llave') < 0) {
+        throw new Error('la E no entendió la puerta (' + (locked && locked.text) + ')');
+      }
+    } finally {
+      player.position.copy(savedPos);
+    }
+  }
+
+  try {
+    selfTestOutpost();
+    document.documentElement.dataset.outpost = 'ok';
+  } catch (err) {
+    document.documentElement.dataset.outpost = err.message || String(err);
+    console.error(err);
+  }
+
   // Sin overlay inicial: el menú de pausa es la entrada.
   // Arranca en pausa con los controles a la vista; Seguir pide el mouse.
   if (HUD.setResumeHandler) {
@@ -1462,6 +1899,7 @@
       }
       courtyard.update(dt, t, player.position);
       enemiesSystem.update(dt, t, player.position);
+      wilds.update(dt, t, player.position);
       projectiles.update(dt);
       weapon.update(dt, input);
       build.update(dt, Inventory.activeTool, player.position);
@@ -1470,7 +1908,29 @@
           Creator.update(dt, Inventory.activeTool, player.position);
         } catch (e) {}
       }
-      // Territorio del banco: sin mesa se pierden los derechos y decae.
+      // Comida y toxina: los robots también las consumen al pisarlas.
+      // La comida los cura, la toxina los quema.
+      try {
+        if (courtyard.consumeEdibleAt && enemiesSystem.aliveCount() > 0) {
+          const foes = enemiesSystem.enemies;
+          for (let i = 0; i < foes.length; i++) {
+            const foe = foes[i];
+            if (!foe.alive) continue;
+            const eaten = courtyard.consumeEdibleAt(foe.localX, foe.localZ);
+            if (eaten === 'food' && enemiesSystem.healEnemy) enemiesSystem.healEnemy(foe, 25);
+            else if (eaten === 'toxin') enemiesSystem.damageEnemy(foe, 20);
+          }
+        }
+      } catch (e) {}
+      try {
+        const seen = [];
+        if (courtyard.drainNotices) seen.push(...courtyard.drainNotices());
+        if (wilds.drainNotices) seen.push(...wilds.drainNotices());
+        if (seen.length) HUD.flash(seen[seen.length - 1]);
+      } catch (e) {}
+      // Territorio del banco (solo modo juego): sin mesa se pierden los
+      // derechos y decae. En creador sos dios: no decae nada.
+      const creatorOn = !!(Creator && Creator.isOn());
       try {
         const st = courtyard.territoryStatus();
         if (st.active !== hadTerritory) {
@@ -1482,12 +1942,37 @@
           }
         }
         if (build.setDecayActive) {
-          build.setDecayActive(!st.active && (build.blockCount() > 0 || build.stairCount() > 0));
+          build.setDecayActive(!st.active && !creatorOn && (build.blockCount() > 0 || build.stairCount() > 0));
         }
       } catch (e) {}
+      // Ráfaga con clic mantenido: paredes y barreras sin clicar mil veces.
+      // El acierto es silencioso (el fantasma ya lo muestra); el fallo avisa
+      // espaciado para no spamear.
+      if (placeCooldown > 0) placeCooldown -= dt;
+      const holdLocked = input.pointerLocked || input.fallbackMode;
+      if (!holdLocked) placingHeld = false;
+      if (placingHeld && holdLocked && !HUD.isModalOpen() && placeCooldown <= 0 &&
+          !courtyard.isCarryingBench() && !(Creator && Creator.isPaletteOpen())) {
+        // En creador la ráfaga vale para bloques, escaleras y sacar;
+        // mesa, cosas y bichos se ponen con clic para no sembrar sin querer.
+        if (creatorOn) {
+          const mode = Creator.getPlaceMode ? Creator.getPlaceMode().kind : 'block';
+          if (mode === 'block' || mode === 'stairs' || mode === 'erase') {
+            const rep = Creator.place(player.position);
+            if (rep && !rep.ok && rep.text) HUD.flash(rep.text);
+            placeCooldown = rep && rep.ok ? 0.2 : 0.6;
+          } else {
+            placeCooldown = 0.2;
+          }
+        } else if (Inventory.activeTool === 'hammer') {
+          const rep = build.tryPlace(player.position);
+          if (rep && !rep.ok && rep.text) HUD.flash(rep.text);
+          placeCooldown = rep && rep.ok ? 0.2 : 0.6;
+        }
+      }
       // En creador (como el FPS) no avanzan las oleadas.
-      const creatorOn = !!(Creator && Creator.isOn());
       const waveEvent = creatorOn ? null : waves.update(dt);
+      if (waveEvent && waveEvent.type === 'wake') HUD.flash('Calma rota: se acerca la primera oleada.');
       if (waveEvent && waveEvent.type === 'clear') HUD.flash('Oleada superada. La próxima en 5 s.');
       if (waveEvent && waveEvent.type === 'spawn') {
         HUD.flash('Oleada ' + waveEvent.wave + ': ' + waveEvent.count + ' enemigos.');
@@ -1506,6 +1991,7 @@
       if (build) build.update(0, 'hands', player.position);
     } else if (build) {
       build.update(0, 'hands', player.position);
+      if (courtyard.hideCarryGhost) courtyard.hideCarryGhost();
     }
 
     if (HUD.isPaused()) {
@@ -1520,6 +2006,7 @@
         '  ·  Enemigos ' + enemiesSystem.aliveCount() +
         '  ·  Oleada ' + waves.number +
         '  ·  Tiempo ' + runClock() + terrTxt +
+        '  ·  Semilla ' + wildSeed +
         (Creator && Creator.isOn() ? '  ·  Creador SÍ (G apaga, derecho menú)' : '')
       );
     }
@@ -1543,16 +2030,32 @@
 
       const fDown = input.isDown(Settings.code('torch'));
       if (fDown && !fPrevDown && (input.pointerLocked || input.fallbackMode) && !HUD.isModalOpen()) {
-        camera.getWorldDirection(lookDir);
-        const planted = torches.place(player.position, lookDir);
-        HUD.flash(planted.ok
-          ? ('Antorchas ' + planted.active + '/' + planted.total)
-          : 'Muy cerca de la anterior');
+        // La antorcha se sostiene en la mano (6): plantar gasta 1 del stock.
+        // En creador es gratis, como todo lo demás.
+        const god = Creator && Creator.isOn();
+        if (!god && !Inventory.hasTool('torch')) {
+          HUD.flash('Crafteá una antorcha en la mesa');
+        } else if (!god && Inventory.activeTool !== 'torch') {
+          HUD.flash('Equipá la antorcha (6) para plantarla');
+        } else if (!god && Inventory.stackCount('torch') <= 0) {
+          HUD.flash('Sin antorchas: crafteá más en la mesa');
+        } else {
+          camera.getWorldDirection(lookDir);
+          const planted = torches.place(player.position, lookDir);
+          if (planted.ok) {
+            if (!god) Inventory.takeStack('torch', 1);
+            HUD.flash('Antorchas ' + planted.active + '/' + planted.total);
+          } else {
+            HUD.flash('Muy cerca de la anterior');
+          }
+        }
       }
       fPrevDown = fDown;
     } else if (isDead && !deathShown) {
       deathShown = true;
+      placingHeld = false;
       HUD.closeModal();
+      if (courtyard.cancelBenchCarry) courtyard.cancelBenchCarry();
       try { document.exitPointerLock(); } catch (err) { /* la pantalla tapa el juego */ }
       HUD.showDeath({
         time: runClock(),
@@ -1574,8 +2077,9 @@
     if (isDead) prompt = 'Reaparecer conserva el patio. Reiniciar borra todo.';
     else if (HUD.isPaused()) prompt = 'Esc sigue';
     else if (HUD.isCraftOpen()) prompt = 'Números 1-9 craftean · clic/toque también · ' + interactKey + ' cierra';
-    else if (HUD.isPackOpen()) prompt = '1 comida · 2 toxina · ' + packKey + ' cierra';
+    else if (HUD.isPackOpen()) prompt = '1-5 crafteo básico · ' + packKey + ' cierra';
     else if (HUD.isTotemOpen()) prompt = interactKey + ' cierra';
+    else if (courtyard.isCarryingBench()) prompt = 'Clic pone la mesa · Esc la guarda';
     else if (Creator && Creator.isOn()) {
       const mode = Creator.getPlaceMode();
       const what = mode.kind === 'block' ? ('bloque ' + mode.id)
@@ -1584,15 +2088,10 @@
         : mode.kind === 'item' ? mode.id
         : mode.kind === 'enemy' ? 'robot'
         : 'borrar (clic saca)';
-      let terr = '';
-      try {
-        const st = courtyard.territoryStatus();
-        terr = st.active ? '' : ' · ¡SIN ZONA! poné una mesa';
-      } catch (e) {}
       prompt = 'Creador: clic pone ' + what + ' · derecho menú · B menú · G apaga'
-        + (player.creatorFly ? ' · Espacio/Shift volar' : '') + terr;
+        + (player.creatorFly ? ' · Espacio/Shift volar' : '');
     }
-    else prompt = courtyard.getPrompt(player.position);
+    else prompt = wilds.getPrompt() || courtyard.getPrompt(player.position);
     const toolName = Inventory.activeTool === 'hammer'
       ? (Inventory.toolName(inv.active) + ' (' + build.materialName() + ')')
       : Inventory.toolName(inv.active);
@@ -1603,10 +2102,8 @@
       wood: inv.resources.wood,
       stone: inv.resources.stone,
       metal: inv.resources.metal,
-      food: inv.stacks.food,
-      foodMax: Inventory.stackMax('food'),
-      toxin: inv.stacks.toxin,
-      toxinMax: Inventory.stackMax('toxin'),
+      torch: inv.stacks.torch || 0,
+      torchMax: Inventory.stackMax('torch'),
       hasKey: inv.hasKey,
       showAmmo: Inventory.hasTool('pistol'),
       mag: weapon.mag,
@@ -1625,10 +2122,15 @@
       const up = player.localUp;
       const lat = Math.asin(Math.max(-1, Math.min(1, up.y))) * (180 / Math.PI);
       const lon = Math.atan2(up.x, up.z) * (180 / Math.PI);
+      let calmTxt = '';
+      try {
+        const left = waves.calmLeft ? waves.calmLeft() : 0;
+        if (left > 0) calmTxt = ' | calma ' + Math.ceil(left) + 's';
+      } catch (e) {}
       debugEl.textContent =
         'patio sobre la esfera | radial ' + player.currentRadialDistance.toFixed(1) +
         ' | lat ' + lat.toFixed(1) + '° lon ' + lon.toFixed(1) + '° | ' +
-        (player.isGrounded ? 'en el piso' : 'en el aire');
+        (player.isGrounded ? 'en el piso' : 'en el aire') + calmTxt;
     }
 
     renderer.render(scene, camera);
@@ -1636,9 +2138,11 @@
 
   animate();
   document.documentElement.dataset.boot = 'ok';
+  document.documentElement.dataset.seed = String(wildSeed);
   document.documentElement.dataset.nodes = String(courtyard.nodeCount);
   document.documentElement.dataset.enemies = String(enemiesSystem.enemies.length);
   console.log('Patio de La Grieta sobre la esfera.');
-  console.log('   Objetos de referencia:', referenceObjects.length);
+  console.log('   Mojones:', wilds.landmarks.length);
+  console.log('   Nodos salvajes:', wilds.nodes.length);
   console.log('   Enemigos:', enemiesSystem.enemies.length);
 })();

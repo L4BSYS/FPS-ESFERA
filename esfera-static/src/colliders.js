@@ -7,11 +7,19 @@
   const STEP = 0.36;
   let groundHooked = false;
 
-  function hookGround() {
-    if (groundHooked || !window.Game.GroundHeight) return;
-    groundHooked = true;
-    window.Game.GroundHeight.register((worldPos) => window.Game.Colliders.support(worldPos));
-  }
+    function hookGround() {
+      if (groundHooked || !window.Game.GroundHeight) return;
+      groundHooked = true;
+      window.Game.GroundHeight.register((worldPos) => window.Game.Colliders.support(worldPos));
+    }
+
+    // Un collider solo vale cerca de su ancla: proyectar un punto lejano
+    // (p. ej. la antípoda) en su plano da coordenadas mentirosas.
+    function inRange(c, worldPos) {
+      if (!c.frame || !c.frame.anchorPosition) return true;
+      const range = (Config && Config.FRAME_RANGE) || 120;
+      return c.frame.anchorPosition.distanceTo(worldPos) <= range;
+    }
 
   window.Game.Colliders = {
     /**
@@ -43,12 +51,14 @@
      * robots no atraviesan un bloque. El paso automático solo vale
      * cuando el jugador manda su propia altura.
      */
-    blocked(worldPos, radius, body, ignore) {
+    blocked(worldPos, radius, body, ignore, skip) {
       radius = radius || Config.PLAYER_RADIUS;
       const feet = body ? body.feet : 0;
       const head = body ? body.top : 1.8;
       for (const c of colliders) {
         if (!c.active || c === ignore) continue;
+        if (skip && skip(c)) continue;
+        if (!inRange(c, worldPos)) continue;
         const { x, z } = c.frame.worldToLocalXZ(worldPos);
         if (x + radius <= c.minX || x - radius >= c.maxX ||
             z + radius <= c.minZ || z - radius >= c.maxZ) continue;
@@ -67,6 +77,7 @@
       const h = worldPos.length() - Config.PLANET_RADIUS;
       for (const c of colliders) {
         if (!c.active || c === ignore) continue;
+        if (!inRange(c, worldPos)) continue;
         const { x, z } = c.frame.worldToLocalXZ(worldPos);
         if (x <= c.minX || x >= c.maxX || z <= c.minZ || z >= c.maxZ) continue;
         if (c.minH == null || c.maxH == null) return true;
@@ -81,6 +92,7 @@
       let best = 0;
       for (const c of colliders) {
         if (!c.active || !c.stand || c.maxH == null) continue;
+        if (!inRange(c, worldPos)) continue;
         const { x, z } = c.frame.worldToLocalXZ(worldPos);
         // 5 cm de borde. Con 20 cm el peldaño (68 cm) casi no tenía piso
         // y a 12 m/s el jugador lo salteaba en un frame.
@@ -102,6 +114,11 @@
       let bestT = 1.01;
       for (const c of colliders) {
         if (!c.active || c === ignore) continue;
+        if (c.frame && c.frame.anchorPosition) {
+          const range = (Config && Config.FRAME_RANGE) || 120;
+          if (c.frame.anchorPosition.distanceTo(a) > range &&
+              c.frame.anchorPosition.distanceTo(b) > range) continue;
+        }
         const la = c.frame.worldToLocal(a);
         const lb = c.frame.worldToLocal(b);
         const t = slab(la, lb, c);

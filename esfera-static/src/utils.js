@@ -33,5 +33,22 @@
       const basis = new THREE.Matrix4().makeBasis(frame.tangentX, frame.up, frame.tangentZ);
       object.quaternion.setFromRotationMatrix(basis);
     },
+
+    /**
+     * Como placeOnFrame pero horizontal DE VERDAD donde sea: arriba es el
+     * radio local, no el del ancla. Lejos del polo, placeOnFrame deja todo
+     * ladeado (a 0.5 rad, 28° de tilt). El adelante mira al tangentZ del
+     * chart proyectado, así la mesa no gira raro.
+     */
+    placeOnSphere: function (object, frame, x, z, height) {
+      object.position.copy(frame.localToWorld(x, z, height || 0));
+      const up = object.position.clone().normalize();
+      const fwd = frame.tangentZ.clone().addScaledVector(up, -frame.tangentZ.dot(up));
+      if (fwd.lengthSq() < 1e-8) fwd.copy(frame.tangentX);
+      fwd.normalize();
+      const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
+      const basis = new THREE.Matrix4().makeBasis(right, up, fwd);
+      object.quaternion.setFromRotationMatrix(basis);
+    },
   };
 })();

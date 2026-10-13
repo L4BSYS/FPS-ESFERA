@@ -1,5 +1,5 @@
 // Preferencias de esta máquina: música, efectos, sensibilidad y teclas.
-// WASD, flechas, espacio, shift y 1-5 no se reasignan.
+// WASD, flechas, espacio, shift y 1-6 no se reasignan.
 (function () {
   window.Game = window.Game || {};
   const Config = window.Game.Config;
@@ -18,7 +18,7 @@
     KeyW: 1, KeyA: 1, KeyS: 1, KeyD: 1,
     ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1,
     Space: 1, ShiftLeft: 1, ShiftRight: 1, Escape: 1, Tab: 1,
-    Digit1: 1, Digit2: 1, Digit3: 1, Digit4: 1, Digit5: 1,
+    Digit1: 1, Digit2: 1, Digit3: 1, Digit4: 1, Digit5: 1, Digit6: 1,
   };
 
   const keys = {
