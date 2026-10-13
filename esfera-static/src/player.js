@@ -48,6 +48,10 @@
       this.stepClock = 0;
       // Modo creador (como el FPS): volar con Espacio/Shift.
       this.creatorFly = false;
+      // Adelante horizontal, el mismo vector con el que camina. El muñeco
+      // lo lee de acá: no recalcula el yaw por su cuenta.
+      this.facing = new THREE.Vector3();
+      this.facing.copy(this.basisZ);
     }
 
     _seedAt(up) {
@@ -235,6 +239,7 @@
 
       const lookTarget = this.position.clone().add(lookDirection);
 
+      this.facing.copy(fwdDir);
       camera.up.copy(updatedLocalUp);
       camera.position.copy(this.position);
       camera.lookAt(lookTarget);

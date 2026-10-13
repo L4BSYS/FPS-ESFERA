@@ -294,6 +294,20 @@
     osc.start(t0); osc.stop(t0 + 0.09);
   }
 
+  function playPunch() {
+    if (!audible()) return;
+    const t0 = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(190, t0);
+    osc.frequency.exponentialRampToValueAtTime(70, t0 + 0.08);
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.22, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.09);
+    osc.connect(g).connect(masterGain);
+    osc.start(t0); osc.stop(t0 + 0.09);
+  }
+
   function playEmptyClick() {
     if (!audible()) return;
     const t0 = audioCtx.currentTime;
@@ -368,6 +382,7 @@
     reloadOut: playReloadOut,
     reloadIn: playReloadIn,
     emptyClick: playEmptyClick,
+    punch: playPunch,
     victoryFanfare: playVictoryFanfare,
   };
 })();
