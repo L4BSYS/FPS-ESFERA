@@ -111,22 +111,23 @@
       // sistema (build, mesa, cosas) igual que en modo juego.
       let res = null;
       if (placeMode.kind === 'block') {
-        res = build.placeCell(cell.ix, cell.iz, cell.level, placeMode.id, playerPos);
+        res = build.placeCell(cell.ix, cell.iz, cell.level, placeMode.id, playerPos, cell.far);
       } else if (placeMode.kind === 'stairs') {
         if (cell.level !== 0) return { ok: false, text: 'La escalera va en el piso' };
         res = build.tryStairs(playerPos);
       } else if (placeMode.kind === 'bench') {
         if (cell.level !== 0) return { ok: false, text: 'La mesa va en el piso' };
-        if (build.occupies(cell.ix, cell.iz, 0)) return { ok: false, text: 'Ese lugar está ocupado' };
-        res = courtyard.placeBenchAt(cell.ix, cell.iz, true);
+        if (build.occupies(cell.ix, cell.iz, 0, cell.far)) return { ok: false, text: 'Ese lugar está ocupado' };
+        res = courtyard.placeBenchAt(cell.ix, cell.iz, true, false, cell.far);
       } else if (placeMode.kind === 'item') {
         if (cell.level !== 0) return { ok: false, text: 'Eso va en el piso' };
-        res = courtyard.placeCreatorPickup(placeMode.id, cell.ix, cell.iz);
+        res = courtyard.placeCreatorPickup(placeMode.id, cell.ix, cell.iz, cell.far);
       } else if (placeMode.kind === 'enemy') {
-        if (enemies.canSpawnAt && !enemies.canSpawnAt(cell.ix, cell.iz)) {
+        const chartFrame = build.chartFor ? build.chartFor(cell.far) : null;
+        if (enemies.canSpawnAt && !enemies.canSpawnAt(cell.ix, cell.iz, cell.far, chartFrame)) {
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
-        const foe = enemies.spawnOne(cell.ix, cell.iz, true);
+        const foe = enemies.spawnOne(cell.ix, cell.iz, true, cell.far, chartFrame);
         res = foe ? { ok: true, text: 'Robot puesto' } : { ok: false, text: 'No se pudo poner' };
       } else {
         return { ok: false, text: 'Elegí qué poner con B' };
@@ -156,7 +157,7 @@
       try {
         const cell = build.aimCell ? build.aimCell(playerPos || null) : null;
         if (cell && courtyard.tryDeleteCreatorPickupAt) {
-          const pick = courtyard.tryDeleteCreatorPickupAt(cell.ix, cell.iz);
+          const pick = courtyard.tryDeleteCreatorPickupAt(cell.ix, cell.iz, cell.far);
           if (pick && pick.ok) {
             saveSoon();
             return pick;
@@ -188,7 +189,7 @@
 
     function snapshotWorld() {
       return {
-        v: 2,
+        v: 3,
         build: build.snapshot ? build.snapshot() : null,
         benches: courtyard.snapshotBenches ? courtyard.snapshotBenches() : [],
         pickups: courtyard.snapshotCreatorPickups ? courtyard.snapshotCreatorPickups() : [],
@@ -228,7 +229,10 @@
         if (data.build && build.restore) n += build.restore(data.build);
         if (data.benches && courtyard.restoreBenches) n += courtyard.restoreBenches(data.benches);
         if (data.pickups && courtyard.restoreCreatorPickups) n += courtyard.restoreCreatorPickups(data.pickups);
-        if (data.foes && enemies.restoreCreatorEnemies) n += enemies.restoreCreatorEnemies(data.foes);
+        if (data.foes && enemies.restoreCreatorEnemies) {
+          const chartFor = build.chartFor ? ((far) => build.chartFor(far)) : null;
+          n += enemies.restoreCreatorEnemies(data.foes, chartFor);
+        }
         if (data.placeMode && data.placeMode.kind) {
           placeMode = { kind: data.placeMode.kind, id: data.placeMode.id };
         }
@@ -449,14 +453,21 @@
       try {
         const frame = courtyard.frame;
         const h = 0.6;
-        marker.position.copy(frame.localToWorld(cell.ix, cell.iz, h));
+        // Por tesela como los bloques: con el marco del polo solo, una celda
+        // remota (far) se proyectaba en el ecuador, a cientos de metros.
+        if (build.tileFor) {
+          const t = build.tileFor(cell.ix, cell.iz, cell.far);
+          marker.position.copy(t.frame.localToWorld(cell.ix - t.cx, cell.iz - t.cz, h));
+        } else {
+          marker.position.copy(frame.localToWorld(cell.ix, cell.iz, h));
+        }
         // Verde si entra, rojo si está ocupado (misma vara que al poner).
         let ok = true;
         try {
           if (placeMode.kind === 'item' || placeMode.kind === 'bench') {
-            if (build.propSpotFree) ok = !build.propSpotFree(cell.ix, cell.iz);
+            if (build.propSpotFree) ok = !build.propSpotFree(cell.ix, cell.iz, cell.far);
           } else if (placeMode.kind === 'enemy') {
-            if (enemies.canSpawnAt) ok = enemies.canSpawnAt(cell.ix, cell.iz);
+            if (enemies.canSpawnAt) ok = enemies.canSpawnAt(cell.ix, cell.iz, cell.far, build.chartFor ? build.chartFor(cell.far) : null);
           }
         } catch (e) {}
         marker.material.color.setHex(ok ? 0x33ff66 : 0xff4444);

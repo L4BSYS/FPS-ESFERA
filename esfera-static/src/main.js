@@ -1916,7 +1916,7 @@
           for (let i = 0; i < foes.length; i++) {
             const foe = foes[i];
             if (!foe.alive) continue;
-            const eaten = courtyard.consumeEdibleAt(foe.localX, foe.localZ);
+            const eaten = courtyard.consumeEdibleAt(foe.localX, foe.localZ, foe.frame);
             if (eaten === 'food' && enemiesSystem.healEnemy) enemiesSystem.healEnemy(foe, 25);
             else if (eaten === 'toxin') enemiesSystem.damageEnemy(foe, 20);
           }

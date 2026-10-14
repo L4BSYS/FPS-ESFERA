@@ -35,6 +35,30 @@
         return dir.multiplyScalar(Config.PLANET_RADIUS + height);
       },
 
+      /** Sub-marco en una celda de ESTE chart: los ejes se transportan en
+       *  paralelo (el giro más corto del up), no se recalculan con un eje
+       *  del mundo. Así las teselas no rotan ni se espejan al alejarse del
+       *  ancla, y una pared sigue derecha a través de ellas. */
+      at(x, z) {
+        const target = this.localToWorld(x, z, 0);
+        const newUp = target.clone().normalize();
+        const ax = tangentX.clone();
+        const az = tangentZ.clone();
+        if (up.dot(newUp) < 0.999999) {
+          const shift = new THREE.Quaternion().setFromUnitVectors(up, newUp);
+          ax.applyQuaternion(shift);
+          az.applyQuaternion(shift);
+        }
+        ax.addScaledVector(newUp, -ax.dot(newUp));
+        if (ax.lengthSq() < 1e-12) {
+          ax.copy(tangentX);
+          ax.addScaledVector(newUp, -ax.dot(newUp));
+        }
+        ax.normalize();
+        const nz = new THREE.Vector3().crossVectors(ax, newUp).normalize();
+        return makeFrame(target, ax, newUp, nz);
+      },
+
       /** Posición en el mundo → (x, z) en el plano del ancla y altura sobre la esfera. */
       worldToLocal(worldPos) {
         const rel = worldPos.clone().sub(anchor);

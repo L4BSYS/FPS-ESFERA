@@ -27,8 +27,8 @@
   const STAIR_RUN = 0.8;
   const STAIR_COUNT = 4;
 
-  function cellKey(ix, iz, level) {
-    return ix + ',' + iz + ',' + level;
+  function cellKey(ix, iz, level, far) {
+    return (far ? 1 : 0) + ',' + ix + ',' + iz + ',' + level;
   }
 
   window.Game.createBuild = function (scene, frame) {
@@ -82,42 +82,100 @@
     raycaster.far = REACH;
 
     // Tesela de una celda: marco local anclado al centro de su tesela de
-    // 16x16. Determinista para la misma celda (el ancla puede derivar con
-    // la distancia, pero es estable y lo local queda a milímetros: como
-    // mucho 11 m del ancla). Toda la geometría de bloques va por tesela.
+    // 16x16, con ejes TRANSPORTADOS desde el chart (no recalculados), así
+    // la grilla no gira ni se espeja al alejarse. Toda la geometría de
+    // bloques va por tesela: como mucho 11 m del ancla => milimétrica.
+    //
+    // Dos charts cosidos en el ecuador: el de spawn (el que se pasa al
+    // crear) sólo cubre hasta ~80° porque su proyección se pliega pasado
+    // los 90° (la antípoda vuelve a caer en el polo). Del otro lado manda
+    // el chart remoto, anclado en la antípoda. La identidad lleva el chart
+    // en un campo `far` explícito (0 = spawn, 1 = remoto): el truco viejo
+    // de sumar FAR al ix se rompía con coordenadas negativas (un ix remoto
+    // negativo caía por debajo de FAR y se leía como celda de spawn en el
+    // ecuador, a cientos de metros del punto de mira).
+    const chartUp = frame.anchorPosition.clone().normalize();
+    let chartFar = null;
+    function farChart() {
+      if (chartFar) return chartFar;
+      chartFar = window.Game.LocalFrame(frame.anchorPosition.clone().negate());
+      return chartFar;
+    }
+    function chartFor(far) {
+      return far ? farChart() : frame;
+    }
+    function chartOfPoint(worldPos) {
+      const d = worldPos.clone().normalize();
+      return d.dot(chartUp) >= 0.15 ? 0 : 1;
+    }
+
+    // Inversa EXACTA de localToWorld (proyección gnomónica): el chart es un
+    // plano tangente, así que mundo->chart es R·tan(ángulo), no el producto
+    // escalar ortográfico (R·seno) que usa LocalFrame.worldToLocal. Con el
+    // ortográfico la tesela elegida se iba decenas de metros del punto a
+    // partir de ~30° del polo y el fantasma se separaba de la mira (a 45°,
+    // 30 m; en el ecuador, 260 m). Con la inversa exacta la tesela siempre
+    // es la más cercana y el fantasma queda a menos de una celda.
+    function chartLocal(chartFrame, worldPos) {
+      const R = Config.PLANET_RADIUS;
+      const d = worldPos.clone().normalize();
+      const upA = chartFrame.anchorPosition.clone().normalize();
+      const cosA = d.dot(upA);
+      // Más allá del horizonte (el otro hemisferio): este chart no vale.
+      // Justo en el ecuador (cosA≈0) se sujeta a un mínimo en vez de dar
+      // null: la dirección sigue siendo exacta y la tesela queda a cm.
+      if (cosA <= 0) return null;
+      const k = R / Math.max(cosA, 1e-4);
+      return {
+        x: d.dot(chartFrame.tangentX) * k,
+        z: d.dot(chartFrame.tangentZ) * k,
+        h: worldPos.length() - R,
+      };
+    }
+
     const tileFrames = new Map();
-    function tileForPX(ix, iz) {
-      const qx = Math.floor(ix / TILE);
-      const qz = Math.floor(iz / TILE);
-      const key = qx + ':' + qz;
+    function tileRaw(far, nx, nz) {
+      const qx = Math.floor(nx / TILE);
+      const qz = Math.floor(nz / TILE);
+      const key = (far ? 1 : 0) + ':' + qx + ':' + qz;
       let t = tileFrames.get(key);
       if (!t) {
         const cx = qx * TILE + TILE / 2;
         const cz = qz * TILE + TILE / 2;
-        const anchor = frame.localToWorld(cx, cz, 0);
-        t = { qx: qx, qz: qz, cx: cx, cz: cz, frame: window.Game.LocalFrame(anchor) };
+        t = { far: far, cx: cx, cz: cz, frame: (far ? farChart() : frame).at(cx, cz) };
         tileFrames.set(key, t);
       }
       return t;
     }
 
-    // Números locales (enteros) de una celda dentro de su tesela.
-    function tileLocal(t, ix, iz) {
-      return { lx: ix - t.cx, lz: iz - t.cz };
+    function tileForPX(ix, iz, far) {
+      return tileRaw(far ? 1 : 0, ix, iz);
+    }
+
+    // Números locales (y el marco) de una celda: lo que dibuja y choca.
+    // cxRef/czRef son los centros de su tesela, para reconstruir la identidad.
+    function cellLocal(ix, iz, far) {
+      const t = tileForPX(ix, iz, far ? 1 : 0);
+      return {
+        far: t.far,
+        frame: t.frame,
+        cxRef: t.cx,
+        czRef: t.cz,
+        lx: ix - t.cx,
+        lz: iz - t.cz,
+      };
     }
 
     // ¿El candidato pisa alguna caja? Cada caja se testea en SU marco
     // (las esquinas del candidato viajan al mundo y de ahí al marco de la
     // caja): vale en todo el planeta, sin importar dónde viva cada uno.
     // Las alturas son radiales y por eso exactas en cualquier marco.
-    function overlaps(minX, maxX, minZ, maxZ, minH, maxH) {
+    function overlaps(minX, maxX, minZ, maxZ, minH, maxH, far) {
       const list = Colliders.all();
       const cx = (minX + maxX) / 2;
       const cz = (minZ + maxZ) / 2;
-      const t = tileForPX(Math.round(cx), Math.round(cz));
-      const clx = cx - t.cx;
-      const clz = cz - t.cz;
-      const center = t.frame.localToWorld(clx, clz, (minH + maxH) / 2);
+      const cl = cellLocal(Math.round(cx), Math.round(cz), far);
+      const center = cl.frame.localToWorld(cl.lx, cl.lz, (minH + maxH) / 2);
       for (let i = 0; i < list.length; i++) {
         const c = list[i];
         if (!c.active) continue;
@@ -136,7 +194,11 @@
         for (let a = 0; a < 2; a++) {
           for (let b = 0; b < 2; b++) {
             for (let d = 0; d < 2; d++) {
-              const w = t.frame.localToWorld(xs[a] - t.cx, zs[b] - t.cz, hs[d]);
+              const w = cl.frame.localToWorld(
+                xs[a] - cl.cxRef,
+                zs[b] - cl.czRef,
+                hs[d]
+              );
               const p = F.worldToLocal(w);
               if (p.x < mnx) mnx = p.x;
               if (p.x > mxx) mxx = p.x;
@@ -157,14 +219,14 @@
       return false;
     }
 
-    function hitsPlayer(minX, maxX, minZ, maxZ, minH, maxH, playerPos) {
+    function hitsPlayer(minX, maxX, minZ, maxZ, minH, maxH, playerPos, far) {
       if (!playerPos) return false;
       // En la tesela del candidato: parientes cercanos se comparan exactos
       // en cualquier parte del planeta (el marco del polo deforma lejos).
-      const t = tileForPX(Math.round((minX + maxX) / 2), Math.round((minZ + maxZ) / 2));
-      const loc = t.frame.worldToLocal(playerPos);
-      const lx = loc.x + t.cx;
-      const lz = loc.z + t.cz;
+      const cl = cellLocal(Math.round((minX + maxX) / 2), Math.round((minZ + maxZ) / 2), far);
+      const loc = cl.frame.worldToLocal(playerPos);
+      const lx = loc.x + cl.cxRef;
+      const lz = loc.z + cl.czRef;
       const feet = playerPos.length() - Config.EYE_HEIGHT - Config.PLANET_RADIUS;
       const head = feet + Config.EYE_HEIGHT;
       const radius = Config.PLAYER_RADIUS;
@@ -184,7 +246,8 @@
 
     // Zona de spawn: ni bloques ni escaleras en el inicio, en ningún modo.
     // Solo vale con el juego cableado (los self-tests usan builds sueltos).
-    function spawnBlockReason(ix, iz) {
+    function spawnBlockReason(ix, iz, far) {
+      if (far) return '';
       if (!territoryProvider) return '';
       const sx = Config.SPAWN_X || 0;
       const sz = Config.SPAWN_Z || -2;
@@ -195,7 +258,7 @@
       return '';
     }
 
-    function territoryAt(ix, iz) {      if (!territoryProvider) return { ok: true, active: true };
+    function territoryAt(ix, iz, far) {      if (!territoryProvider) return { ok: true, active: true };
       let t = null;
       try {
         t = territoryProvider();
@@ -206,7 +269,9 @@
       if (!t.active) return { ok: false, active: false, text: 'Sin mesa: poné un workbench para reclamar la zona' };
       const centers = t.centers || [];
       const radius = t.radius || 9;
+      const wantFar = far ? 1 : 0;
       for (let i = 0; i < centers.length; i++) {
+        if ((centers[i].far | 0) !== wantFar) continue;
         if (Math.hypot(ix - centers[i].x, iz - centers[i].z) <= radius) {
           return { ok: true, active: true };
         }
@@ -214,38 +279,41 @@
       return { ok: false, active: true, text: 'Fuera de tu zona: construí cerca de tu mesa' };
     }
 
-    function reject(ix, iz, level, playerPos) {
+    function reject(ix, iz, level, playerPos, far) {
+      far = far ? 1 : 0;
       // Sin compuerta de patio: la grilla envuelve la esfera y la zona del
       // banco manda en juego; el creador llega a todo el planeta.
       if (level < 0 || level > 6) return 'Muy alto';
-      if (grid.has(cellKey(ix, iz, level))) return 'Ese lugar está ocupado';
+      if (grid.has(cellKey(ix, iz, level, far))) return 'Ese lugar está ocupado';
       const box = boxOf(ix, iz, level);
-      if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH)) return 'Ese lugar está ocupado';
-      if (hitsPlayer(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH, playerPos)) return 'Estás en el medio';
-      const spawnWhy = spawnBlockReason(ix, iz);
+      if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH, far)) return 'Ese lugar está ocupado';
+      if (hitsPlayer(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH, playerPos, far)) return 'Estás en el medio';
+      const spawnWhy = spawnBlockReason(ix, iz, far);
       if (spawnWhy) return spawnWhy;
       // Modo creador = dios en todo el planeta: gratis, sin apoyo y sin
       // zona. La zona del banco vale solo en modo juego.
       if (creator) return '';
-      const terr = territoryAt(ix, iz);
+      const terr = territoryAt(ix, iz, far);
       if (!terr.ok) return terr.text;
-      if (level > 0 && !grid.has(cellKey(ix, iz, level - 1))) return 'No tiene apoyo';
+      if (level > 0 && !grid.has(cellKey(ix, iz, level - 1, far))) return 'No tiene apoyo';
       return '';
     }
 
     // Misma vara para cosas sobre el piso que para bloques nivel 0:
     // celda libre y sin solape, en cualquier parte del planeta.
     // Lo usa el creador y la mesa.
-    function propSpotFree(ix, iz) {
-      if (grid.has(cellKey(ix, iz, 0))) return 'Ese lugar está ocupado';
+    function propSpotFree(ix, iz, far) {
+      far = far ? 1 : 0;
+      if (grid.has(cellKey(ix, iz, 0, far))) return 'Ese lugar está ocupado';
       const box = boxOf(ix, iz, 0);
-      if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH)) {
+      if (overlaps(box.minX, box.maxX, box.minZ, box.maxZ, box.minH, box.maxH, far)) {
         return 'Ese lugar está ocupado';
       }
       return '';
     }
 
-    function addBlock(ix, iz, level, type) {
+    function addBlock(ix, iz, level, type, far) {
+      far = far ? 1 : 0;
       const look = LOOK[type];
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(1, 1, 1),
@@ -257,15 +325,14 @@
           metalness: look.metalness,
         })
       );
-      const t = tileForPX(ix, iz);
-      const l = tileLocal(t, ix, iz);
-      Utils.placeOnSphere(mesh, t.frame, l.lx, l.lz, level + 0.5);
+      const l = cellLocal(ix, iz, far);
+      Utils.placeOnSphere(mesh, l.frame, l.lx, l.lz, level + 0.5);
       scene.add(mesh);
       // Caja en la misma tesela y mismos números locales: coincide exacto.
-      const col = Colliders.add(t.frame, l.lx - 0.5, l.lx + 0.5, l.lz - 0.5, l.lz + 0.5, level, level + 1);
+      const col = Colliders.add(l.frame, l.lx - 0.5, l.lx + 0.5, l.lz - 0.5, l.lz + 0.5, level, level + 1);
       col.stand = true;
       const block = {
-        ix: ix, iz: iz, level: level, type: type,
+        ix: ix, iz: iz, level: level, far: far, type: type,
         mesh: mesh, col: col, falling: false, h: level, vy: 0,
         hp: HP[type], maxHp: HP[type],
       };
@@ -273,7 +340,7 @@
       col.ref = block;
       mesh.userData.block = block;
       blocks.push(block);
-      grid.set(cellKey(ix, iz, level), block);
+      grid.set(cellKey(ix, iz, level, far), block);
       return block;
     }
 
@@ -288,7 +355,7 @@
     }
 
     function removeBlock(block) {
-      grid.delete(cellKey(block.ix, block.iz, block.level));
+      grid.delete(cellKey(block.ix, block.iz, block.level, block.far));
       scene.remove(block.mesh);
       if (window.Game.Audio) window.Game.Audio.breakBlock(block.type);
       Colliders.remove(block.col);
@@ -298,17 +365,17 @@
 
     function startFall(block) {
       const from = block.level;
-      grid.delete(cellKey(block.ix, block.iz, from));
+      grid.delete(cellKey(block.ix, block.iz, from, block.far));
       block.falling = true;
       block.vy = 0;
       block.h = from;
       block.col.active = false;
       // Reserva el hueco de aterrizaje ya: si cae toda la columna en el
       // mismo frame, cada bloque pide el siguiente y no pisan la misma celda.
-      const land = landingLevel(block.ix, block.iz);
+      const land = landingLevel(block.ix, block.iz, block.far);
       block.landAt = land;
       block.level = land;
-      grid.set(cellKey(block.ix, block.iz, land), block);
+      grid.set(cellKey(block.ix, block.iz, land, block.far), block);
     }
 
     function dropUnsupported() {
@@ -320,7 +387,7 @@
         for (let i = 0; i < blocks.length; i++) {
           const block = blocks[i];
           if (block.falling || block.level === 0) continue;
-          if (!grid.has(cellKey(block.ix, block.iz, block.level - 1))) {
+          if (!grid.has(cellKey(block.ix, block.iz, block.level - 1, block.far))) {
             startFall(block);
             changed = true;
           }
@@ -328,9 +395,9 @@
       }
     }
 
-    function landingLevel(ix, iz) {
+    function landingLevel(ix, iz, far) {
       let level = 0;
-      while (grid.has(cellKey(ix, iz, level))) level += 1;
+      while (grid.has(cellKey(ix, iz, level, far ? 1 : 0))) level += 1;
       return level;
     }
 
@@ -365,6 +432,7 @@
                 ix: block.ix + Math.round(n.x),
                 iz: block.iz + Math.round(n.z),
                 level: Math.max(0, block.level + Math.round(n.y)),
+                far: block.far ? 1 : 0,
               },
               point: point,
             };
@@ -375,30 +443,58 @@
       // de los pies y se recorta al alcance: mirar al frente pone lejos,
       // mirar abajo pone cerca. Mirando muy arriba no hay preview (mejor
       // esconder el fantasma que mentir con la celda de los pies).
-      // El redondeo es en la tesela del punto (exacto); la identidad que
-      // vuelve es la gruesa del patio, estable para grilla y guardado.
+      // El chart se elige por dónde queda el punto (el de spawn se pliega
+      // pasados los 90°); el redondeo es en la tesela de ese chart, con la
+      // proyección gnomónica exacta (ver chartLocal): vale en todo el planeta.
       if (playerPos) {
         const up = playerPos.clone().normalize();
         const denom = dir.dot(up);
         if (denom <= 0.5) {
           let d = reach;
           if (denom < -1e-4) {
-            const t = Config.EYE_HEIGHT / -denom;
-            if (t < d) d = t;
+            const feet = Config.EYE_HEIGHT / -denom;
+            if (feet < d) d = feet;
           }
           const point = origin.clone().addScaledVector(dir, d);
-          const approx = frame.worldToLocal(point);
-          const tile = tileForPX(Math.round(approx.x), Math.round(approx.z));
-          const fine = tile.frame.worldToLocal(point);
-          const ix = Math.round(tile.cx + Math.round(fine.x));
-          const iz = Math.round(tile.cz + Math.round(fine.z));
-          return {
-            cell: { ix: ix, iz: iz, level: 0 },
-            point: point,
-          };
+          const far = chartOfPoint(point) === 1;
+          const r = cellOnChart(far, chartFor(far), point);
+          if (r) return r;
+          const r2 = cellOnChart(!far, chartFor(!far), point);
+          if (r2) return r2;
         }
       }
       return null;
+    }
+
+    // Punto del mundo -> celda de ese chart. La tesela se elige con la
+    // proyección exacta, así que siempre es la más cercana al punto y el
+    // redondeo fino queda a menos de una celda (el fantasma no se despega).
+    function cellOnChart(far, chart, point) {
+      const coarse = chartLocal(chart, point);
+      if (!coarse) return null;
+      const tile = tileRaw(far ? 1 : 0, coarse.x, coarse.z);
+      const fine = chartLocal(tile.frame, point);
+      if (!fine) {
+        return {
+          cell: { ix: Math.round(coarse.x), iz: Math.round(coarse.z), level: 0, far: far ? 1 : 0 },
+          point: point,
+        };
+      }
+      return {
+        cell: { ix: tile.cx + Math.round(fine.x), iz: tile.cz + Math.round(fine.z), level: 0, far: far ? 1 : 0 },
+        point: point,
+      };
+    }
+
+    // Celda bajo un punto cualquiera del mundo (la usa el patio para soltar
+    // cosas y ubicar la mesa donde mira el jugador, en cualquier hemisferio).
+    function worldToCell(worldPos) {
+      if (!worldPos) return null;
+      const far = chartOfPoint(worldPos) === 1;
+      const r = cellOnChart(far, chartFor(far), worldPos);
+      if (r) return r.cell;
+      const r2 = cellOnChart(!far, chartFor(!far), worldPos);
+      return r2 ? r2.cell : null;
     }
 
     function aim(playerPos) {
@@ -414,21 +510,22 @@
       return Inventory.trySpend(cost);
     }
 
-    function placeCell(ix, iz, level, type, playerPos) {
-      const why = reject(ix, iz, level, playerPos);
+    function placeCell(ix, iz, level, type, playerPos, far) {
+      far = far ? 1 : 0;
+      const why = reject(ix, iz, level, playerPos, far);
       if (why) return { ok: false, text: why };
       const cost = COSTS[type] || COSTS.wood;
       if (!spend(type, cost)) {
         return { ok: false, text: 'Te falta ' + (NAMES[type] || type) + ' (' + cost + ')' };
       }
-      const block = addBlock(ix, iz, level, type);
+      const block = addBlock(ix, iz, level, type, far);
       return { ok: true, text: 'Puesto: ' + NAMES[type], block: block };
     }
 
     function tryPlace(playerPos) {
       const cell = aim(playerPos);
       if (!cell) return { ok: false, text: 'No hay donde poner' };
-      return placeCell(cell.ix, cell.iz, cell.level, material, playerPos);
+      return placeCell(cell.ix, cell.iz, cell.level, material, playerPos, cell.far);
     }
 
     function tryDelete() {
@@ -452,10 +549,14 @@
       return { ok: true, text: 'Bloque destruido' };
     }
 
-    function yawFromCamera() {
+    function yawFromCamera(far) {
       const dir = new THREE.Vector3();
       aimCamera.getWorldDirection(dir);
-      const angle = Math.atan2(dir.dot(frame.tangentX), dir.dot(frame.tangentZ));
+      // El yaw se mide en el chart donde se va a poner (el remoto tiene la
+      // X espejada respecto al de spawn; con el de spawn la escalera salía
+      // girada al otro lado del planeta).
+      const chart = chartFor(far ? 1 : 0);
+      const angle = Math.atan2(dir.dot(chart.tangentX), dir.dot(chart.tangentZ));
       const quarter = Math.round(angle / (Math.PI / 2));
       return ((quarter % 4) + 4) % 4 * (Math.PI / 2);
     }
@@ -474,11 +575,12 @@
       return { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };
     }
 
-    function placeStairs(ix, iz, yaw, playerPos) {
-      const spawnWhy = spawnBlockReason(ix, iz);
+    function placeStairs(ix, iz, yaw, playerPos, far) {
+      far = far ? 1 : 0;
+      const spawnWhy = spawnBlockReason(ix, iz, far);
       if (spawnWhy) return { ok: false, text: spawnWhy };
       if (!creator) {
-        const terr = territoryAt(ix, iz);
+        const terr = territoryAt(ix, iz, far);
         if (!terr.ok) return { ok: false, text: terr.text };
       }
       const spots = [];
@@ -487,10 +589,10 @@
         const bounds = stepBounds(center.x, center.z, yaw);
         const minH = i * STAIR_RISE;
         const maxH = (i + 1) * STAIR_RISE;
-        if (overlaps(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, minH, maxH)) {
+        if (overlaps(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, minH, maxH, far)) {
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
-        if (hitsPlayer(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, minH, maxH, playerPos)) {
+        if (hitsPlayer(bounds.minX, bounds.maxX, bounds.minZ, bounds.maxZ, minH, maxH, playerPos, far)) {
           return { ok: false, text: 'Estás en el medio' };
         }
         spots.push({ center: center, bounds: bounds, minH: minH, maxH: maxH });
@@ -508,15 +610,17 @@
             color: 0x8B4513, emissive: 0x3a2010, emissiveIntensity: 0.45, roughness: 0.82,
           })
         );
-        // Malla y caja en la tesela del peldaño, con sus números locales:
-        // idénticas entre sí en todo el planeta.
-        const st = tileForPX(Math.round(spot.center.x), Math.round(spot.center.z));
-        const slx = spot.center.x - st.cx;
-        const slz = spot.center.z - st.cz;
-        Utils.placeOnSphere(mesh, st.frame, slx, slz, spot.minH + STAIR_RISE / 2);
+        // Malla y caja en la tesela del peldaño, con sus números locales
+        // EXACTOS (fraccionales: los peldaños avanzan 0.8, no de a celda).
+        // La tesela se elige por el centro redondeado; la malla conserva el
+        // resto fraccional, idénticas entre sí en todo el planeta.
+        const sl = cellLocal(Math.round(spot.center.x), Math.round(spot.center.z), far);
+        const slx = spot.center.x - sl.cxRef;
+        const slz = spot.center.z - sl.czRef;
+        Utils.placeOnSphere(mesh, sl.frame, slx, slz, spot.minH + STAIR_RISE / 2);
         scene.add(mesh);
         const col = Colliders.add(
-          st.frame,
+          sl.frame,
           slx - stepW / 2, slx + stepW / 2,
           slz - stepD / 2, slz + stepD / 2,
           spot.minH, spot.maxH
@@ -525,7 +629,7 @@
         flight.push({ mesh: mesh, col: col });
       }
       stairs.push(flight);
-      stairsMeta.push({ ix: ix, iz: iz, yaw: yaw });
+      stairsMeta.push({ ix: ix, iz: iz, yaw: yaw, far: far });
       return { ok: true, text: 'Escalera puesta', flight: flight };
     }
 
@@ -534,7 +638,7 @@
       const cell = aim(playerPos);
       if (!cell) return { ok: false, text: 'No hay donde poner' };
       if (cell.level !== 0) return { ok: false, text: 'La escalera va en el piso' };
-      return placeStairs(cell.ix, cell.iz, yawFromCamera(), playerPos);
+      return placeStairs(cell.ix, cell.iz, yawFromCamera(cell.far), playerPos, cell.far);
     }
 
     function update(dt, tool, playerPos) {
@@ -551,13 +655,12 @@
           anchor.visible = false;
         } else {
           ghost.visible = true;
-          const free = !reject(cell.ix, cell.iz, cell.level, playerPos);
+          const free = !reject(cell.ix, cell.iz, cell.level, playerPos, cell.far);
           const tint = free ? 0x88ff88 : 0xff6655;
           ghost.material.color.setHex(tint);
           ghostEdges.material.color.setHex(free ? 0x00ff00 : 0xff0000);
-          const gt = tileForPX(cell.ix, cell.iz);
-          const gl = tileLocal(gt, cell.ix, cell.iz);
-          Utils.placeOnSphere(ghost, gt.frame, gl.lx, gl.lz, cell.level + 0.5);
+          const gl = cellLocal(cell.ix, cell.iz, cell.far);
+          Utils.placeOnSphere(ghost, gl.frame, gl.lx, gl.lz, cell.level + 0.5);
           anchor.visible = true;
           anchor.position.copy(detail.point);
           anchor.material.color.setHex(free ? 0xffd76a : 0xff4444);
@@ -598,9 +701,8 @@
           block.col.active = true;
           grid.set(cellKey(block.ix, block.iz, land), block);
         }
-        const ft = tileForPX(block.ix, block.iz);
-        const fl = tileLocal(ft, block.ix, block.iz);
-        Utils.placeOnSphere(block.mesh, ft.frame, fl.lx, fl.lz, block.h + 0.5);
+        const fl = cellLocal(block.ix, block.iz, block.far);
+        Utils.placeOnSphere(block.mesh, fl.frame, fl.lx, fl.lz, block.h + 0.5);
       }
     }
 
@@ -659,7 +761,7 @@
     function clearAll() {
       while (blocks.length) {
         const block = blocks[0];
-        grid.delete(cellKey(block.ix, block.iz, block.level));
+        grid.delete(cellKey(block.ix, block.iz, block.level, block.far));
         scene.remove(block.mesh);
         Colliders.remove(block.col);
         blocks.splice(0, 1);
@@ -669,11 +771,19 @@
 
     function snapshot() {
       return {
+        v: 3,
         blocks: blocks
           .filter((block) => !block.falling)
-          .map((block) => ({ ix: block.ix, iz: block.iz, level: block.level, type: block.type })),
+          .map((block) => ({ ix: block.ix, iz: block.iz, level: block.level, far: block.far ? 1 : 0, type: block.type })),
         stairs: stairsMeta.slice(),
       };
+    }
+
+    // Migra un ix viejo (v2 con FAR + remoto) a {ix, far} explícitos.
+    function migrateIx(ix) {
+      if (typeof ix !== 'number') return null;
+      if (ix >= 1000000) return { ix: ix - 1000000, far: 1 };
+      return { ix: ix, far: 0 };
     }
 
     function restore(data) {
@@ -687,17 +797,34 @@
         const list = Array.isArray(data.blocks) ? data.blocks : [];
       for (let i = 0; i < list.length; i++) {
         const d = list[i];
-        if (typeof d.ix !== 'number' || typeof d.iz !== 'number' || typeof d.level !== 'number') continue;
+        if (typeof d.iz !== 'number' || typeof d.level !== 'number') continue;
         if (!LOOK[d.type]) continue;
-        if (grid.has(cellKey(d.ix, d.iz, d.level))) continue;
-        addBlock(d.ix, d.iz, d.level, d.type);
+        let ix = d.ix;
+        let far = d.far ? 1 : 0;
+        if (typeof ix !== 'number') continue;
+        if (data.v !== 3) {
+          const m = migrateIx(ix);
+          if (!m) continue;
+          ix = m.ix;
+          far = m.far;
+        }
+        if (grid.has(cellKey(ix, d.iz, d.level, far))) continue;
+        addBlock(ix, d.iz, d.level, d.type, far);
         n += 1;
       }
       const st = Array.isArray(data.stairs) ? data.stairs : [];
       for (let i = 0; i < st.length; i++) {
         const d = st[i];
         if (typeof d.ix !== 'number' || typeof d.iz !== 'number') continue;
-        const r = placeStairs(d.ix, d.iz, typeof d.yaw === 'number' ? d.yaw : 0, null);
+        let six = d.ix;
+        let sfar = d.far ? 1 : 0;
+        if (data.v !== 3) {
+          const m = migrateIx(six);
+          if (!m) continue;
+          six = m.ix;
+          sfar = m.far;
+        }
+        const r = placeStairs(six, d.iz, typeof d.yaw === 'number' ? d.yaw : 0, null, sfar);
         if (r.ok) n += 1;
       }
       return n;
@@ -723,8 +850,9 @@
         if (!decayActive) decayTimer = 0;
       },
       isDecayActive() { return decayActive; },
-      territoryCheck(ix, iz) { return territoryAt(ix, iz); },
-      propSpotFree(ix, iz) { return propSpotFree(ix, iz); },
+      territoryCheck(ix, iz) { return territoryAt(ix, iz, 0); },
+      propSpotFree(ix, iz, far) { return propSpotFree(ix, iz, far); },
+      chartFor(far) { return chartFor(far ? 1 : 0); },
       setMaterial(type) {
         if (ORDER.indexOf(type) >= 0) {
           material = type;
@@ -738,7 +866,9 @@
       },
       aimCell: aim,
       aimDetail: aimEx,
-      tileFor(ix, iz) { return tileForPX(ix, iz); },
+      cellLocal(ix, iz, far) { return cellLocal(ix, iz, far); },
+      tileFor(ix, iz, far) { return tileForPX(ix, iz, far); },
+      worldToCell: worldToCell,
       tryPlace: tryPlace,
       tryDelete: tryDelete,
       tryDeleteStairs: tryDeleteStairs,
@@ -756,7 +886,7 @@
       clearAll: clearAll,
       snapshot: snapshot,
       restore: restore,
-      occupies(ix, iz, level) { return grid.has(cellKey(ix, iz, level)); },
+      occupies(ix, iz, level, far) { return grid.has(cellKey(ix, iz, level, far ? 1 : 0)); },
       blockCount() { return blocks.length; },
       stairCount() { return stairs.length; },
       blocks: blocks,

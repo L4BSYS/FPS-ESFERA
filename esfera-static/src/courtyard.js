@@ -150,7 +150,7 @@
       pistol: ['la pistola', '5'],
     };
 
-    function toolPickup(id, x, z, listed, fromCreator) {
+    function toolPickup(id, x, z, listed, fromCreator, useFrame) {
       const label = TOOL_LABEL[id] || [id, '?'];
       const group = new THREE.Group();
       if (id === 'pistol') {
@@ -181,6 +181,7 @@
       if (listed !== false) toolIds.push(id);
       const spec = {
         mesh: group, x, z, base: 0.55, phase: x, alive: true, radius: 1.7,
+        frame: useFrame || null,
         creator: !!fromCreator,
         prompt() { return 'E agarrar ' + label[0]; },
         use() {
@@ -195,7 +196,7 @@
       return spec;
     }
 
-    function spawnMedkit(x, z, fromCreator) {
+    function spawnMedkit(x, z, fromCreator, useFrame) {
       const kit = new THREE.Group();
       const kitBox = new THREE.Mesh(
         new THREE.BoxGeometry(0.42, 0.32, 0.42),
@@ -211,6 +212,7 @@
       kit.add(kitBox, kitCross, kitCrossFront);
       const spec = {
         mesh: kit, x: x, z: z, base: 0.4, phase: x + z, alive: true, radius: 1.6,
+        frame: useFrame || null,
         creator: !!fromCreator, kind: 'medkit',
         prompt() { return 'E botiquín'; },
         use() {
@@ -342,7 +344,8 @@
       ring.rotateX(-Math.PI / 2);
     }
 
-    function makeBench(x, z) {
+    function makeBench(x, z, far) {
+      far = far ? 1 : 0;
       const group = new THREE.Group();
       const woodMat = new THREE.MeshStandardMaterial({ color: 0x6b4428, roughness: 0.75, emissive: 0x2a1408, emissiveIntensity: 0.35 });
       const top = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.14, 0.85), woodMat);
@@ -366,7 +369,7 @@
       let blx = x;
       let blz = z;
       if (buildRef && buildRef.tileFor) {
-        const t = buildRef.tileFor(x, z);
+        const t = buildRef.tileFor(x, z, far);
         benchFrame = t.frame;
         blx = x - t.cx;
         blz = z - t.cz;
@@ -374,7 +377,7 @@
       Utils.placeOnSphere(group, benchFrame, blx, blz, 0);
       scene.add(group);
       const col = Colliders.add(benchFrame, blx - 0.75, blx + 0.75, blz - 0.45, blz + 0.45, 0, 0.95);
-      const bench = { x: x, z: z, mesh: group, bar: bar, col: col, hp: 300, maxHp: 300, alive: true, owner: 'player' };
+      const bench = { x: x, z: z, far: far, mesh: group, meshFrame: benchFrame, mx: blx, mz: blz, bar: bar, col: col, hp: 300, maxHp: 300, alive: true, owner: 'player' };
       col.kind = 'bench';
       col.ref = bench;
       benches.push(bench);
@@ -388,7 +391,7 @@
         bench.ring = ring;
       } catch (e) {}
       interactables.push({
-        x: x, z: z, radius: 2.5, alive: true, bench: bench,
+        frame: benchFrame, x: blx, z: blz, radius: 2.5, alive: true, bench: bench,
         prompt() { return bench.hp > 0 ? 'E mesa de trabajo' : ''; },
         use() {
           if (bench.hp <= 0) return { type: 'none' };
@@ -435,14 +438,16 @@
       return {
         active: alive.length > 0,
         radius: TERRITORY_RADIUS,
-        centers: alive.map((bench) => ({ x: bench.x, z: bench.z })),
+        centers: alive.map((bench) => ({ x: bench.x, z: bench.z, far: bench.far ? 1 : 0 })),
       };
     }
 
-    function isInTerritory(ix, iz) {
+    function isInTerritory(ix, iz, far) {
       const alive = aliveBenches();
       if (!alive.length) return false;
+      const wantFar = far ? 1 : 0;
       for (let i = 0; i < alive.length; i++) {
+        if ((alive[i].far ? 1 : 0) !== wantFar) continue;
         if (Math.hypot(ix - alive[i].x, iz - alive[i].z) <= TERRITORY_RADIUS) return true;
       }
       return false;
@@ -456,7 +461,7 @@
         benches.forEach((bench) => {
           if (bench.ring) bench.ring.visible = !!(bench.alive && bench.hp > 0);
         });
-        territorySig = alive.map((bench) => bench.x + ',' + bench.z).join(';') || 'none';
+        territorySig = alive.map((bench) => (bench.far ? 1 : 0) + ',' + bench.x + ',' + bench.z).join(';') || 'none';
       } catch (e) {}
     }
 
@@ -464,10 +469,12 @@
     // Dos mesas no pueden quedar pegadas: cada reclamo necesita su lugar.
     const BENCH_GAP = 7;
 
-    function benchGapOk(x, z) {
+    function benchGapOk(x, z, far) {
+      const wantFar = far ? 1 : 0;
       for (let i = 0; i < benches.length; i++) {
         const b = benches[i];
         if (!b || !b.alive || b.hp <= 0) continue;
+        if ((b.far ? 1 : 0) !== wantFar) continue;
         const d = Math.hypot(b.x - x, b.z - z);
         if (d < BENCH_GAP) {
           return 'Muy cerca de otra mesa (a ' + (Math.round(d * 10) / 10) + ')';
@@ -476,23 +483,26 @@
       return '';
     }
 
-    function placeBenchAt(ix, iz, fromCreator, skipGap) {
+    function placeBenchAt(ix, iz, fromCreator, skipGap, far) {
+      far = far ? 1 : 0;
       const x = ix;
       const z = iz;
       // Misma vara exacta que los bloques, en cualquier marco.
-      if (buildRef && buildRef.overlaps && buildRef.overlaps(x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95)) {
+      if (buildRef && buildRef.overlaps && buildRef.overlaps(x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95, far)) {
         return { ok: false, text: 'Ese lugar está ocupado' };
       }
       if (!skipGap) {
-        const sx = Config.SPAWN_X || 0;
-        const sz = Config.SPAWN_Z || -2;
-        if (Math.hypot(x - sx, z - sz) < (Config.SPAWN_SAFE_R || 8)) {
-          return { ok: false, text: 'Zona de spawn: acá no se construye' };
+        if (!far) {
+          const sx = Config.SPAWN_X || 0;
+          const sz = Config.SPAWN_Z || -2;
+          if (Math.hypot(x - sx, z - sz) < (Config.SPAWN_SAFE_R || 8)) {
+            return { ok: false, text: 'Zona de spawn: acá no se construye' };
+          }
         }
-        const gap = benchGapOk(x, z);
+        const gap = benchGapOk(x, z, far);
         if (gap) return { ok: false, text: gap };
       }
-      const bench = makeBench(x, z);
+      const bench = makeBench(x, z, far);
       bench.creator = !!fromCreator;
       paintBench(bench);
       return { ok: true, text: 'Mesa puesta', bench: bench };
@@ -545,7 +555,7 @@
     function snapshotBenches() {
       return benches
         .filter((bench) => bench.creator)
-        .map((bench) => ({ x: bench.x, z: bench.z, hp: Math.round(bench.hp) }));
+        .map((bench) => ({ x: bench.x, z: bench.z, far: bench.far ? 1 : 0, hp: Math.round(bench.hp) }));
     }
 
     function restoreBenches(list) {
@@ -554,8 +564,15 @@
       for (let i = 0; i < list.length; i++) {
         const d = list[i];
         if (typeof d.x !== 'number' || typeof d.z !== 'number') continue;
+        let bx = d.x;
+        let bfar = d.far ? 1 : 0;
+        if (typeof d.far !== 'number' && bx >= 1000000) {
+          // Guardado viejo (v2 con FAR + remoto).
+          bx -= 1000000;
+          bfar = 1;
+        }
         // Lo guardado vuelve igual: sin gap (el reclamo ya existía).
-        const r = placeBenchAt(Math.round(d.x), Math.round(d.z), true, true);
+        const r = placeBenchAt(Math.round(bx), Math.round(d.z), true, true, bfar);
         if (r.ok) {
           if (typeof d.hp === 'number') {
             r.bench.hp = Math.max(1, Math.min(r.bench.maxHp, d.hp));
@@ -601,7 +618,7 @@
     const EDIBLE_RESPAWN = 30;
     const notices = [];
 
-    function spawnEdible(id, x, z, fromCreator) {
+    function spawnEdible(id, x, z, fromCreator, useFrame) {
       const group = new THREE.Group();
       const mesh = new THREE.Mesh(
         new THREE.CylinderGeometry(0.22, 0.22, 0.32, 8),
@@ -615,6 +632,7 @@
       group.add(mesh);
       const spec = {
         mesh: group, x: x, z: z, base: 0.4, phase: x + z, alive: true, radius: 1.7,
+        frame: useFrame || null,
         creator: !!fromCreator, kind: id, edible: id, respawn: 0,
         noInteract: true,
         prompt() { return ''; },
@@ -628,11 +646,22 @@
     spawnEdible('toxin', 4.4, 13.2, false);
 
     // El que toca un comestible lo consume: devuelve 'food' o 'toxin'.
-    function eatEdibleAt(x, z) {
+    // x,z van en el marco `frm` (el del enemigo que pisa, o el del polo).
+    function eatEdibleAt(x, z, frm) {
       for (let i = 0; i < pickups.length; i++) {
         const p = pickups[i];
         if (!p.alive || !p.edible) continue;
-        if (Math.hypot(p.x - x, p.z - z) >= 1.0) continue;
+        let px = x;
+        let pz = z;
+        const PF = p.frame || frame;
+        if (frm && frm !== PF) {
+          // Distinto marco: comparar pasando por el mundo.
+          const w = frm.localToWorld(x, z, 0.4);
+          const l = PF.worldToLocal(w);
+          px = l.x;
+          pz = l.z;
+        }
+        if (Math.hypot(p.x - px, p.z - pz) >= 1.0) continue;
         p.alive = false;
         try { scene.remove(p.mesh); } catch (e) {}
         p.respawn = EDIBLE_RESPAWN;
@@ -641,13 +670,14 @@
       return null;
     }
 
-    function spawnAmmo(x, z, rounds, fromCreator) {
+    function spawnAmmo(x, z, rounds, fromCreator, useFrame) {
       const ammoBox = new THREE.Mesh(
         new THREE.BoxGeometry(0.28, 0.16, 0.42),
         new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.4, roughness: 0.45, emissive: 0x222222, emissiveIntensity: 0.4 })
       );
       const spec = {
         mesh: ammoBox, x: x, z: z, base: 0.28, phase: x + z, alive: true, radius: 1.6, rounds: rounds,
+        frame: useFrame || null,
         creator: !!fromCreator, kind: 'ammo',
         prompt() { return 'E agarrar balas'; },
         use() {
@@ -672,7 +702,7 @@
       metal: { label: 'chatarra', amount: 1, color: 0x7a8288, emissive: 0x22262a },
     };
 
-    function spawnMat(res, x, z, fromCreator) {
+    function spawnMat(res, x, z, fromCreator, useFrame) {
       const info = MAT_INFO[res];
       if (!info) return null;
       const mesh = new THREE.Mesh(
@@ -684,6 +714,7 @@
       );
       const spec = {
         mesh: mesh, x: x, z: z, base: 0.3, phase: x + z, alive: true, radius: 1.7,
+        frame: useFrame || null,
         creator: !!fromCreator, kind: 'mat-' + res,
         prompt() { return 'E agarrar ' + info.label + ' (a mano)'; },
         use() {
@@ -705,8 +736,10 @@
     spawnMat('stone', 3, 5, false);
     spawnMat('metal', 1, 6.5, false);
 
-    const yardLight = new THREE.PointLight(0xfff1d6, 6, 70, 1);
-    yardLight.position.copy(frame.localToWorld(0, 12, 4));
+    // Luz alta de la zona de spawn: cuelga sobre el patio como un sol
+    // chico (el sol pálido direccional de world.js baña todo el hemisferio).
+    const yardLight = new THREE.PointLight(0xfff1d6, 7, 85, 1);
+    yardLight.position.copy(frame.localToWorld(0, 12, 7));
     scene.add(yardLight);
     const gateLight = new THREE.PointLight(0xffbb77, 4, 30, 1);
     gateLight.position.copy(outFrame.localToWorld(0, 1, 2.6));
@@ -733,43 +766,56 @@
       'mat-wood': 'rama', 'mat-stone': 'piedra', 'mat-metal': 'chatarra',
     };
 
-    function placeCreatorPickup(kind, ix, iz) {
+    function placeCreatorPickup(kind, ix, iz, far) {
       if (CREATOR_PICKUP_KINDS.indexOf(kind) < 0) return { ok: false, text: 'Eso no se puede poner' };
-      const x = ix;
-      const z = iz;
+      far = far ? 1 : 0;
+      // Marco de la geometría: la tesela de la celda (en el otro hemisferio
+      // el marco del polo la mandaba al ecuador, a cientos de metros).
+      const tp = tilePlacement(ix, iz, far);
+      const useFrame = tp.frame;
+      const lx = tp.lx;
+      const lz = tp.lz;
+      if (far && !useFrame) {
+        return { ok: false, text: 'Eso no se puede poner' };
+      }
+      const here = (useFrame || frame).localToWorld(lx, lz, 0.5);
       for (let i = 0; i < pickups.length; i++) {
         const p = pickups[i];
         if (!p.alive || !p.creator) continue;
-        if (Math.abs(p.x - x) < 0.9 && Math.abs(p.z - z) < 0.9) {
+        if (p.mesh && p.mesh.position.distanceTo(here) < 0.9) {
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
       }
       // Misma vara que los bloques: celda libre y sin solape con puerta,
       // bloques, mesas o nodos (usa el validador de build cuando está).
       if (buildRef && buildRef.propSpotFree) {
-        const why = buildRef.propSpotFree(ix, iz);
+        const why = buildRef.propSpotFree(ix, iz, far);
         if (why) return { ok: false, text: why };
       } else {
-        if (buildRef && buildRef.occupies && buildRef.occupies(ix, iz, 0)) {
+        if (buildRef && buildRef.occupies && buildRef.occupies(ix, iz, 0, far)) {
           return { ok: false, text: 'Ese lugar está ocupado' };
         }
         try {
-          const probe = frame.localToWorld(x, z, 0.5);
+          const probe = frame.localToWorld(ix, iz, 0.5);
           if (Colliders && Colliders.blocked(probe, 0.3, { feet: 0, top: 1.0 })) {
             return { ok: false, text: 'Ese lugar está ocupado' };
           }
         } catch (e) {}
       }
       let spec = null;
-      if (TOOL_LABEL[kind]) spec = toolPickup(kind, x, z, false, true);
-      else if (kind === 'food' || kind === 'toxin') spec = spawnEdible(kind, x, z, true);
-      else if (kind === 'ammo') spec = spawnAmmo(x, z, 12, true);
-      else if (kind === 'key') spec = spawnKey(x, z, true);
-      else if (kind === 'medkit') spec = spawnMedkit(x, z, true);
-      else if (kind === 'mat-wood') spec = spawnMat('wood', x, z, true);
-      else if (kind === 'mat-stone') spec = spawnMat('stone', x, z, true);
-      else if (kind === 'mat-metal') spec = spawnMat('metal', x, z, true);
+      if (TOOL_LABEL[kind]) spec = toolPickup(kind, lx, lz, false, true, useFrame);
+      else if (kind === 'food' || kind === 'toxin') spec = spawnEdible(kind, lx, lz, true, useFrame);
+      else if (kind === 'ammo') spec = spawnAmmo(lx, lz, 12, true, useFrame);
+      else if (kind === 'key') spec = spawnKey(lx, lz, true, useFrame);
+      else if (kind === 'medkit') spec = spawnMedkit(lx, lz, true, useFrame);
+      else if (kind === 'mat-wood') spec = spawnMat('wood', lx, lz, true, useFrame);
+      else if (kind === 'mat-stone') spec = spawnMat('stone', lx, lz, true, useFrame);
+      else if (kind === 'mat-metal') spec = spawnMat('metal', lx, lz, true, useFrame);
       if (!spec) return { ok: false, text: 'No se pudo poner' };
+      // Identidad en el chart (para guardar y para borrar por celda).
+      spec.gx = ix;
+      spec.gz = iz;
+      spec.gfar = far;
       return { ok: true, text: 'Puesto: ' + (CREATOR_PICKUP_NAMES[kind] || kind), pickup: spec };
     }
 
@@ -783,13 +829,19 @@
       return true;
     }
 
-    function tryDeleteCreatorPickupAt(ix, iz) {
+    function tryDeleteCreatorPickupAt(ix, iz, far) {
+      far = far ? 1 : 0;
       let best = null;
       let bestD = Infinity;
       for (let i = 0; i < pickups.length; i++) {
         const p = pickups[i];
         if (!p.alive || !p.creator) continue;
-        const d = Math.hypot(p.x - ix, p.z - iz);
+        // Identidad en el chart (las coordenadas de malla viven por tesela).
+        const px = (typeof p.gx === 'number') ? p.gx : p.x;
+        const pz = (typeof p.gz === 'number') ? p.gz : p.z;
+        const pfar = (typeof p.gfar === 'number') ? p.gfar : 0;
+        if (pfar !== far) continue;
+        const d = Math.hypot(px - ix, pz - iz);
         if (d < 1.1 && d < bestD) {
           best = p;
           bestD = d;
@@ -823,7 +875,10 @@
           } catch (e) {}
         }
         if (!kind) continue;
-        out.push({ kind: kind, x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100 });
+        const gx = (typeof p.gx === 'number') ? p.gx : p.x;
+        const gz = (typeof p.gz === 'number') ? p.gz : p.z;
+        const gfar = (typeof p.gfar === 'number') ? p.gfar : 0;
+        out.push({ kind: kind, x: Math.round(gx * 100) / 100, z: Math.round(gz * 100) / 100, far: gfar });
       }
       return out;
     }
@@ -834,7 +889,14 @@
       for (let i = 0; i < list.length; i++) {
         const d = list[i];
         if (!d || typeof d.x !== 'number' || typeof d.z !== 'number') continue;
-        const r = placeCreatorPickup(d.kind, Math.round(d.x), Math.round(d.z));
+        let rx = d.x;
+        let rfar = (typeof d.far === 'number') ? (d.far ? 1 : 0) : 0;
+        if (typeof d.far !== 'number' && rx >= 1000000) {
+          // Guardado viejo (v2 con FAR + remoto).
+          rx -= 1000000;
+          rfar = 1;
+        }
+        const r = placeCreatorPickup(d.kind, Math.round(rx), Math.round(d.z), rfar);
         if (r.ok) n += 1;
       }
       return n;
@@ -890,13 +952,14 @@
     // y la colocación manual. Devuelve '' si se puede, o el motivo.
     function benchSpotError(cell, playerPos) {
       if (!cell || cell.level !== 0) return 'La mesa va en el piso';
-      if (buildRef.occupies(cell.ix, cell.iz, 0)) return 'Ese lugar está ocupado';
+      const far = cell.far ? 1 : 0;
+      if (buildRef.occupies(cell.ix, cell.iz, 0, far)) return 'Ese lugar está ocupado';
       if (playerPos) {
         // En la tesela de la celda: exacto en todo el planeta.
         let px = null;
         let pz = null;
         if (buildRef.tileFor) {
-          const t = buildRef.tileFor(cell.ix, cell.iz);
+          const t = buildRef.tileFor(cell.ix, cell.iz, far);
           const loc = t.frame.worldToLocal(playerPos);
           px = loc.x + t.cx;
           pz = loc.z + t.cz;
@@ -912,15 +975,17 @@
       const x = cell.ix;
       const z = cell.iz;
       // Misma vara exacta que los bloques, en cualquier marco.
-      if (buildRef.overlaps && buildRef.overlaps(x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95)) {
+      if (buildRef.overlaps && buildRef.overlaps(x - 0.75, x + 0.75, z - 0.45, z + 0.45, 0, 0.95, far)) {
         return 'Ese lugar está ocupado';
       }
-      const gap = benchGapOk(x, z);
+      const gap = benchGapOk(x, z, far);
       if (gap) return gap;
-      const sx = Config.SPAWN_X || 0;
-      const sz = Config.SPAWN_Z || -2;
-      if (Math.hypot(x - sx, z - sz) < (Config.SPAWN_SAFE_R || 8)) {
-        return 'Zona de spawn: acá no se construye';
+      if (!far) {
+        const sx = Config.SPAWN_X || 0;
+        const sz = Config.SPAWN_Z || -2;
+        if (Math.hypot(x - sx, z - sz) < (Config.SPAWN_SAFE_R || 8)) {
+          return 'Zona de spawn: acá no se construye';
+        }
       }
       return '';
     }
@@ -992,15 +1057,46 @@
       };
     }
 
+    // Geometría de una celda del chart: su tesela y sus números locales.
+    // Sin build cableado, es el marco del polo (solo vale cerca del spawn).
+    function tilePlacement(ix, iz, far) {
+      if (buildRef && buildRef.tileFor) {
+        try {
+          const t = buildRef.tileFor(ix, iz, far ? 1 : 0);
+          return { frame: t.frame, lx: ix - t.cx, lz: iz - t.cz };
+        } catch (e) {}
+      }
+      return { frame: null, lx: ix, lz: iz };
+    }
+
     function spotAhead(worldPos, dir) {
+      // Todo en el radio local del jugador: en la antípoda el marco del
+      // polo pliega las coordenadas sobre el spawn y soltaba todo allá.
+      const up = worldPos.clone().normalize();
       const flat = (dir && dir.clone()) || frame.tangentZ.clone();
-      flat.addScaledVector(frame.up, -flat.dot(frame.up));
-      if (flat.lengthSq() < 1e-6) flat.copy(frame.tangentZ);
-      else flat.normalize();
-      // forward × up es un lado del chart. El signo solo corre el objeto.
-      const side = new THREE.Vector3().crossVectors(flat, frame.up);
+      flat.addScaledVector(up, -flat.dot(up));
+      if (flat.lengthSq() < 1e-6) flat.copy(frame.tangentZ).addScaledVector(up, -frame.tangentZ.dot(up));
+      if (flat.lengthSq() < 1e-6) flat.set(1, 0, 0).addScaledVector(up, -up.x);
+      if (flat.lengthSq() < 1e-6) flat.set(0, 0, 1).addScaledVector(up, -up.z);
+      flat.normalize();
+      // forward × up es un lado. El signo solo corre el objeto.
+      const side = new THREE.Vector3().crossVectors(flat, up);
       if (side.lengthSq() < 1e-6) side.copy(frame.tangentX);
       else side.normalize();
+      const toCell = (at) => {
+        if (buildRef && buildRef.worldToCell) {
+          try {
+            const c = buildRef.worldToCell(at);
+            if (c) return c;
+          } catch (e) {}
+        }
+        const local = frame.worldToLocal(at);
+        return { ix: local.x, iz: local.z, far: 0 };
+      };
+      const probeOf = (cell) => {
+        const tp = tilePlacement(cell.ix, cell.iz, cell.far);
+        return (tp.frame || frame).localToWorld(tp.lx, tp.lz, 0.8);
+      };
       const distances = [2.4, 3.4, 1.8];
       const laterals = [0, 1.2, -1.2];
       for (let d = 0; d < distances.length; d++) {
@@ -1008,14 +1104,14 @@
           const at = worldPos.clone()
             .addScaledVector(flat, distances[d])
             .addScaledVector(side, laterals[s]);
-          const local = frame.worldToLocal(at);
-          const probe = frame.localToWorld(local.x, local.z, 0.8);
+          const cell = toCell(at);
+          const probe = probeOf(cell);
           const blocked = Colliders && Colliders.blocked(probe, 0.3, { feet: 0, top: 1.2 });
-          if (!blocked) return { x: local.x, z: local.z };
+          if (!blocked) return { x: cell.ix, z: cell.iz, far: cell.far ? 1 : 0 };
         }
       }
-      const fallback = frame.worldToLocal(worldPos.clone().addScaledVector(flat, 2.4));
-      return { x: fallback.x, z: fallback.z };
+      const fb = toCell(worldPos.clone().addScaledVector(flat, 2.4));
+      return { x: fb.ix, z: fb.iz, far: fb.far ? 1 : 0 };
     }
 
     const enemySpawns = [
@@ -1245,32 +1341,36 @@
 
       drop(kind, worldPos, dir) {
         const spot = spotAhead(worldPos, dir);
+        const tp = tilePlacement(spot.x, spot.z, spot.far);
+        const sframe = tp.frame;
+        const sx = tp.lx;
+        const sz = tp.lz;
         if (kind === 'key') {
           if (!Inventory.takeKey()) return { ok: false, text: 'No tenés la llave' };
-          spawnKey(spot.x, spot.z);
+          spawnKey(sx, sz, false, sframe);
           return {
             ok: true, text: 'Soltaste la llave dorada',
-            x: spot.x, z: spot.z, pickup: pickups[pickups.length - 1],
+            x: spot.x, z: spot.z, far: spot.far, pickup: pickups[pickups.length - 1],
           };
         }
         if (kind === 'ammo') {
           if (!weaponRef) return { ok: false, text: 'No hay arma' };
           const rounds = weaponRef.takeReserve(12);
           if (!rounds) return { ok: false, text: 'No tenés balas de reserva' };
-          spawnAmmo(spot.x, spot.z, rounds);
+          spawnAmmo(sx, sz, rounds, false, sframe);
           return {
             ok: true, text: 'Soltaste balas (+' + rounds + ')',
-            x: spot.x, z: spot.z, pickup: pickups[pickups.length - 1],
+            x: spot.x, z: spot.z, far: spot.far, pickup: pickups[pickups.length - 1],
           };
         }
         if (TOOL_LABEL[kind]) {
           if (!Inventory.takeTool(kind)) {
             return { ok: false, text: 'No tenés ' + Inventory.toolName(kind).toLowerCase() };
           }
-          toolPickup(kind, spot.x, spot.z, false);
+          toolPickup(kind, sx, sz, false, false, sframe);
           return {
             ok: true, text: 'Soltaste ' + TOOL_LABEL[kind][0],
-            x: spot.x, z: spot.z, pickup: pickups[pickups.length - 1],
+            x: spot.x, z: spot.z, far: spot.far, pickup: pickups[pickups.length - 1],
           };
         }
         return { ok: false, text: 'Eso no se puede soltar' };
@@ -1288,7 +1388,7 @@
             benchGhost.visible = true;
             benchGhost.material.color.setHex(benchSpotError(cell, playerPos) ? 0xff6655 : 0x33ff66);
             if (buildRef.tileFor) {
-              const t = buildRef.tileFor(cell.ix, cell.iz);
+              const t = buildRef.tileFor(cell.ix, cell.iz, cell.far);
               Utils.placeOnSphere(benchGhost, t.frame, cell.ix - t.cx, cell.iz - t.cz, 0.5);
             } else {
               Utils.placeOnSphere(benchGhost, frame, cell.ix, cell.iz, 0.5);
@@ -1300,15 +1400,18 @@
         // Los anillos siguen a sus mesas (reclamo de zona).
         try {
           const alive = aliveBenches();
-          const sig = alive.map((bench) => bench.x + ',' + bench.z).join(';') || 'none';
+          const sig = alive.map((bench) => (bench.far ? 1 : 0) + ',' + bench.x + ',' + bench.z).join(';') || 'none';
           if (sig !== territorySig) updateTerritoryRing();
           if (ringMatShared) ringMatShared.opacity = 0.38 + Math.sin(t * 2.2) * 0.12;
         } catch (e) {}
         if (playerPos) {
-          const local = frame.worldToLocal(playerPos);
           pickups.forEach((item) => {
             if (!item.alive || !item.edible) return;
-            if (Math.hypot(local.x - item.x, local.z - item.z) >= 0.9) return;
+            // Cada cosa se mide en SU marco (las del otro hemisferio viven
+            // en teselas remotas; con el marco del polo daban ~0 siempre).
+            const F = item.frame || frame;
+            const l = F.worldToLocal(playerPos);
+            if (Math.hypot(l.x - item.x, l.z - item.z) >= 0.9) return;
             if (item.edible === 'food') {
               // Llena no se gasta: queda para cuando la necesites.
               if (PlayerHealth.hp >= PlayerHealth.maxHp) return;

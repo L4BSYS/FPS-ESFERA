@@ -17,14 +17,15 @@
     const BODY = 0.45;
 
     // Ojos a 1.3 m. Una caja de 1 m no esconde a alguien parado; la puerta sí.
-    function hasLineOfSight(x1, z1, x2, z2, ignore) {
+    function hasLineOfSight(x1, z1, x2, z2, ignore, frm) {
+      const useFrame = frm || frame;
       const dist = Math.hypot(x2 - x1, z2 - z1);
       const steps = Math.max(8, Math.ceil(dist / 0.25));
       for (let i = 1; i < steps; i++) {
         const t = i / steps;
         const sx = x1 + (x2 - x1) * t;
         const sz = z1 + (z2 - z1) * t;
-        const worldPos = frame.localToWorld(sx, sz, 1.3);
+        const worldPos = useFrame.localToWorld(sx, sz, 1.3);
         if (Colliders && Colliders.blocksSight(worldPos, ignore)) return false;
       }
       return true;
@@ -38,6 +39,10 @@
     }
 
     function spawnEnemy(spec) {
+      // Cada robot puede vivir en su propio chart (los del creador en el
+      // otro hemisferio usan el remoto; si no, el del patio). Todo lo que
+      // camina o mira lo hace en ese marco.
+      const eframe = spec.frame || frame;
       const mat = new THREE.MeshStandardMaterial({
         color: 0xcc3333, emissive: 0xaa2211, emissiveIntensity: 1, roughness: 0.45,
       });
@@ -52,10 +57,11 @@
       scene.add(mesh);
       const hp = spec.hp || 100;
       const col = Colliders
-        ? Colliders.add(frame, spec.x - BODY, spec.x + BODY, spec.z - BODY, spec.z + BODY, 0, 1.6)
+        ? Colliders.add(eframe, spec.x - BODY, spec.x + BODY, spec.z - BODY, spec.z + BODY, 0, 1.6)
         : null;
       const enemy = {
-        mesh, bar, col, localX: spec.x, localZ: spec.z, bob: Math.random() * 10,
+        mesh, bar, col, frame: eframe, far: spec.far ? 1 : 0,
+        localX: spec.x, localZ: spec.z, bob: Math.random() * 10,
         speed: spec.speed || 2.2,
         attackRange: spec.attack || 3.2,
         sightRange: spec.sight || 14,
@@ -84,26 +90,27 @@
       enemy.bar.material.color.setHex(ratio > 0.6 ? 0x44dd66 : (ratio > 0.3 ? 0xffaa33 : 0xff3344));
     }
 
-    function enemyBody(x, z) {
-      return frame.localToWorld(x, z, 1);
+    function enemyBody(x, z, frm) {
+      return (frm || frame).localToWorld(x, z, 1);
     }
 
-    function freeAt(x, z, ignore) {
+    function freeAt(x, z, ignore, frm) {
       if (!Colliders) return true;
-      return !Colliders.blocked(enemyBody(x, z), 0.35, { feet: 0, top: 1.6 }, ignore);
+      return !Colliders.blocked(enemyBody(x, z, frm), 0.35, { feet: 0, top: 1.6 }, ignore);
     }
 
     function steer(enemy, dx, dz, dt) {
+      const frm = enemy.frame || frame;
       const dist = Math.hypot(dx, dz);
       if (dist < 0.05) return;
       const nx = dx / dist;
       const nz = dz / dist;
       const step = enemy.speed * dt;
       // 0.85 m hacia el objetivo. Si está libre, suelta el rodeo y camina derecho.
-      if (freeAt(enemy.localX + nx * 0.85, enemy.localZ + nz * 0.85, enemy.col)) {
+      if (freeAt(enemy.localX + nx * 0.85, enemy.localZ + nz * 0.85, enemy.col, frm)) {
         enemy.detourX = 0;
         enemy.detourZ = 0;
-        if (freeAt(enemy.localX + nx * step, enemy.localZ + nz * step, enemy.col)) {
+        if (freeAt(enemy.localX + nx * step, enemy.localZ + nz * step, enemy.col, frm)) {
           enemy.localX += nx * step;
           enemy.localZ += nz * step;
         }
@@ -114,8 +121,8 @@
       if (!enemy.detourX && !enemy.detourZ) {
         const sideX = -nz;
         const sideZ = nx;
-        const left = freeAt(enemy.localX + sideX * 1.3, enemy.localZ + sideZ * 1.3, enemy.col);
-        const right = freeAt(enemy.localX - sideX * 1.3, enemy.localZ - sideZ * 1.3, enemy.col);
+        const left = freeAt(enemy.localX + sideX * 1.3, enemy.localZ + sideZ * 1.3, enemy.col, frm);
+        const right = freeAt(enemy.localX - sideX * 1.3, enemy.localZ - sideZ * 1.3, enemy.col, frm);
         let sign = (enemy.localX + enemy.localZ) >= 0 ? 1 : -1;
         if (left && !right) sign = 1;
         else if (right && !left) sign = -1;
@@ -124,7 +131,7 @@
       }
       const sx = enemy.localX + enemy.detourX * step;
       const sz = enemy.localZ + enemy.detourZ * step;
-      if (freeAt(sx, sz, enemy.col)) {
+      if (freeAt(sx, sz, enemy.col, frm)) {
         enemy.localX = sx;
         enemy.localZ = sz;
         return;
@@ -135,8 +142,9 @@
 
     function shootAt(enemy, x, z, height) {
       if (!guns || enemy.energy <= 30 || enemy.shotWait > 0) return;
-      const muzzle = frame.localToWorld(enemy.localX, enemy.localZ, 1.2);
-      const aim = frame.localToWorld(x, z, height);
+      const frm = enemy.frame || frame;
+      const muzzle = frm.localToWorld(enemy.localX, enemy.localZ, 1.2);
+      const aim = frm.localToWorld(x, z, height);
       const dir = aim.sub(muzzle).normalize();
       const up = muzzle.clone().normalize();
       const side = new THREE.Vector3().crossVectors(dir, up);
@@ -146,7 +154,7 @@
         dir.addScaledVector(up, (Math.random() - 0.5) * 0.04);
         dir.normalize();
       }
-      const origin = frame.localToWorld(enemy.localX, enemy.localZ, 1.2).addScaledVector(dir, 0.7);
+      const origin = frm.localToWorld(enemy.localX, enemy.localZ, 1.2).addScaledVector(dir, 0.7);
       guns.spawn({
         position: origin,
         direction: dir,
@@ -195,9 +203,11 @@
       const list = benchSource() || [];
       let best = null;
       let bestD = Infinity;
+      const efar = enemy.far ? 1 : 0;
       for (let i = 0; i < list.length; i++) {
         const bench = list[i];
         if (!bench.alive) continue;
+        if ((bench.far ? 1 : 0) !== efar) continue;
         const dist = Math.hypot(bench.x - enemy.localX, bench.z - enemy.localZ);
         if (dist < bestD) {
           bestD = dist;
@@ -216,18 +226,16 @@
       if (passive) {
         enemies.forEach((e) => {
           if (!e.alive) return;
-          window.Game.Utils.placeOnFrame(e.mesh, frame, e.localX, e.localZ, 0.8);
+          window.Game.Utils.placeOnFrame(e.mesh, e.frame || frame, e.localX, e.localZ, 0.8);
           if (e.col) syncBody(e);
         });
         return;
       }
-      const { x: px, z: pz } = frame.worldToLocalXZ(playerWorldPos);
-      const eye = frame.worldToLocal(playerWorldPos);
-      const aimH = Math.max(0.4, eye.h - 0.4);
       const now = performance.now();
 
       enemies.forEach((e) => {
         if (!e.alive) return;
+        const frm = e.frame || frame;
         e.shotWait = Math.max(0, e.shotWait - dt);
         e.energy = Math.min(e.maxEnergy, e.energy + 5 * dt);
         if (now - e.lastHurt > 4000 && e.hp < e.maxHp) {
@@ -236,10 +244,28 @@
           paintBar(e);
         }
 
+        // El cuerpo siempre se apoya en SU marco (vale en todo el planeta).
+        const idleBob = e.state === 'idle' ? 0.05 : 0.02;
+        window.Game.Utils.placeOnFrame(e.mesh, frm, e.localX, e.localZ, 0.8 + Math.sin(t * 2 + e.bob) * idleBob);
+        if (e.col) syncBody(e);
+        // Lejos en el mundo (p. ej. otra mitad del planeta) el jugador no
+        // existe para este robot: proyectarlo en su plano daría ~0 y lo
+        // pondría a perseguir un fantasma en su propia celda.
+        if (e.mesh.position.distanceTo(playerWorldPos) > e.chaseRange + 12) {
+          e.state = 'idle';
+          e.focusBench = null;
+          return;
+        }
+        const pzloc = frm.worldToLocalXZ(playerWorldPos);
+        const px = pzloc.x;
+        const pz = pzloc.z;
+        const eye = frm.worldToLocal(playerWorldPos);
+        const aimH = Math.max(0.4, eye.h - 0.4);
+
         const dx = px - e.localX;
         const dz = pz - e.localZ;
         const dist = Math.hypot(dx, dz);
-        const los = hasLineOfSight(e.localX, e.localZ, px, pz, e.col);
+        const los = hasLineOfSight(e.localX, e.localZ, px, pz, e.col, frm);
         if (los && dist < e.sightRange) {
           e.seen = true;
           e.seenX = px;
@@ -284,7 +310,7 @@
         if (e.state === 'chase' || e.state === 'attack') {
           if (e.focusBench) {
             if (benchDist > e.attackRange && benchDist <= e.rangedRange &&
-                hasLineOfSight(e.localX, e.localZ, e.focusBench.x, e.focusBench.z, e.col)) {
+                hasLineOfSight(e.localX, e.localZ, e.focusBench.x, e.focusBench.z, e.col, frm)) {
               shootAt(e, e.focusBench.x, e.focusBench.z, 0.7);
             }
           } else if (los && dist > e.attackRange && dist <= e.rangedRange) {
@@ -307,10 +333,12 @@
       });
 
       // separación entre enemigos, para que no se apilen
+      // (solo dentro del mismo chart: comparar hemisferios no tiene sentido).
       enemies.forEach((e) => {
         if (!e.alive) return;
         enemies.forEach((other) => {
           if (other === e || !other.alive) return;
+          if ((other.far ? 1 : 0) !== (e.far ? 1 : 0)) return;
           const dx = e.localX - other.localX;
           const dz = e.localZ - other.localZ;
           const dist = Math.hypot(dx, dz);
@@ -326,12 +354,21 @@
 
       enemies.forEach((e) => {
         if (!e.alive) return;
-        const bob = e.state === 'idle' ? 0.05 : 0.02;
-        const h = 0.8 + Math.sin(t * 2 + e.bob) * bob;
-        window.Game.Utils.placeOnFrame(e.mesh, frame, e.localX, e.localZ, h);
+        const frm = e.frame || frame;
+        // La orientación mira al jugador solo si está cerca en el mundo
+        // (si no, el plano lo pliega sobre la propia celda).
+        let faceX = null;
+        let faceZ = null;
+        if (e.mesh.position.distanceTo(playerWorldPos) <= e.chaseRange + 12) {
+          try {
+            const pl = frm.worldToLocalXZ(playerWorldPos);
+            faceX = pl.x;
+            faceZ = pl.z;
+          } catch (err) {}
+        }
         // +Z local del chart apunta a tangentZ. rotateY(θ) lo lleva a
         // (sin θ, 0, cos θ), o sea la dirección (dx, dz) hacia el jugador.
-        e.mesh.rotateY(Math.atan2(px - e.localX, pz - e.localZ));
+        if (faceX !== null) e.mesh.rotateY(Math.atan2(faceX - e.localX, faceZ - e.localZ));
         if (e.col) syncBody(e);
       });
     }
@@ -364,8 +401,11 @@
     // --- Creador: poner/sacar robots a mano ---
     const creatorEnemies = [];
 
-    function spawnOne(x, z, fromCreator) {
-      const enemy = spawnEnemy({ x: x, z: z, speed: 2.2, sight: 14, chase: 46, attack: 3.2, hp: 100 });
+    function spawnOne(x, z, fromCreator, far, chartFrame) {
+      const enemy = spawnEnemy({
+        x: x, z: z, speed: 2.2, sight: 14, chase: 46, attack: 3.2, hp: 100,
+        far: far ? 1 : 0, frame: chartFrame || undefined,
+      });
       enemies.push(enemy);
       if (fromCreator) {
         enemy.creator = true;
@@ -417,18 +457,26 @@
       for (let i = 0; i < creatorEnemies.length; i++) {
         const e = creatorEnemies[i];
         if (!e.alive) continue;
-        out.push({ x: Math.round(e.localX * 100) / 100, z: Math.round(e.localZ * 100) / 100 });
+        out.push({ x: Math.round(e.localX * 100) / 100, z: Math.round(e.localZ * 100) / 100, far: e.far ? 1 : 0 });
       }
       return out;
     }
 
-    function restoreCreatorEnemies(list) {
+    function restoreCreatorEnemies(list, chartFor) {
       if (!Array.isArray(list)) return 0;
       let n = 0;
       for (let i = 0; i < list.length; i++) {
         const d = list[i];
         if (!d || typeof d.x !== 'number' || typeof d.z !== 'number') continue;
-        spawnOne(Math.round(d.x), Math.round(d.z), true);
+        let rx = d.x;
+        let rfar = (typeof d.far === 'number') ? (d.far ? 1 : 0) : 0;
+        if (typeof d.far !== 'number' && rx >= 1000000) {
+          // Guardado viejo (v2 con FAR + remoto).
+          rx -= 1000000;
+          rfar = 1;
+        }
+        const frm = (typeof chartFor === 'function') ? chartFor(rfar) : undefined;
+        spawnOne(Math.round(rx), Math.round(d.z), true, rfar, frm);
         n += 1;
       }
       return n;
@@ -444,9 +492,9 @@
       },
       spawnAt: spawnAt,
       spawnOne: spawnOne,
-      canSpawnAt(x, z) {
+      canSpawnAt(x, z, far, chartFrame) {
         try {
-          return freeAt(x, z, null);
+          return freeAt(x, z, null, chartFrame || frame);
         } catch (e) {
           return true;
         }
