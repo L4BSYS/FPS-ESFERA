@@ -11,7 +11,18 @@
   let prevHp = 100;
   let paused = false;
   let rebindAction = null;
-  let pauseTab = 'status';
+  let pauseTab = 'play';
+  let menuMode = 'pause';
+  let introDone = null;
+  let introPage = 0;
+
+  const INTRO_STORE = 'esfera-intro-v1';
+
+  const INTRO_PAGES = [
+    ['Un sol pálido sobre un planeta esférico.', 'Tu mesa, tus herramientas y tu ingenio: eso es todo lo que traés.'],
+    ['Los robots cuidan la puerta de las antípodas.', 'Juntá recursos, crafteá un arma y abrite paso.'],
+    ['Encontrá la llave dorada, abrí la puerta', 'y cruzá al próximo mundo. Buena travesía.'],
+  ];
 
   const ICONS = {
     hands: '✋',
@@ -21,6 +32,8 @@
     pistol: '🔫',
     torch: '🔥',
   };
+
+  const RES_ICONS = { wood: '🪵', stone: '🪨', metal: '🔩' };
 
   const els = {};
 
@@ -99,59 +112,84 @@
       els.pause = el('div', 'sheet pause-sheet');
       els.pause.hidden = true;
       const pauseCard = el('div', 'sheet-card');
-      const pauseTitle = el('h2');
-      pauseTitle.textContent = 'Pausa';
+      els.pauseTitle = el('h2');
+      els.pauseTitle.textContent = 'Pausa';
       const tabRow = el('div', 'sheet-row');
-      const tabStatus = document.createElement('button');
-      tabStatus.type = 'button';
-      tabStatus.className = 'sheet-btn small';
-      tabStatus.textContent = 'Estado';
-      const tabSettings = document.createElement('button');
-      tabSettings.type = 'button';
-      tabSettings.className = 'sheet-btn small';
-      tabSettings.textContent = 'Ajustes';
-      const tabCreator = document.createElement('button');
-      tabCreator.type = 'button';
-      tabCreator.className = 'sheet-btn small';
-      tabCreator.textContent = 'Creador';
-      tabStatus.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        pauseTab = 'status';
-        paintPause();
+      const tabs = [
+        ['play', 'Jugar'],
+        ['scenes', 'Escenas'],
+        ['user', 'Usuario'],
+        ['settings', 'Ajustes'],
+        ['creator', 'Creador'],
+      ];
+      tabs.forEach(([id, label]) => {
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = 'sheet-btn small';
+        tab.textContent = label;
+        tab.dataset.tab = id;
+        tab.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          pauseTab = id;
+          paintPause();
+        });
+        tabRow.appendChild(tab);
       });
-      tabSettings.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        pauseTab = 'settings';
-        paintPause();
-      });
-      tabCreator.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        pauseTab = 'creator';
-        paintPause();
-      });
-      tabRow.append(tabStatus, tabSettings, tabCreator);
       els.pauseStats = el('p', 'craft-copy');
+      els.pauseTabs = tabRow;
       els.pauseBody = el('div', 'pause-body');
-      const resumeBtn = document.createElement('button');
-      resumeBtn.type = 'button';
-      resumeBtn.className = 'sheet-btn primary';
-      resumeBtn.textContent = 'Seguir';
-      resumeBtn.addEventListener('click', (event) => {
+      els.resumeBtn = document.createElement('button');
+      els.resumeBtn.type = 'button';
+      els.resumeBtn.className = 'sheet-btn primary';
+      els.resumeBtn.textContent = 'Seguir';
+      els.resumeBtn.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
         closePause();
         if (onResume) onResume();
       });
       const pauseHint = el('p', 'craft-hint');
-      pauseHint.textContent = 'Esc sigue. WASD, espacio, shift y 1-6 quedan fijos. G creador, B paleta.';
-      pauseCard.append(pauseTitle, tabRow, els.pauseStats, els.pauseBody, resumeBtn, pauseHint);
+      pauseHint.textContent = 'Esc sigue. El creador vive en su solapa (G lo prende).';
+      pauseCard.append(els.pauseTitle, tabRow, els.pauseStats, els.pauseBody, els.resumeBtn, pauseHint);
       els.pause.appendChild(pauseCard);
 
+      // Intro: la primera vez cuenta la historia, después entra directo.
+      els.intro = el('div', 'sheet intro-sheet');
+      els.intro.hidden = true;
+      const introCard = el('div', 'sheet-card');
+      const introKicker = el('p', 'intro-kicker');
+      introKicker.textContent = 'ESFERA · LA GRIETA';
+      els.introTitle = el('h2');
+      els.introTitle.textContent = 'Un sol pálido';
+      els.introLines = el('div', 'intro-lines');
+      els.introDots = el('p', 'intro-dots');
+      const introRow = el('div', 'sheet-row');
+      const introNext = document.createElement('button');
+      introNext.type = 'button';
+      introNext.className = 'sheet-btn primary';
+      introNext.textContent = 'Siguiente';
+      introNext.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        stepIntro(1);
+      });
+      const introSkip = document.createElement('button');
+      introSkip.type = 'button';
+      introSkip.className = 'sheet-btn';
+      introSkip.textContent = 'Saltar';
+      introSkip.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        finishIntro();
+      });
+      introRow.append(introSkip, introNext);
+      els.introNext = introNext;
+      introCard.append(introKicker, els.introTitle, els.introLines, els.introDots, introRow);
+      els.intro.appendChild(introCard);
+
       document.body.append(
-        root, els.cross, els.prompt, els.flash, els.hurt, els.panel, els.belt, els.death, els.pause
+        root, els.cross, els.prompt, els.flash, els.hurt, els.panel, els.belt, els.death, els.pause, els.intro
       );
     },
 
@@ -168,16 +206,24 @@
     },
 
     sync(state) {
-      els.health.textContent = 'Vida ' + Math.round(state.hp) + ' / ' + state.maxHp;
+      // UI compacta con iconos: una sola fila de estado, sin textos largos.
+      els.health.textContent = '♥ ' + Math.round(state.hp);
       els.health.classList.toggle('low', state.hp <= state.maxHp * 0.3);
-      els.tool.textContent = 'Herramienta: ' + state.toolName;
-      els.res.textContent = 'Madera ' + state.wood + '    Piedra ' + state.stone + '    Metal ' + state.metal;
-      els.stacks.textContent = 'Antorchas ' + (state.torch || 0) + '/' + (state.torchMax || 0);
-      els.key.textContent = state.hasKey ? 'Llave dorada: sí' : 'Llave dorada: no';
+      els.tool.textContent = (ICONS[state.active] || '✋') + ' ' + state.toolName;
+      els.res.textContent =
+        (RES_ICONS.wood + ' ' + state.wood + '  ' +
+         RES_ICONS.stone + ' ' + state.stone + '  ' +
+         RES_ICONS.metal + ' ' + state.metal);
+      els.stacks.textContent = '🔥 ' + (state.torch || 0) + '/' + (state.torchMax || 0);
+      els.key.textContent = state.hasKey ? '🔑' : '';
       els.ammo.textContent = state.showAmmo
-        ? (state.reloading ? 'Recargando…' : ('Balas ' + state.mag + ' / ' + state.reserve))
+        ? (state.reloading ? '⟳…' : ('🔫 ' + state.mag + '/' + state.reserve))
         : '';
-      els.prompt.textContent = state.prompt || '';
+      // Pistas: se achican por CSS y se pueden apagar en Ajustes.
+      const Settings = window.Game.Settings;
+      const showHints = !Settings || Settings.hints !== false;
+      els.prompt.textContent = showHints ? (state.prompt || '') : '';
+      els.prompt.style.display = showHints ? '' : 'none';
       paintBelt(state.tools || [], state.active);
       if (state.hp < prevHp) {
         els.hurt.classList.add('on');
@@ -235,7 +281,7 @@
       els.hint.textContent = '1-5 craftea lo básico. Clic o toque también vale. ' + packKey + ' o ' + interact + ' cierra.';
       els.list.textContent = '';
       const mats = el('p', 'craft-copy');
-      mats.textContent = 'Madera ' + state.wood + '   Piedra ' + state.stone + '   Metal ' + state.metal;
+      mats.textContent = '🪵 ' + state.wood + '   🪨 ' + state.stone + '   🔩 ' + state.metal;
       els.list.appendChild(mats);
       if (state.basic && state.basic.length) {
         const basicTitle = el('p', 'craft-copy');
@@ -331,16 +377,51 @@
 
     isPaused() { return paused; },
 
+    // El menú inicial y la pausa son el mismo menú: `mode` es 'start' (título
+    // del juego + Entrar) o 'pause' (Pausa + Seguir).
+    openMenu(mode) {
+      if (els.death && !els.death.hidden) return;
+      menuMode = (mode === 'start') ? 'start' : 'pause';
+      paused = true;
+      pauseTab = 'play';
+      rebindAction = null;
+      if (els.pauseTitle) {
+        els.pauseTitle.textContent = menuMode === 'start' ? 'ESFERA' : 'Pausa';
+      }
+      if (els.resumeBtn) {
+        els.resumeBtn.textContent = menuMode === 'start' ? '▶ Entrar al mundo' : 'Seguir';
+      }
+      els.pause.hidden = false;
+      paintPause();
+    },
+
+    menuMode() { return menuMode; },
+
     togglePause() {
       if (els.death && !els.death.hidden) return;
       if (paused) closePause();
-      else {
-        paused = true;
-        pauseTab = 'status';
-        rebindAction = null;
-        els.pause.hidden = false;
-        paintPause();
+      else window.Game.HUD.openMenu('pause');
+    },
+
+    hasSeenIntro() {
+      try {
+        return localStorage.getItem(INTRO_STORE) === '1';
+      } catch (e) {
+        return true;
       }
+    },
+
+    openIntro() {
+      introPage = 0;
+      els.intro.hidden = false;
+      paintIntro();
+    },
+
+    setIntroDone(fn) { introDone = (typeof fn === 'function') ? fn : null; },
+
+    replayIntro() {
+      try { localStorage.removeItem(INTRO_STORE); } catch (e) {}
+      window.Game.HUD.openIntro();
     },
 
     closePause: closePause,
@@ -380,41 +461,71 @@
     if (els.pause) els.pause.hidden = true;
   }
 
+  function paintIntro() {
+    if (!els.introLines) return;
+    els.introLines.textContent = '';
+    const page = INTRO_PAGES[Math.min(introPage, INTRO_PAGES.length - 1)];
+    page.forEach((line) => {
+      const p = el('p', 'craft-copy');
+      p.textContent = line;
+      els.introLines.appendChild(p);
+    });
+    if (els.introDots) {
+      let dots = '';
+      for (let i = 0; i < INTRO_PAGES.length; i++) {
+        dots += (i === introPage) ? '● ' : '○ ';
+      }
+      els.introDots.textContent = dots.trim();
+    }
+    if (els.introNext) {
+      els.introNext.textContent = introPage >= INTRO_PAGES.length - 1 ? '▶ Entrar' : 'Siguiente';
+    }
+  }
+
+  function stepIntro(delta) {
+    introPage += delta;
+    if (introPage >= INTRO_PAGES.length) {
+      finishIntro();
+      return;
+    }
+    paintIntro();
+  }
+
+  function finishIntro() {
+    try { localStorage.setItem(INTRO_STORE, '1'); } catch (e) {}
+    if (els.intro) els.intro.hidden = true;
+    if (introDone) {
+      const done = introDone;
+      introDone = null;
+      done();
+    }
+  }
+
   function paintPause() {
     if (!els.pauseBody) return;
     const Settings = window.Game.Settings;
     els.pauseBody.textContent = '';
+    // Marca la solapa activa.
+    try {
+      const tabs = els.pauseTabs ? els.pauseTabs.children : [];
+      for (let i = 0; i < tabs.length; i++) {
+        tabs[i].classList.toggle('active', tabs[i].dataset.tab === pauseTab);
+      }
+    } catch (e) {}
     if (pauseTab === 'creator') {
       paintCreatorTab();
       return;
     }
-    if (pauseTab !== 'settings') {
-      const note = el('p', 'craft-copy');
-      note.textContent = 'El patio queda quieto. Seguir vuelve al juego.';
-      els.pauseBody.appendChild(note);
-      // Controles antes en el overlay inicial: ahora viven acá.
-      const controls = el('div', 'pause-controls');
-      const rows = [
-        ['W A S D', 'Moverse'],
-        ['Mouse / Clic', 'Mirar / Puño derecho, cosechar, disparar o poner'],
-        ['E / Q', 'Tótem, mesa, puerta / Mochila y crafteo'],
-        ['Mesa en mano', 'Clic la pone · Esc la guarda'],
-        ['Mantener clic', 'Paredes rápidas con martillo (y en creador)'],
-        ['Anillo ámbar', 'Spawn: se arranca, no se construye'],
-        ['C / V', 'Material / Escalera'],
-        ['Der', 'Puño izquierdo, o borrar (creador: abre el menú)'],
-        ['F (antorcha en mano)', 'Plantar antorcha (gasta 1)'],
-        ['1-6', 'Cinturón, números o rueda'],
-        ['G / B', 'Creador / Menú'],
-        ['Shift / Espacio', 'Correr / Saltar (en creador: volar)'],
-        ['Esc', 'Pausa'],
-      ];
-      rows.forEach(([keys, action]) => {
-        const line = el('p', 'craft-copy');
-        line.textContent = keys + ' — ' + action;
-        controls.appendChild(line);
-      });
-      els.pauseBody.appendChild(controls);
+    if (pauseTab === 'scenes') {
+      paintScenesTab();
+      return;
+    }
+    if (pauseTab === 'user') {
+      paintUserTab();
+      return;
+    }
+    if (pauseTab === 'play') {
+      paintPlayTab();
       return;
     }
 
@@ -457,6 +568,7 @@
       Settings.setMusicVolume(value / 100);
     });
     addToggle('Efectos', Settings.sfx, () => Settings.setSfx(!Settings.sfx));
+    addToggle('Pistas en pantalla', Settings.hints, () => Settings.setHints(!Settings.hints));
     addSlider('Sensibilidad', 0.0005, 0.01, 0.0005, Settings.sensitivity, (value) => {
       Settings.setSensitivity(value);
     });
@@ -481,6 +593,139 @@
       row.append(name, button);
       els.pauseBody.appendChild(row);
     });
+  }
+
+  function paintPlayTab() {
+    const Levels = window.Game.Levels;
+    const User = window.Game.User;
+    const note = el('p', 'craft-copy');
+    let mission = '';
+    try {
+      if (Levels) {
+        const def = Levels.current();
+        mission = def ? (def.name + ': ' + def.mission) : '';
+      }
+    } catch (e) {}
+    const who = (User && User.name) ? User.name : 'Jugador';
+    note.textContent = (menuMode === 'start' ? ('Hola ' + who + '. ') : 'El mundo queda quieto. ') + mission;
+    els.pauseBody.appendChild(note);
+    const introRow = el('div', 'sheet-line');
+    const introName = el('span');
+    introName.textContent = 'Ver la intro de nuevo';
+    const introBtn = document.createElement('button');
+    introBtn.type = 'button';
+    introBtn.className = 'sheet-btn small';
+    introBtn.textContent = 'Ver';
+    introBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      window.Game.HUD.replayIntro();
+    });
+    introRow.append(introName, introBtn);
+    els.pauseBody.appendChild(introRow);
+    // Controles compactos (el detalle vive en Ajustes).
+    const controls = el('div', 'pause-controls');
+    const rows = [
+      ['WASD + mouse', 'Moverse y mirar'],
+      ['Clic / Der', 'Usar herramienta / alterno'],
+      ['E / Q', 'Interactuar / Mochila'],
+      ['C / V / F', 'Material / Escalera / Antorcha'],
+      ['1-6 · Shift · Espacio', 'Cinturón · Correr · Saltar'],
+      ['G / B / Esc', 'Creador / Menú / Pausa'],
+    ];
+    rows.forEach(([keys, action]) => {
+      const line = el('p', 'craft-copy');
+      line.textContent = keys + ' — ' + action;
+      controls.appendChild(line);
+    });
+    els.pauseBody.appendChild(controls);
+  }
+
+  function paintScenesTab() {
+    const Levels = window.Game.Levels;
+    if (!Levels) {
+      const none = el('p', 'craft-copy');
+      none.textContent = 'Sin escenas.';
+      els.pauseBody.appendChild(none);
+      return;
+    }
+    const info = el('p', 'craft-copy');
+    info.textContent = 'Cada escena es un planeta. Abrir la puerta con la llave desbloquea la siguiente. Se arranca con la mochila vacía.';
+    els.pauseBody.appendChild(info);
+    Levels.list().forEach((def) => {
+      const row = el('div', 'sheet-line');
+      const name = el('span');
+      const locked = !Levels.isUnlocked(def.id);
+      name.textContent = (locked ? '🔒 ' : '🌍 ') + def.name + ' — ' + def.mission;
+      row.appendChild(name);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'sheet-btn small';
+      button.textContent = locked ? 'Bloqueada' : 'Viajar';
+      button.disabled = locked;
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (locked) return;
+        if (def.id === Levels.current().id) {
+          closePause();
+          if (onResume) onResume();
+          return;
+        }
+        if (window.confirm('¿Viajar a ' + def.name + '? Se arranca con la mochila vacía.')) {
+          Levels.portalTo(def.id);
+        }
+      });
+      row.appendChild(button);
+      els.pauseBody.appendChild(row);
+    });
+  }
+
+  function paintUserTab() {
+    const User = window.Game.User;
+    if (!User) {
+      const none = el('p', 'craft-copy');
+      none.textContent = 'Sin usuario.';
+      els.pauseBody.appendChild(none);
+      return;
+    }
+    const info = el('p', 'craft-copy');
+    info.textContent = 'Tu identidad en el planeta. Mañana: tu avatar en el multijugador.';
+    els.pauseBody.appendChild(info);
+    const nameRow = el('div', 'sheet-line');
+    const nameLabel = el('span');
+    nameLabel.textContent = 'Nombre';
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.maxLength = 16;
+    nameInput.value = User.name;
+    nameInput.className = 'sheet-input';
+    nameInput.addEventListener('click', (event) => event.stopPropagation());
+    nameInput.addEventListener('change', () => {
+      nameInput.value = User.setName(nameInput.value);
+      paintPause();
+    });
+    nameRow.append(nameLabel, nameInput);
+    els.pauseBody.appendChild(nameRow);
+    const colorRow = el('div', 'sheet-line');
+    const colorLabel = el('span');
+    colorLabel.textContent = 'Color';
+    colorRow.appendChild(colorLabel);
+    User.colors().forEach((color) => {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.className = 'swatch' + (User.color === color ? ' active' : '');
+      swatch.style.backgroundColor = color;
+      swatch.title = color;
+      swatch.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        User.setColor(color);
+        paintPause();
+      });
+      colorRow.appendChild(swatch);
+    });
+    els.pauseBody.appendChild(colorRow);
   }
 
   function paintCreatorTab() {

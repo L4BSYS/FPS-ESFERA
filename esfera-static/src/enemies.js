@@ -60,7 +60,7 @@
         ? Colliders.add(eframe, spec.x - BODY, spec.x + BODY, spec.z - BODY, spec.z + BODY, 0, 1.6)
         : null;
       const enemy = {
-        mesh, bar, col, frame: eframe, far: spec.far ? 1 : 0,
+        mesh, bar, col, frame: eframe, far: spec.far ? 1 : 0, guard: !!spec.guard,
         localX: spec.x, localZ: spec.z, bob: Math.random() * 10,
         speed: spec.speed || 2.2,
         attackRange: spec.attack || 3.2,
@@ -401,10 +401,13 @@
     // --- Creador: poner/sacar robots a mano ---
     const creatorEnemies = [];
 
-    function spawnOne(x, z, fromCreator, far, chartFrame) {
+    function spawnOne(x, z, fromCreator, far, chartFrame, isGuard) {
       const enemy = spawnEnemy({
         x: x, z: z, speed: 2.2, sight: 14, chase: 46, attack: 3.2, hp: 100,
         far: far ? 1 : 0, frame: chartFrame || undefined,
+        // Guardián de la puerta: no cuenta para las oleadas (si no, las
+        // oleadas no arrancarían hasta matarlo) ni se guarda con el creador.
+        guard: !!isGuard,
       });
       enemies.push(enemy);
       if (fromCreator) {
@@ -490,6 +493,15 @@
         for (let i = 0; i < enemies.length; i++) if (enemies[i].alive) n += 1;
         return n;
       },
+      // Vivos sin contar guardianes: es lo que miran las oleadas (si no,
+      // los guardianes de la puerta bloquearían las oleadas para siempre).
+      foesAlive() {
+        let n = 0;
+        for (let i = 0; i < enemies.length; i++) {
+          if (enemies[i].alive && !enemies[i].guard) n += 1;
+        }
+        return n;
+      },
       spawnAt: spawnAt,
       spawnOne: spawnOne,
       canSpawnAt(x, z, far, chartFrame) {
@@ -540,7 +552,7 @@
           return { type: 'wake' };
         }
         return null;
-      }      if (enemies.aliveCount() > 0) {
+      }      if (enemies.foesAlive() > 0) {
         timer = 0;
         pending = false;
         return null;

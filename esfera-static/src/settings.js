@@ -32,6 +32,7 @@
   let music = true;
   let musicVolume = 1;
   let sfx = true;
+  let hints = true;
   let sensitivity = Config.MOUSE_SENSITIVITY;
   const listeners = [];
 
@@ -45,6 +46,7 @@
         music: music,
         musicVolume: musicVolume,
         sfx: sfx,
+        hints: hints,
         sensitivity: sensitivity,
         keys: keys,
       }));
@@ -59,6 +61,7 @@
       if (typeof data.music === 'boolean') music = data.music;
       if (typeof data.musicVolume === 'number') musicVolume = Math.max(0, Math.min(1, data.musicVolume));
       if (typeof data.sfx === 'boolean') sfx = data.sfx;
+      if (typeof data.hints === 'boolean') hints = data.hints;
       if (typeof data.sensitivity === 'number' && data.sensitivity > 0 && data.sensitivity < 0.05) {
         sensitivity = data.sensitivity;
       }
@@ -95,6 +98,7 @@
     get music() { return music; },
     get musicVolume() { return musicVolume; },
     get sfx() { return sfx; },
+    get hints() { return hints; },
     get sensitivity() { return sensitivity; },
 
     code(action) { return keys[action] || DEFAULTS[action]; },
@@ -119,6 +123,12 @@
 
     setSfx(on) {
       sfx = !!on;
+      save();
+      emit();
+    },
+
+    setHints(on) {
+      hints = !!on;
       save();
       emit();
     },

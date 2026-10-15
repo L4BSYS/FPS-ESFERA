@@ -4,7 +4,6 @@
 (function () {
   window.Game = window.Game || {};
 
-  const STORE = 'esfera-creator-v1';
   const LONG_REACH = 14;
 
   window.Game.createCreator = function (opts) {
@@ -16,14 +15,15 @@
     const scene = opts.scene || null;
     const Inventory = window.Game.Inventory;
     const HUD = window.Game.HUD;
+    // Guardado por nivel (lo construye Levels.creatorStore): cada mundo
+    // tiene su propio mundo construido.
+    const STORE = (opts && opts.store) || 'esfera-creator-v1';
 
     let on = false;
     let fly = true;
     let placeMode = { kind: 'block', id: 'wood' };
     let paletteOpen = false;
     let bar = null;
-    let toggleBtn = null;
-    let flyBtn = null;
     let btns = [];
     let hintEl = null;
     let saveTimer = 0;
@@ -356,45 +356,10 @@
       bar.style.display = show ? 'flex' : 'none';
     }
 
-    function refreshFloaters() {
-      if (toggleBtn) {
-        toggleBtn.textContent = on ? '🧱 Creador: SÍ' : '🧱 Creador: NO';
-        toggleBtn.classList.toggle('on', on);
-      }
-      if (flyBtn) {
-        flyBtn.style.display = on ? 'block' : 'none';
-        flyBtn.textContent = fly ? '🕊 Volar: SÍ' : '🕊 Volar: NO';
-        flyBtn.classList.toggle('on', fly);
-      }
-    }
-
-    function renderFloaters() {
-      if (!toggleBtn) {
-        toggleBtn = document.createElement('button');
-        toggleBtn.type = 'button';
-        toggleBtn.id = 'creatorToggle';
-        toggleBtn.title = 'Modo creador (G). Gratis + volar + paleta B.';
-        toggleBtn.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          toggle();
-        });
-        document.body.appendChild(toggleBtn);
-      }
-      if (!flyBtn) {
-        flyBtn = document.createElement('button');
-        flyBtn.type = 'button';
-        flyBtn.id = 'creatorFly';
-        flyBtn.title = 'Volar con Espacio/Shift';
-        flyBtn.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setFly(!fly);
-        });
-        document.body.appendChild(flyBtn);
-      }
-      refreshFloaters();
-    }
+    // Sin botones flotantes: el creador vive solo en el menú (solapa
+    // Creador). G lo prende/apaga y B abre la paleta, sin distracciones.
+    function refreshFloaters() {}
+    function renderFloaters() {}
 
     function togglePalette(force) {
       if (!on) return false;

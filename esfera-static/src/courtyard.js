@@ -31,13 +31,21 @@
    * Coordenadas (x, z) son las del LocalFrame. El jugador nace en z = -2
    * mirando hacia +z (tangentZ con yaw 0).
    */
-  window.Game.createCourtyard = function (scene) {
+  window.Game.createCourtyard = function (scene, opts) {
     const Config = window.Game.Config;
     const Utils = window.Game.Utils;
     const Colliders = window.Game.Colliders;
     const Inventory = window.Game.Inventory;
     const Audio = window.Game.Audio;
     const PlayerHealth = window.Game.PlayerHealth;
+    // Modo 'tutorial' = patio completo (tótems, herramientas, nodos de
+    // muestra). Modo 'clean' = mundo vacío: puerta + llave, anillo de spawn
+    // y sistemas (mesa, territorio, construcción); recursos y enemigos los
+    // ponen wilds y las oleadas. onPortal se llama una vez al abrir la
+    // puerta con la llave (salto de mundo, lo cablea main.js).
+    const mode = (opts && opts.mode) || 'tutorial';
+    const onPortal = (opts && typeof opts.onPortal === 'function') ? opts.onPortal : null;
+    const isClean = mode !== 'tutorial';
 
     const frame = window.Game.LocalFrame(new THREE.Vector3(0, Config.PLANET_RADIUS, 0));
     // Avanzada en las antípodas del spawn: puerta + llave al otro lado del
@@ -230,11 +238,13 @@
       return spec;
     }
 
-    spawnMedkit(0, 4, false);
+    if (!isClean) {
+      spawnMedkit(0, 4, false);
 
-    toolPickup('axe', -2.4, 7.2);
-    toolPickup('pickaxe', 2.4, 7.2);
-    toolPickup('pistol', 2.2, 10.2);
+      toolPickup('axe', -2.4, 7.2);
+      toolPickup('pickaxe', 2.4, 7.2);
+      toolPickup('pistol', 2.2, 10.2);
+    }
 
     function spawnKey(x, z, fromCreator, useFrame) {
       const key = new THREE.Group();
@@ -269,16 +279,34 @@
     // La llave espera cerca de la puerta, al otro lado del planeta.
     const outpostKey = spawnKey(3, 1, false, outFrame);
 
-    addNode('wood', -3.4, 11);
-    addNode('metal', 0, 11.4);
-    addNode('stone', 3.4, 11);
+    if (!isClean) {
+      addNode('wood', -3.4, 11);
+      addNode('metal', 0, 11.4);
+      addNode('stone', 3.4, 11);
+    }
 
     addBlock(0.6, -3, 1, 1, 1, 0x8b5a2b, outFrame);
     addBlock(-0.4, -3, 1, 1, 1, 0x8b5a2b, outFrame);
     addBlock(-1.7, 2, 1, 2.4, 1, 0x5a3d28, outFrame);
     addBlock(1.7, 2, 1, 2.4, 1, 0x5a3d28, outFrame);
 
-    const door = { x: 0, z: 2, w: 1.6, h: 2.5, d: 0.28, state: 'closed', lift: 0 };
+    // Guardianes de la puerta: robots en su marco (antípoda) para que el
+    // jugador tenga que ir armado. No cuentan para las oleadas ni se
+    // guardan con el creador (los spawnea main.js con spawnOne guardián).
+    const GUARD_SPOTS = [
+      { x: -3.5, z: -1.5 },
+      { x: 3.5, z: -2.5 },
+      { x: 0, z: 7 },
+    ];
+    const guardCount = (opts && typeof opts.guards === 'number')
+      ? Math.max(0, Math.min(GUARD_SPOTS.length, opts.guards | 0))
+      : GUARD_SPOTS.length;
+    const outpostGuards = [];
+    for (let i = 0; i < guardCount; i++) {
+      outpostGuards.push({ x: GUARD_SPOTS[i].x, z: GUARD_SPOTS[i].z, far: 1, frame: outFrame });
+    }
+
+    const door = { x: 0, z: 2, w: 1.6, h: 2.5, d: 0.28, state: 'closed', lift: 0, portaled: false };
     const doorMesh = new THREE.Mesh(
       new THREE.BoxGeometry(door.w, door.h, door.d),
       new THREE.MeshStandardMaterial({ color: 0x8a6232, roughness: 0.6, emissive: 0x773a08, emissiveIntensity: 0.7 })
@@ -311,6 +339,13 @@
         door.state = 'opening';
         doorCol.active = false;
         if (Audio) Audio.door();
+        // Misión cumplida: la puerta con llave es el portal al próximo mundo.
+        // Se deja que la animación se vea y después main.js cambia de nivel.
+        if (onPortal && !door.portaled) {
+          door.portaled = true;
+          setTimeout(() => { try { onPortal(); } catch (e) {} }, 1600);
+          return { type: 'flash', text: '¡Nivel completo! Cruzando al próximo mundo…' };
+        }
         return { type: 'flash', text: 'La puerta se abre' };
       },
     });
@@ -608,9 +643,14 @@
       });
     }
 
-    placeTotem(['Agarrá el hacha, el pico y la pistola con E.', '1 a 6, la rueda o el cinturón los equipan.', 'Clic en un nodo cosecha.'], -3.5, 2.4);
-    placeTotem(['Hacha: madera.', 'Pico: piedra y metal.', 'Comida y toxina se consumen solas.'], 3.6, 8.6);
-    placeTotem(['Martillo: clic pone, derecho borra.', 'C cambia el material. V escalera.', 'La puerta de las antípodas pide llave.'], 3.5, 14.6);
+    if (!isClean) {
+      placeTotem(['Agarrá el hacha, el pico y la pistola con E.', '1 a 6, la rueda o el cinturón los equipan.', 'Clic en un nodo cosecha.'], -3.5, 2.4);
+      placeTotem(['Hacha: madera.', 'Pico: piedra y metal.', 'Comida y toxina se consumen solas.'], 3.6, 8.6);
+      placeTotem(['Martillo: clic pone, derecho borra.', 'C cambia el material. V escalera.', 'La puerta pide llave y la cuidan robots.'], 3.5, 14.6);
+    } else if (opts && opts.mission) {
+      // Mundo limpio: un solo cartel con la misión, nada de tutorial.
+      placeTotem([opts.mission, 'Robots cuidan la puerta: andá armado.', 'Seguí el faro ámbar.'], 0, 3.5);
+    }
 
     // Comida y toxina: no son inventario. Se consumen al tocarlas, tanto
     // vos (cura/daño) como los robots (los atrae y los cura o los quema).
@@ -642,8 +682,10 @@
       return spec;
     }
 
-    spawnEdible('food', 1.6, 5.6, false);
-    spawnEdible('toxin', 4.4, 13.2, false);
+    if (!isClean) {
+      spawnEdible('food', 1.6, 5.6, false);
+      spawnEdible('toxin', 4.4, 13.2, false);
+    }
 
     // El que toca un comestible lo consume: devuelve 'food' o 'toxin'.
     // x,z van en el marco `frm` (el del enemigo que pisa, o el del polo).
@@ -692,7 +734,9 @@
       return spec;
     }
 
-    spawnAmmo(0, 9, 12);
+    if (!isClean) {
+      spawnAmmo(0, 9, 12);
+    }
 
     // Material suelto para arrancar a mano, sin herramientas: la progresión
     // es juntar → craftear básico en la mochila → mesa → reclamar la zona.
@@ -729,12 +773,19 @@
       return spec;
     }
 
-    spawnMat('wood', -2, 1, false);
-    spawnMat('wood', 2, 0.5, false);
-    spawnMat('wood', 0.5, 4, false);
-    spawnMat('stone', -3, 4, false);
-    spawnMat('stone', 3, 5, false);
-    spawnMat('metal', 1, 6.5, false);
+    if (!isClean) {
+      // Material suelto para arrancar a mano (martillo = 4 madera + 2
+      // piedra): que se pueda craftear sin caminar medio planeta.
+      spawnMat('wood', -2, 1, false);
+      spawnMat('wood', 2, 0.5, false);
+      spawnMat('wood', 0.5, 4, false);
+      spawnMat('wood', -3.5, -1, false);
+      spawnMat('wood', 3, -1.5, false);
+      spawnMat('stone', -3, 4, false);
+      spawnMat('stone', 3, 5, false);
+      spawnMat('stone', -4, 1.5, false);
+      spawnMat('metal', 1, 6.5, false);
+    }
 
     // Luz alta de la zona de spawn: cuelga sobre el patio como un sol
     // chico (el sol pálido direccional de world.js baña todo el hemisferio).
@@ -1121,6 +1172,9 @@
 
     return {
       frame,
+      mode,
+      isClean,
+      outpostGuards,
       enemySpawns,
       nodeCount: nodes.length,
 

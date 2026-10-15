@@ -59,13 +59,21 @@
         return makeFrame(target, ax, newUp, nz);
       },
 
-      /** Posición en el mundo → (x, z) en el plano del ancla y altura sobre la esfera. */
+      /** Posición en el mundo → (x, z) en el plano del ancla y altura sobre la esfera.
+       *  Es la inversa EXACTA de localToWorld (proyección gnomónica): antes era
+       *  el producto escalar ortográfico (R·seno), que a 40 m del ancla con un
+       *  planeta chico (R=100) difiere metros del R·tangente y las cajas no
+       *  coincidían con sus mallas. Más allá del horizonte se sujeta (falla
+       *  abierto: da lejos, nunca adentro de una caja ajena). */
       worldToLocal(worldPos) {
-        const rel = worldPos.clone().sub(anchor);
+        const R = Config.PLANET_RADIUS;
+        const d = worldPos.clone().normalize();
+        const cosA = d.dot(up);
+        const k = R / Math.max(cosA, 1e-4);
         return {
-          x: rel.dot(tangentX),
-          z: rel.dot(tangentZ),
-          h: worldPos.length() - Config.PLANET_RADIUS,
+          x: d.dot(tangentX) * k,
+          z: d.dot(tangentZ) * k,
+          h: worldPos.length() - R,
         };
       },
 

@@ -57,12 +57,21 @@
     return { mesh: mesh, height: height, colH: colH };
   }
 
-  window.Game.createWilds = function (scene, seed) {
+  window.Game.createWilds = function (scene, seed, opts) {
     const Config = window.Game.Config;
     const Colliders = window.Game.Colliders;
     const Utils = window.Game.Utils;
     const Inventory = window.Game.Inventory;
     const Audio = window.Game.Audio;
+    // Opciones por nivel (zonas de recursos): misma semilla + mismas zonas
+    // = mismo planeta en todas las máquinas.
+    const O = opts || {};
+    const COUNT = O.count != null ? O.count : 48;
+    const BAND_MIN = O.bandMin != null ? O.bandMin : 0.1;
+    const BAND_MAX = O.bandMax != null ? O.bandMax : 0.5;
+    const LANDMARK_COUNT = O.landmarks != null ? O.landmarks : 22;
+    const CAMP_COUNT = O.camps != null ? O.camps : 6;
+    const LOOSIE_COUNT = O.loosies != null ? O.loosies : 24;
 
     const rng = window.Game.makeRng ? window.Game.makeRng(seed) : Math.random;
     const nodes = [];

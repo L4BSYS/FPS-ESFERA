@@ -862,9 +862,23 @@
   document.body.appendChild(renderer.domElement);
   const canvas = renderer.domElement;
 
+  // Nivel (?level=N): cada nivel es un planeta distinto. El tutorial es
+  // chico y trae todas las mecánicas; los niveles son mundos limpios con
+  // misión (llave → puerta → próximo mundo). El portal recarga la página:
+  // inventario vacío y estado limpio en cada mundo.
+  const levelDef = window.Game.Levels ? window.Game.Levels.current() : null;
+  const levelId = levelDef ? levelDef.id : 0;
+  if (levelDef && levelDef.planetRadius) {
+    Config.PLANET_RADIUS = levelDef.planetRadius;
+    Config.TARGET_DISTANCE = levelDef.planetRadius + Config.EYE_HEIGHT;
+  }
+  document.documentElement.dataset.level = String(levelId);
+
   // Semilla del mapa (?seed=N): mismo número, mismo planeta en tu máquina
-  // y en la de cualquiera. Sin semilla, es la de fábrica.
-  const wildSeed = window.Game.seedFromUrl ? window.Game.seedFromUrl(1337) : 1337;
+  // y en la de cualquiera. Sin semilla, es la del nivel.
+  const wildSeed = window.Game.seedFromUrl
+    ? window.Game.seedFromUrl(levelDef ? levelDef.seed : 1337)
+    : ((levelDef ? levelDef.seed : 1337) >>> 0);
   const { referenceObjects, playerLight, secondaryLight } = window.Game.createWorld(scene, wildSeed);
   try {
     // El mundo arranca vacío: lo puebla wilds.js con la semilla.
@@ -875,15 +889,31 @@
     console.error(err);
   }
   const torches = window.Game.createTorches(scene);
-  const courtyard = window.Game.createCourtyard(scene);
+  const courtyard = window.Game.createCourtyard(scene, {
+    mode: levelDef ? levelDef.mode : 'tutorial',
+    mission: levelDef ? levelDef.mission : '',
+    guards: levelDef && typeof levelDef.guards === 'number' ? levelDef.guards : 3,
+    onPortal: levelDef && levelDef.next != null ? () => {
+      // Puerta con llave abierta = misión cumplida = próximo mundo.
+      try { HUD.flash('¡Nivel completo! Cruzando al próximo mundo…'); } catch (e) {}
+      setTimeout(() => { try { window.Game.Levels.portalTo(levelDef.next); } catch (e) {} }, 900);
+    } : (() => {
+      try { HUD.flash('La puerta se abre… el próximo mundo todavía no existe.'); } catch (e) {}
+    }),
+  });
   try {
-    const hp = courtyard.nodeHp.join(',');
-    if (hp !== '50,100,80') throw new Error('vida de nodos ' + hp);
-    if (courtyard.totemCount !== 3) throw new Error('tótems ' + courtyard.totemCount);
-    if (courtyard.toolIds.join(',') !== 'axe,pickaxe,pistol') {
-      throw new Error('herramientas en el piso ' + courtyard.toolIds.join(','));
+    if (courtyard.isClean) {
+      // Mundo limpio: sin patio de muestra, el chequeo del tutorial no aplica.
+      document.documentElement.dataset.yard = 'clean';
+    } else {
+      const hp = courtyard.nodeHp.join(',');
+      if (hp !== '50,100,80') throw new Error('vida de nodos ' + hp);
+      if (courtyard.totemCount !== 3) throw new Error('tótems ' + courtyard.totemCount);
+      if (courtyard.toolIds.join(',') !== 'axe,pickaxe,pistol') {
+        throw new Error('herramientas en el piso ' + courtyard.toolIds.join(','));
+      }
+      document.documentElement.dataset.yard = 'ok';
     }
-    document.documentElement.dataset.yard = 'ok';
   } catch (err) {
     document.documentElement.dataset.yard = err.message || String(err);
     console.error(err);
@@ -893,7 +923,8 @@
   courtyard.setBuild(build);
   // Campo salvaje con la semilla del mapa: mojones, recursos y campamentos
   // idénticos en todas las máquinas. Las oleadas salen de sus campamentos.
-  const wilds = window.Game.createWilds(scene, wildSeed);
+  // Cada nivel define sus zonas (levelDef.wilds).
+  const wilds = window.Game.createWilds(scene, wildSeed, levelDef ? levelDef.wilds : null);
   wilds.setCamera(camera);
   const enemiesSystem = window.Game.createEnemies(scene, courtyard.frame, wilds.spawnPoints);
   try {
@@ -908,6 +939,20 @@
     document.documentElement.dataset.solids = solidsError || 'ok';
   } catch (err) {
     document.documentElement.dataset.solids = err.message || String(err);
+    console.error(err);
+  }
+
+  // Guardianes de la puerta (antípodas): hay que ir armado para pasar de
+  // nivel. Viven en el marco de la avanzada, no cuentan para las oleadas
+  // ni se guardan con el creador.
+  try {
+    const guards = courtyard.outpostGuards || [];
+    guards.forEach((g) => {
+      enemiesSystem.spawnOne(g.x, g.z, false, g.far, g.frame, true);
+    });
+    if (guards.length) console.log('Guardianes en la puerta:', guards.length);
+    document.documentElement.dataset.guards = String(guards.length);
+  } catch (err) {
     console.error(err);
   }
 
@@ -1157,7 +1202,7 @@
   // Modo Creador (port del FPS): gratis + volar + paleta + guardado.
   // El load se hace después de los self-tests para no ocuparles las celdas.
   const Creator = window.Game.createCreator
-    ? window.Game.createCreator({ build: build, courtyard: courtyard, enemies: enemiesSystem, player: player, camera: camera, canvas: canvas, scene: scene })
+    ? window.Game.createCreator({ build: build, courtyard: courtyard, enemies: enemiesSystem, player: player, camera: camera, canvas: canvas, scene: scene, store: window.Game.Levels ? window.Game.Levels.creatorStore(levelId) : undefined })
     : null;
   if (Creator && Creator.setCamera) Creator.setCamera(camera);
   // La zona se cablea después de los self-tests (usan su propio build y
@@ -1569,10 +1614,11 @@
       Inventory.takeKey();
 
       Inventory.giveTool('axe');
+      const idsBefore = courtyard.toolIds.join(',');
       const axe = courtyard.drop('axe', player.position, ahead);
       spec = axe.pickup;
       if (!axe.ok || Inventory.hasTool('axe')) throw new Error('el hacha no se soltó');
-      if (courtyard.toolIds.join(',') !== 'axe,pickaxe,pistol') {
+      if (courtyard.toolIds.join(',') !== idsBefore) {
         throw new Error('soltar sumó un arma al patio fijo');
       }
       courtyard.tryInteract(courtyard.frame.localToWorld(axe.x, axe.z, Config.EYE_HEIGHT));
@@ -1624,6 +1670,8 @@
       if (restored > 0) console.log('Mundo creador restaurado:', restored);
     }
   } catch (err) { console.error(err); }
+
+  // La misión vive en la solapa Jugar del menú (se muestra al entrar).
 
   // La zona de construcción la da el banco del jugador (ver territoryStatus).
   if (build.setTerritoryProvider) {
@@ -1853,8 +1901,8 @@
     console.error(err);
   }
 
-  // Sin overlay inicial: el menú de pausa es la entrada.
-  // Arranca en pausa con los controles a la vista; Seguir pide el mouse.
+  // Menú inicial = la misma pausa. El mundo arranca en pausa; la primera
+  // vez muestra la intro y después el menú, si no entra directo al menú.
   if (HUD.setResumeHandler) {
     HUD.setResumeHandler(() => {
       try {
@@ -1865,7 +1913,12 @@
       } catch (e) {}
     });
   }
-  if (!HUD.isPaused()) HUD.togglePause();
+  if (!HUD.hasSeenIntro()) {
+    HUD.setIntroDone(() => HUD.openMenu('start'));
+    HUD.openIntro();
+  } else if (!HUD.isPaused()) {
+    HUD.openMenu('start');
+  }
 
   let hadTerritory = true;
   try {
@@ -2001,7 +2054,8 @@
         terrTxt = st.active ? '  ·  Zona SÍ' : '  ·  Zona NO';
       } catch (e) {}
       HUD.setPauseStats(
-        'Vida ' + Math.round(PlayerHealth.hp) +
+        (levelDef ? (levelDef.name + ' — ' + levelDef.mission) : 'La Grieta') +
+        '  ·  Vida ' + Math.round(PlayerHealth.hp) +
         '  ·  Bloques ' + build.blockCount() +
         '  ·  Enemigos ' + enemiesSystem.aliveCount() +
         '  ·  Oleada ' + waves.number +
