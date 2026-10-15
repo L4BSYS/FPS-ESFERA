@@ -1961,15 +1961,21 @@
           Creator.update(dt, Inventory.activeTool, player.position);
         } catch (e) {}
       }
-      // Comida y toxina: los robots también las consumen al pisarlas.
-      // La comida los cura, la toxina los quema.
+      // Comida y toxina: los robots también las consumen al pisarlas, en el
+      // patio y en el campo. La comida los cura, la toxina los quema.
       try {
-        if (courtyard.consumeEdibleAt && enemiesSystem.aliveCount() > 0) {
+        if ((courtyard.consumeEdibleAt || (wilds && wilds.eatEdibleAtWorld)) && enemiesSystem.aliveCount() > 0) {
           const foes = enemiesSystem.enemies;
           for (let i = 0; i < foes.length; i++) {
             const foe = foes[i];
             if (!foe.alive) continue;
-            const eaten = courtyard.consumeEdibleAt(foe.localX, foe.localZ, foe.frame);
+            let eaten = null;
+            if (courtyard.consumeEdibleAt) {
+              eaten = courtyard.consumeEdibleAt(foe.localX, foe.localZ, foe.frame);
+            }
+            if (!eaten && wilds && wilds.eatEdibleAtWorld && foe.mesh) {
+              eaten = wilds.eatEdibleAtWorld(foe.mesh.position);
+            }
             if (eaten === 'food' && enemiesSystem.healEnemy) enemiesSystem.healEnemy(foe, 25);
             else if (eaten === 'toxin') enemiesSystem.damageEnemy(foe, 20);
           }
@@ -2195,8 +2201,10 @@
   document.documentElement.dataset.seed = String(wildSeed);
   document.documentElement.dataset.nodes = String(courtyard.nodeCount);
   document.documentElement.dataset.enemies = String(enemiesSystem.enemies.length);
+  document.documentElement.dataset.critters = String(wilds.critters ? wilds.critters.length : 0);
   console.log('Patio de La Grieta sobre la esfera.');
   console.log('   Mojones:', wilds.landmarks.length);
   console.log('   Nodos salvajes:', wilds.nodes.length);
+  console.log('   Bichos salvajes:', wilds.critters ? wilds.critters.length : 0);
   console.log('   Enemigos:', enemiesSystem.enemies.length);
 })();

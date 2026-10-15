@@ -27,7 +27,7 @@
       waves: true,
       creator: true,
       guards: 2, // tutorial amable: la pistola se regala, 2 robots alcanzan
-      wilds: { count: 48, bandMin: 0.1, bandMax: 0.5, camps: 6, loosies: 40, landmarks: 22 },
+      wilds: { count: 48, bandMin: 0.05, bandMax: 3.09, camps: 6, loosies: 40, landmarks: 22, food: 38, toxin: 40, critters: 32 },
       // Gancho multijugador: el nivel 1 es donde va a vivir. Mismo planeta
       // para todos (semilla) + sincronizar solo deltas (ver seed.js).
       // El sector plano de FPS/js/17-net.js no sirve en la esfera: allá los
@@ -47,7 +47,7 @@
       creator: true,
       guards: 3, // puerta bien cuidada: hay que ir armado de verdad
       // Zonas en casi todo el planeta (banda ancha en ángulo desde el polo).
-      wilds: { count: 120, bandMin: 0.12, bandMax: 2.6, camps: 8, loosies: 480, landmarks: 130 },
+      wilds: { count: 120, bandMin: 0.05, bandMax: 3.09, camps: 8, loosies: 480, landmarks: 130, food: 240, toxin: 140, critters: 100 },
       net: { enabled: false },
     },
   ];

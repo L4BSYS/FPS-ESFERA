@@ -13,8 +13,92 @@
     const Colliders = window.Game.Colliders;
     const Audio = window.Game.Audio;
     const PlayerHealth = window.Game.PlayerHealth;
+    const NN = window.Game.NeuralNet || null;
 
     const BODY = 0.45;
+    const _pbUp = new THREE.Vector3();
+    const _pbTo = new THREE.Vector3();
+    const _pbRight = new THREE.Vector3();
+    const _pbM = new THREE.Matrix4();
+
+    // Apoya la malla con el arriba RADIAL (no el del chart) y mirando a
+    // (faceX, faceZ) del chart (null = adelante del chart). Con placeOnFrame
+    // el cuerpo se acostaba a medida que se alejaba del ancla del marco
+    // (a 40 m en un planeta de R=100, ~23° de tilt): de lado cada vez más.
+    function placeBody(mesh, frm, x, z, h, faceX, faceZ) {
+      mesh.position.copy(frm.localToWorld(x, z, h));
+      _pbUp.copy(mesh.position).normalize();
+      if (faceX === null || faceX === undefined) {
+        _pbTo.copy(frm.tangentZ).addScaledVector(_pbUp, -frm.tangentZ.dot(_pbUp));
+      } else {
+        _pbTo.copy(frm.localToWorld(faceX, faceZ, h)).sub(mesh.position);
+        _pbTo.addScaledVector(_pbUp, -_pbTo.dot(_pbUp));
+      }
+      if (_pbTo.lengthSq() < 1e-8) {
+        _pbTo.copy(frm.tangentX).addScaledVector(_pbUp, -frm.tangentX.dot(_pbUp));
+      }
+      _pbTo.normalize();
+      _pbRight.crossVectors(_pbUp, _pbTo).normalize();
+      _pbM.makeBasis(_pbRight, _pbUp, _pbTo);
+      mesh.quaternion.setFromRotationMatrix(_pbM);
+    }
+    // Cerebro del robot: 6 sensores → 4 impulsos (empuje, zigzag, agresión,
+    // cautela). Modula la máquina de estados clásica, no la reemplaza: con
+    // pesos al azar el comportamiento queda cerca del clásico.
+    const BRAIN_SIZES = [6, 6, 4];
+
+    function freshBrain() {
+      if (!NN) return null;
+      try {
+        return NN.fresh(BRAIN_SIZES);
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Hijo de oleada: cruce de dos cerebros vivos + mutación (a veces
+    // estructural). Así las oleadas evolucionan de verdad.
+    function inheritBrain() {
+      if (!NN) return freshBrain();
+      try {
+        const donors = enemies.filter((e) => e.alive && e.brain);
+        if (donors.length >= 2 && Math.random() < 0.6) {
+          const a = donors[(Math.random() * donors.length) | 0].brain;
+          const b = donors[(Math.random() * donors.length) | 0].brain;
+          const child = NN.NeuralNetwork.crossover(a, b);
+          child.mutate(0.12, 0.35);
+          if (Math.random() < 0.08) {
+            child.structuralMutate({ hidden: { neurons: [2, 10], min: 1 } });
+          }
+          return child;
+        }
+      } catch (e) {}
+      return freshBrain();
+    }
+
+    function brainTick(e, t, dist, los) {
+      if (!e.brain) {
+        e.brainOut = null;
+        return null;
+      }
+      const seenRecent = (e.seen && (t - e.seenAt) < 4) ? 1 : 0;
+      let out;
+      try {
+        out = e.brain.forward([
+          Math.max(0, Math.min(1, dist / Math.max(1, e.sightRange))),
+          los ? 1 : 0,
+          Math.max(0, Math.min(1, e.hp / e.maxHp)),
+          Math.max(0, Math.min(1, e.energy / e.maxEnergy)),
+          e.focusBench ? 1 : 0,
+          seenRecent,
+        ]);
+      } catch (err) {
+        e.brainOut = null;
+        return null;
+      }
+      e.brainOut = { push: out[0] || 0, strafe: out[1] || 0, aggression: out[2] || 0, caution: out[3] || 0 };
+      return e.brainOut;
+    }
 
     // Ojos a 1.3 m. Una caja de 1 m no esconde a alguien parado; la puerta sí.
     function hasLineOfSight(x1, z1, x2, z2, ignore, frm) {
@@ -61,7 +145,14 @@
         : null;
       const enemy = {
         mesh, bar, col, frame: eframe, far: spec.far ? 1 : 0, guard: !!spec.guard,
+        brain: spec.brain || freshBrain(), brainOut: null,
         localX: spec.x, localZ: spec.z, bob: Math.random() * 10,
+        faceX: spec.x, faceZ: spec.z + 1,
+        // Hogar y patrulla ambiente: quieto del todo queda solo en el modo
+        // creador pasivo. Los guardianes rondan corto (no se alejan).
+        homeX: spec.x, homeZ: spec.z,
+        patrolR: spec.patrolR != null ? spec.patrolR : (spec.guard ? 2.5 : 4),
+        wpX: spec.x, wpZ: spec.z, wpT: 2 + Math.random() * 3,
         speed: spec.speed || 2.2,
         attackRange: spec.attack || 3.2,
         sightRange: spec.sight || 14,
@@ -99,13 +190,23 @@
       return !Colliders.blocked(enemyBody(x, z, frm), 0.35, { feet: 0, top: 1.6 }, ignore);
     }
 
-    function steer(enemy, dx, dz, dt) {
+    function steer(enemy, dx, dz, dt, strafeAmt, speedMul) {
       const frm = enemy.frame || frame;
       const dist = Math.hypot(dx, dz);
       if (dist < 0.05) return;
-      const nx = dx / dist;
-      const nz = dz / dist;
-      const step = enemy.speed * dt;
+      let nx = dx / dist;
+      let nz = dz / dist;
+      // Zigzag neuronal: solo a cielo abierto (con rodeo de muro se respeta
+      // el rodeo determinista, para no zigzaguear contra la pared).
+      const strafe = strafeAmt || 0;
+      if (strafe !== 0 && !enemy.detourX && !enemy.detourZ) {
+        const sx = -nz * strafe * 0.6;
+        const sz = nx * strafe * 0.6;
+        const inv = 1 / Math.max(1e-6, Math.hypot(nx + sx, nz + sz));
+        nx = (nx + sx) * inv;
+        nz = (nz + sz) * inv;
+      }
+      const step = enemy.speed * dt * (speedMul == null ? 1 : speedMul);
       // 0.85 m hacia el objetivo. Si está libre, suelta el rodeo y camina derecho.
       if (freeAt(enemy.localX + nx * 0.85, enemy.localZ + nz * 0.85, enemy.col, frm)) {
         enemy.detourX = 0;
@@ -138,6 +239,24 @@
       }
       enemy.detourX = 0;
       enemy.detourZ = 0;
+    }
+
+    // Ronda ambiente: waypoints cerca del hogar, despacio. Acotada a
+    // propósito (más corta que el vagabundeo de los bichos): el robot
+    // cuida su zona en vez de perderse por el planeta.
+    function patrol(e, dt) {
+      const dx = e.wpX - e.localX;
+      const dz = e.wpZ - e.localZ;
+      e.wpT -= dt;
+      if (Math.hypot(dx, dz) < 0.5 || e.wpT <= 0) {
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.random() * (e.patrolR || 4);
+        e.wpX = e.homeX + Math.cos(a) * r;
+        e.wpZ = e.homeZ + Math.sin(a) * r;
+        e.wpT = 3 + Math.random() * 4;
+        return;
+      }
+      steer(e, dx, dz, dt, 0, 0.35);
     }
 
     function shootAt(enemy, x, z, height) {
@@ -193,6 +312,7 @@
           chase: sp.chase,
           attack: sp.attack,
           hp: sp.hp,
+          brain: inheritBrain(),
         }));
         made += 1;
       }
@@ -226,7 +346,8 @@
       if (passive) {
         enemies.forEach((e) => {
           if (!e.alive) return;
-          window.Game.Utils.placeOnFrame(e.mesh, e.frame || frame, e.localX, e.localZ, 0.8);
+          patrol(e, dt);
+          placeBody(e.mesh, e.frame || frame, e.localX, e.localZ, 0.8, null, null);
           if (e.col) syncBody(e);
         });
         return;
@@ -244,16 +365,16 @@
           paintBar(e);
         }
 
-        // El cuerpo siempre se apoya en SU marco (vale en todo el planeta).
-        const idleBob = e.state === 'idle' ? 0.05 : 0.02;
-        window.Game.Utils.placeOnFrame(e.mesh, frm, e.localX, e.localZ, 0.8 + Math.sin(t * 2 + e.bob) * idleBob);
-        if (e.col) syncBody(e);
+        // La malla se apoya al final (con facing) o en la rama dormida.
         // Lejos en el mundo (p. ej. otra mitad del planeta) el jugador no
         // existe para este robot: proyectarlo en su plano daría ~0 y lo
         // pondría a perseguir un fantasma en su propia celda.
         if (e.mesh.position.distanceTo(playerWorldPos) > e.chaseRange + 12) {
           e.state = 'idle';
           e.focusBench = null;
+          patrol(e, dt);
+          placeBody(e.mesh, frm, e.localX, e.localZ, 0.8, null, null);
+          if (e.col) syncBody(e);
           return;
         }
         const pzloc = frm.worldToLocalXZ(playerWorldPos);
@@ -266,7 +387,13 @@
         const dz = pz - e.localZ;
         const dist = Math.hypot(dx, dz);
         const los = hasLineOfSight(e.localX, e.localZ, px, pz, e.col, frm);
-        if (los && dist < e.sightRange) {
+        // Cerebro: modula vista, coraje y alcance según lo que siente.
+        const bo = brainTick(e, t, dist, los);
+        const effSight = e.sightRange * (1 + 0.25 * (bo ? bo.aggression : 0));
+        const fleeAt = 0.25 + 0.10 * (bo ? bo.caution : 0);
+        const effAttack = e.attackRange * (1 + 0.3 * (bo ? bo.push : 0));
+        const strafe = (los && bo) ? bo.strafe : 0;
+        if (los && dist < effSight) {
           e.seen = true;
           e.seenX = px;
           e.seenZ = pz;
@@ -275,9 +402,9 @@
 
         e.focusBench = e.seen ? nearestBench(e, dist) : null;
         const ratio = e.hp / e.maxHp;
-        if (e.state !== 'flee' && ratio < 0.25 && e.seen && dist < e.sightRange) {
+        if (e.state !== 'flee' && ratio < fleeAt && e.seen && dist < effSight) {
           e.state = 'flee';
-        } else if (e.state === 'flee' && (dist > e.sightRange * 1.5 || ratio > 0.5)) {
+        } else if (e.state === 'flee' && (dist > effSight * 1.5 || ratio > 0.5)) {
           e.state = 'chase';
         }
 
@@ -290,9 +417,9 @@
           if (!remembers) {
             e.state = 'idle';
             e.focusBench = null;
-          } else if (e.focusBench && benchDist <= e.attackRange) {
+          } else if (e.focusBench && benchDist <= effAttack) {
             e.state = 'attack';
-          } else if (!e.focusBench && los && dist <= e.attackRange) {
+          } else if (!e.focusBench && los && dist <= effAttack) {
             e.state = 'attack';
           } else {
             e.state = 'chase';
@@ -300,20 +427,22 @@
         }
 
         if (e.state === 'chase') {
-          if (e.focusBench) steer(e, e.focusBench.x - e.localX, e.focusBench.z - e.localZ, dt);
-          else if (!los) steer(e, e.seenX - e.localX, e.seenZ - e.localZ, dt);
-          else steer(e, dx, dz, dt);
+          if (e.focusBench) steer(e, e.focusBench.x - e.localX, e.focusBench.z - e.localZ, dt, strafe);
+          else if (!los) steer(e, e.seenX - e.localX, e.seenZ - e.localZ, dt, 0);
+          else steer(e, dx, dz, dt, strafe);
         } else if (e.state === 'flee') {
-          steer(e, -dx, -dz, dt);
+          steer(e, -dx, -dz, dt, 0);
+        } else if (e.state === 'idle') {
+          patrol(e, dt);
         }
 
         if (e.state === 'chase' || e.state === 'attack') {
           if (e.focusBench) {
-            if (benchDist > e.attackRange && benchDist <= e.rangedRange &&
+            if (benchDist > effAttack && benchDist <= e.rangedRange &&
                 hasLineOfSight(e.localX, e.localZ, e.focusBench.x, e.focusBench.z, e.col, frm)) {
               shootAt(e, e.focusBench.x, e.focusBench.z, 0.7);
             }
-          } else if (los && dist > e.attackRange && dist <= e.rangedRange) {
+          } else if (los && dist > effAttack && dist <= e.rangedRange) {
             shootAt(e, px, pz, aimH);
           }
         }
@@ -356,19 +485,18 @@
         if (!e.alive) return;
         const frm = e.frame || frame;
         // La orientación mira al jugador solo si está cerca en el mundo
-        // (si no, el plano lo pliega sobre la propia celda).
-        let faceX = null;
-        let faceZ = null;
+        // (si no, el plano lo pliega sobre la propia celda): se guarda para
+        // no girar de golpe cuando se aleja.
         if (e.mesh.position.distanceTo(playerWorldPos) <= e.chaseRange + 12) {
           try {
             const pl = frm.worldToLocalXZ(playerWorldPos);
-            faceX = pl.x;
-            faceZ = pl.z;
+            e.faceX = pl.x;
+            e.faceZ = pl.z;
           } catch (err) {}
         }
-        // +Z local del chart apunta a tangentZ. rotateY(θ) lo lleva a
-        // (sin θ, 0, cos θ), o sea la dirección (dx, dz) hacia el jugador.
-        if (faceX !== null) e.mesh.rotateY(Math.atan2(faceX - e.localX, faceZ - e.localZ));
+        const bob = e.state === 'idle' ? 0.05 : 0.02;
+        const h = 0.8 + Math.sin(t * 2 + e.bob) * bob;
+        placeBody(e.mesh, frm, e.localX, e.localZ, h, e.faceX, e.faceZ);
         if (e.col) syncBody(e);
       });
     }
