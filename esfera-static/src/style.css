@@ -285,7 +285,60 @@ canvas {
 .craft-panel h2 {
   font-weight: 500;
   font-size: 1.25rem;
-  margin-bottom: 0.8rem;
+  margin-bottom: 0.15rem;
+  padding-right: 2.2rem;
+}
+
+/* Botón cerrar (táctil: sin Esc en móvil) */
+.panel-close {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.8rem;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  color: #f3e6c8;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+
+.panel-close:active { background: rgba(255, 255, 255, 0.18); }
+
+/* Subtítulo del menú (estado de la mesa, etc.) */
+.panel-sub {
+  margin: 0 0 0.5rem;
+  color: #a89474;
+  font-size: 0.85rem;
+}
+
+/* Grupos y filas compartidos por mesa y mochila */
+.menu-group {
+  margin: 0.7rem 0 0.1rem;
+  color: #7dffb2;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.menu-group:first-child { margin-top: 0.2rem; }
+
+.mats-row {
+  font-size: 1.15rem;
+  margin: 0.1rem 0 0.2rem;
+  letter-spacing: 0.05em;
+}
+
+.craft-list .menu-btn {
+  min-height: 46px;
+  font-size: 0.98rem;
+}
+
+@media (pointer: coarse) {
+  .craft-list .menu-btn { min-height: 52px; font-size: 1.02rem; }
+  .sheet-btn.small { padding: 0.55rem 0.8rem; font-size: 1rem; }
+  .belt-slot { width: 58px; height: 58px; }
 }
 
 .craft-list { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -622,6 +675,29 @@ canvas {
 .pause-body {
   font-family: 'VT323', 'Courier New', monospace;
   font-size: 19px;
+}
+
+.menu-group,
+.panel-sub,
+.mats-row {
+  font-family: 'VT323', 'Courier New', monospace;
+}
+
+.menu-group {
+  color: var(--rg-green);
+  font-size: 18px;
+}
+
+.panel-sub { color: var(--rg-dim); }
+
+.mats-row { color: var(--rg-ink); }
+
+.panel-close {
+  font-family: 'VT323', 'Courier New', monospace;
+  background: #0b0e0b;
+  border: 2px solid var(--rg-line);
+  color: var(--rg-ink);
+  box-shadow: 2px 2px 0 #000;
 }
 
 .pause-controls .craft-copy {

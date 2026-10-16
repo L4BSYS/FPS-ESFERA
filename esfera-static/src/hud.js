@@ -50,6 +50,57 @@
     els.list.textContent = '';
   }
 
+  // Botón grande de menú (dedo + mouse): misma estética en mesa y mochila.
+  function craftButton(label, enabled, run) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'menu-btn';
+    button.textContent = label;
+    button.disabled = !enabled;
+    const act = (event) => {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (button.disabled) return;
+      run();
+    };
+    button.addEventListener('click', act);
+    button.addEventListener('touchstart', act, { passive: false });
+    return button;
+  }
+
+  function menuSection(title) {
+    const head = el('p', 'menu-group');
+    head.textContent = title;
+    els.list.appendChild(head);
+  }
+
+  function menuLine(icon, label, buttons) {
+    const row = el('div', 'sheet-line');
+    const name = el('span');
+    name.textContent = icon + ' ' + label;
+    row.appendChild(name);
+    (buttons || []).forEach((button) => {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.className = 'sheet-btn small' + (button.on ? ' active' : '');
+      node.disabled = !!button.disabled;
+      node.textContent = button.label;
+      node.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        button.run();
+      });
+      row.appendChild(node);
+    });
+    els.list.appendChild(row);
+  }
+
+  // Grupos del menú de mesa, en orden de aparición.
+  const CRAFT_GROUP_ORDER = ['Herramientas', 'Mesa', 'Suministros', 'Zona', 'Varios'];
+  let lastCraftRows = [];
+
   window.Game.HUD = {
     init() {
       const root = el('div', 'hud');
@@ -70,11 +121,23 @@
       els.panel.hidden = true;
       els.title = el('h2');
       els.title.textContent = 'Mesa de trabajo';
+      els.closeBtn = document.createElement('button');
+      els.closeBtn.type = 'button';
+      els.closeBtn.className = 'panel-close';
+      els.closeBtn.textContent = '✕';
+      els.closeBtn.title = 'Cerrar';
+      els.closeBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        closeModal();
+        if (onResume) onResume();
+      });
+      els.subtitle = el('p', 'panel-sub');
       els.list = el('div', 'craft-list');
       els.hint = el('p', 'craft-hint');
       const interactKey = window.Game.Settings ? window.Game.Settings.label('interact') : 'E';
       els.hint.textContent = 'Números 1 a 8 craftean. ' + interactKey + ' cierra.';
-      els.panel.append(els.title, els.list, els.hint);
+      els.panel.append(els.closeBtn, els.title, els.subtitle, els.list, els.hint);
 
       els.belt = el('div', 'belt');
 
@@ -214,7 +277,8 @@
         (RES_ICONS.wood + ' ' + state.wood + '  ' +
          RES_ICONS.stone + ' ' + state.stone + '  ' +
          RES_ICONS.metal + ' ' + state.metal);
-      els.stacks.textContent = '🔥 ' + (state.torch || 0) + '/' + (state.torchMax || 0);
+      els.stacks.textContent = '🔥 ' + (state.torch || 0) + '/' + (state.torchMax || 0) +
+        '  ➕ ' + (state.bandage || 0) + '/' + (state.bandageMax || 0);
       els.key.textContent = state.hasKey ? '🔑' : '';
       els.ammo.textContent = state.showAmmo
         ? (state.reloading ? '⟳…' : ('🔫 ' + state.mag + '/' + state.reserve))
@@ -244,30 +308,32 @@
     isPackOpen() { return modal === 'pack'; },
     isTotemOpen() { return modal === 'totem'; },
 
-    openCraft(rows, onPick, titleText) {
+    openCraft(rows, onPick, titleText, subText) {
       modal = 'craft';
       pickCb = onPick;
       els.panel.hidden = false;
-      els.title.textContent = titleText || 'Mesa de trabajo';
+      els.title.textContent = titleText || '🛠 Mesa de trabajo';
+      els.subtitle.textContent = subText || '';
+      els.subtitle.style.display = subText ? '' : 'none';
+      // Ordenadas por grupo para leer; el número es la posición (1..N) y
+      // se mapea a la receta real (pickCraft hace lo mismo con el teclado).
+      const order = {};
+      CRAFT_GROUP_ORDER.forEach((g, i) => { order[g] = i; });
+      lastCraftRows = rows.slice().sort((a, b) =>
+        ((order[a.group] != null ? order[a.group] : 99) - (order[b.group] != null ? order[b.group] : 99)) ||
+        (a.index - b.index));
       const interactKey = window.Game.Settings ? window.Game.Settings.label('interact') : 'E';
-      els.hint.textContent = 'Números 1 a ' + rows.length + ' craftean. Clic o toque también vale. ' + interactKey + ' cierra.';
+      els.hint.textContent = 'Toque o números 1 a ' + lastCraftRows.length + '. ' + interactKey + ' o ✕ cierra.';
       els.list.textContent = '';
-      rows.forEach((row) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = (row.index + 1) + '   ' + row.label + (row.reason ? ' — ' + row.reason : '');
-        button.disabled = !row.enabled;
-        const pick = (event) => {
-          if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-          }
-          if (button.disabled) return;
-          onPick(row.index);
-        };
-        button.addEventListener('click', pick);
-        button.addEventListener('touchstart', pick, { passive: false });
-        els.list.appendChild(button);
+      let lastGroup = null;
+      lastCraftRows.forEach((row, pos) => {
+        if (row.group && row.group !== lastGroup) {
+          lastGroup = row.group;
+          const head = el('p', 'menu-group');
+          head.textContent = lastGroup;
+          els.list.appendChild(head);
+        }
+        els.list.appendChild(craftButton((pos + 1) + '  ' + row.label + (row.reason ? ' — ' + row.reason : ''), row.enabled, () => onPick(row.index)));
       });
     },
 
@@ -275,68 +341,59 @@
       modal = 'pack';
       pickCb = null;
       els.panel.hidden = false;
-      els.title.textContent = 'Mochila';
+      els.title.textContent = '🎒 Mochila';
+      els.subtitle.textContent = state.subtitle || '';
+      els.subtitle.style.display = state.subtitle ? '' : 'none';
       const packKey = window.Game.Settings ? window.Game.Settings.label('pack') : 'Q';
       const interact = window.Game.Settings ? window.Game.Settings.label('interact') : 'E';
-      els.hint.textContent = '1-5 craftea lo básico. Clic o toque también vale. ' + packKey + ' o ' + interact + ' cierra.';
+      els.hint.textContent = '1-5 craftea lo básico. ' + packKey + ', ' + interact + ' o ✕ cierra.';
       els.list.textContent = '';
-      const mats = el('p', 'craft-copy');
-      mats.textContent = '🪵 ' + state.wood + '   🪨 ' + state.stone + '   🔩 ' + state.metal;
+      // Materiales con iconos (misma estética que el HUD).
+      menuSection('Materiales');
+      const mats = el('p', 'mats-row');
+      mats.textContent = '🪵 ' + state.wood + '    🪨 ' + state.stone + '    🔩 ' + state.metal;
       els.list.appendChild(mats);
+      // Crafteo básico con números (igual que la mesa).
       if (state.basic && state.basic.length) {
-        const basicTitle = el('p', 'craft-copy');
-        basicTitle.textContent = 'Crafteo básico (sin mesa)';
-        els.list.appendChild(basicTitle);
+        menuSection('Crafteo básico (sin mesa)');
         state.basic.forEach((row, i) => {
-          const button = document.createElement('button');
-          button.type = 'button';
-          button.textContent = (i + 1) + '   ' + row.label + (row.reason ? ' — ' + row.reason : '');
-          button.disabled = !row.enabled;
-          const craftIt = (event) => {
-            if (event) {
-              event.preventDefault();
-              event.stopPropagation();
-            }
-            if (button.disabled) return;
-            actions.craftBasic(row.index);
-          };
-          button.addEventListener('click', craftIt);
-          button.addEventListener('touchstart', craftIt, { passive: false });
-          els.list.appendChild(button);
+          els.list.appendChild(craftButton(
+            (i + 1) + '  ' + row.label + (row.reason ? ' — ' + row.reason : ''),
+            row.enabled, () => actions.craftBasic(row.index)));
         });
       }
-      function line(label, buttons) {
-        const row = el('div', 'sheet-line');
-        const name = el('span');
-        name.textContent = label;
-        row.appendChild(name);
-        buttons.forEach((button) => {
-          const node = document.createElement('button');
-          node.type = 'button';
-          node.className = 'sheet-btn small';
-          node.textContent = button.label;
-          node.addEventListener('click', (event) => {
-            event.preventDefault();
-            button.run();
-          });
-          row.appendChild(node);
-        });
-        els.list.appendChild(row);
+      // Herramientas: configurar el cinturón + soltar.
+      menuSection('Herramientas (cinturón)');
+      const beltById = {};
+      (state.belt || []).forEach((slot) => { beltById[slot.id] = slot; });
+      (state.tools || []).forEach((tool) => {
+        if (!tool.owned) {
+          menuLine(ICONS[tool.id] || '❔', tool.name + '  (sin conseguir)');
+          return;
+        }
+        const slot = beltById[tool.id];
+        const buttons = [];
+        if (tool.id !== 'hands') {
+          buttons.push(slot
+            ? { label: '✓ ' + slot.key, on: true, run: () => actions.assignBelt(tool.id, false) }
+            : { label: '＋ cinturón', run: () => actions.assignBelt(tool.id, true) });
+          // La antorcha es un desbloqueo permanente: no se suelta.
+          if (tool.id !== 'torch') buttons.push({ label: 'Soltar', run: () => actions.drop(tool.id) });
+        }
+        menuLine(ICONS[tool.id] || '❔', tool.name + (slot ? '  [' + slot.key + ']' : '  (guardada)'), buttons);
+      });
+      // Consumibles: se usan cuando el jugador dispone.
+      menuSection('Consumibles');
+      menuLine('➕', 'Venda +' + 30 + '  (' + (state.bandage || 0) + '/' + (state.bandageMax || 3) + ')', [
+        { label: 'Usar', disabled: !(state.bandage > 0), run: () => actions.useBandage() },
+      ]);
+      menuLine('🔥', 'Antorcha  (' + (state.torch || 0) + '/' + (state.torchMax || 0) + ')', []);
+      if (state.hasKey) {
+        menuLine('🔑', 'Llave dorada', [{ label: 'Soltar', run: () => actions.drop('key') }]);
       }
-      line('Balas de reserva ' + (state.reserve || 0), [
+      menuLine('🔫', 'Balas de reserva ' + (state.reserve || 0), [
         { label: 'Soltar', run: () => actions.drop('ammo') },
       ]);
-      if (state.torchMax) {
-        line('Antorchas ' + (state.torch || 0) + ' / ' + state.torchMax, []);
-      }
-      if (state.hasKey) {
-        line('Llave dorada', [{ label: 'Soltar', run: () => actions.drop('key') }]);
-      }
-      (state.tools || []).forEach((tool) => {
-        // La antorcha es un desbloqueo permanente: no se suelta.
-        if (!tool.owned || tool.id === 'hands' || tool.id === 'torch') return;
-        line(tool.name, [{ label: 'Soltar', run: () => actions.drop(tool.id) }]);
-      });
     },
 
     openTotem(lines) {
@@ -450,8 +507,10 @@
       return true;
     },
 
-    pickCraft(index) {
-      if (modal === 'craft' && pickCb) pickCb(index);
+    pickCraft(pos) {
+      if (modal !== 'craft' || !pickCb) return;
+      const row = lastCraftRows[pos];
+      if (row) pickCb(row.index);
     },
   };
 

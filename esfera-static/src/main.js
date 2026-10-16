@@ -698,7 +698,7 @@
       }
       foes = window.Game.createEnemies(scene, frame, [
         { x: 0, z: 0, speed: 2.2, sight: 30, chase: 40, attack: 1.2, hp: 100 },
-      ]);
+      ], { brains: false });
       const playerPos = frame.localToWorld(0, 8, 1.6);
       for (let i = 0; i < 125; i++) foes.update(0.016, i * 0.016, playerPos);
       const foe = foes.enemies[0];
@@ -734,7 +734,7 @@
     const before = Colliders.all().length;
     const scene = new THREE.Scene();
     const frame = window.Game.LocalFrame(new THREE.Vector3(0, Config.PLANET_RADIUS, 0));
-    const foes = window.Game.createEnemies(scene, frame, [{ x: 0, z: 0, hp: 10 }]);
+    const foes = window.Game.createEnemies(scene, frame, [{ x: 0, z: 0, hp: 10 }], { brains: false });
     const waves = window.Game.createWaves(foes, [{ x: 4, z: 4 }, { x: -4, z: 4 }]);
     try {
       if (foes.aliveCount() !== 1) throw new Error('faltó el robot de prueba');
@@ -801,29 +801,42 @@
       view.setTool('hands');
       if (byName.pistol.visible || byName.axe.visible) throw new Error('las manos siguen mostrando un arma');
 
-      const tools = Inventory.TOOLS.map((tool) => ({
-        id: tool.id,
-        key: tool.key,
-        owned: Inventory.hasTool(tool.id),
-      }));
       HUD.sync({
         hp: 100, maxHp: 100, toolName: 'Hacha',
         wood: 0, stone: 0, metal: 0,
-        torch: 0, torchMax: 6,
+        torch: 0, torchMax: 6, bandage: 0, bandageMax: 3,
         hasKey: false, showAmmo: true, mag: 12, reserve: 36, reloading: false,
-        prompt: '', tools: tools, active: Inventory.activeTool,
+        prompt: '', tools: Inventory.beltSlots(), active: Inventory.activeTool,
       });
-      const slots = document.querySelectorAll('.belt-slot');
-      if (slots.length !== 6) throw new Error('el cinturón no tiene 6 lugares');
+      let slots = document.querySelectorAll('.belt-slot');
+      // Cinturón configurable: manos + lo agarrado (hacha y pistola).
+      if (slots.length !== 3) throw new Error('el cinturón no tiene 3 lugares');
       if (!slots[0].classList.contains('owned')) throw new Error('las manos no están en el cinturón');
       if (!slots[1].classList.contains('owned') || !slots[1].classList.contains('active')) {
         throw new Error('el hacha no está marcada');
       }
-      if (!slots[4].classList.contains('owned')) throw new Error('la pistola no está en el cinturón');
-      if (slots[2].classList.contains('owned') || slots[3].classList.contains('owned')) {
-        throw new Error('apareció una herramienta que no agarraste');
+      if (!slots[2].classList.contains('owned')) throw new Error('la pistola no está en el cinturón');
+      if (Inventory.slotForCode(1) !== 'hands' || Inventory.slotForCode(2) !== 'axe' || Inventory.slotForCode(3) !== 'pistol') {
+        throw new Error('las teclas no mapean al cinturón');
       }
-      if (slots[5].classList.contains('owned')) throw new Error('la antorcha apareció sin craftearla');
+      // Sacar la pistola del cinturón: desaparece y la rueda la saltea.
+      if (!Inventory.assignBelt('pistol', false)) throw new Error('no se pudo sacar la pistola');
+      if (Inventory.slotForCode(3) !== null) throw new Error('la tecla 3 sigue mapeada');
+      if (!Inventory.hasTool('pistol')) throw new Error('sacar del cinturón borró la pistola');
+      Inventory.cycleTool(1);
+      if (Inventory.activeTool === 'pistol') throw new Error('la rueda llegó a la pistola sacada');
+      // Las manos no salen nunca; lo no poseído no entra.
+      if (Inventory.assignBelt('hands', false)) throw new Error('las manos salieron del cinturón');
+      if (Inventory.assignBelt('hammer', true)) throw new Error('entró una herramienta ajena');
+      if (!Inventory.assignBelt('pistol', true)) throw new Error('no volvió la pistola');
+      slots = document.querySelectorAll('.belt-slot');
+      if (slots.length !== 3) throw new Error('el cinturón no volvió a 3 lugares');
+      // Vendas: se craftean al inventario y se usan cuando se dispone.
+      if (Inventory.stackCount('bandage') !== 0) throw new Error('arrancó con vendas');
+      if (Inventory.addStack('bandage', 5) !== 3) throw new Error('la venda no respeta el máximo');
+      if (Inventory.takeStack('bandage', 1) !== 1 || Inventory.stackCount('bandage') !== 2) {
+        throw new Error('la venda no se gasta');
+      }
     } finally {
       Inventory.reset();
       window.Game.PlayerHealth.reset();
@@ -1147,7 +1160,7 @@
       x: here.x + fx * 1.15,
       z: here.z + fz * 1.15,
       hp: 40,
-    }]);
+    }], { brains: false });
     try {
       if (!body.tryPunch('right')) throw new Error('el golpe de prueba no salió');
       let strike = null;
@@ -1335,7 +1348,7 @@
         return;
       }
       if (HUD.isCraftOpen()) showCraft();
-    }, courtyard.benchHeading());
+    }, '🛠 Mesa de trabajo', courtyard.benchHeading());
     unlockForModal();
   }
 
@@ -1347,6 +1360,8 @@
       metal: snap.resources.metal,
       torch: snap.stacks.torch || 0,
       torchMax: Inventory.stackMax('torch'),
+      bandage: snap.stacks.bandage || 0,
+      bandageMax: Inventory.stackMax('bandage'),
       hasKey: snap.hasKey,
       reserve: weapon.reserve,
       tools: Inventory.TOOLS.map((tool) => ({
@@ -1354,6 +1369,7 @@
         name: tool.name,
         owned: !!snap.owned[tool.id],
       })),
+      belt: Inventory.beltSlots(),
       basic: courtyard.basicRecipes(),
     }, {
       craftBasic(index) {
@@ -1365,6 +1381,15 @@
           relockAfterModal();
           return;
         }
+        if (HUD.isPackOpen()) showPack();
+      },
+      assignBelt(id, on) {
+        if (!Inventory.assignBelt(id, on)) HUD.flash(on ? 'Cinturón lleno' : 'No se pudo cambiar');
+        if (HUD.isPackOpen()) showPack();
+      },
+      useBandage() {
+        const result = courtyard.useBandage();
+        if (result.text) HUD.flash(result.text);
         if (HUD.isPackOpen()) showPack();
       },
       drop(id) {
@@ -1402,9 +1427,12 @@
 
   HUD.setRespawn(() => revivePlayer(true));
 
-  const toolByCode = {
-    Digit1: 'hands', Digit2: 'axe', Digit3: 'pickaxe', Digit4: 'hammer', Digit5: 'pistol', Digit6: 'torch',
-  };
+  // Teclas 1-6 = lugares del cinturón (se configura en la mochila).
+  function toolByCode(code) {
+    const m = /^Digit([1-6])$/.exec(code || '');
+    if (!m) return null;
+    return Inventory.slotForCode(Number(m[1]));
+  }
 
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return;
@@ -2164,6 +2192,8 @@
       metal: inv.resources.metal,
       torch: inv.stacks.torch || 0,
       torchMax: Inventory.stackMax('torch'),
+      bandage: inv.stacks.bandage || 0,
+      bandageMax: Inventory.stackMax('bandage'),
       hasKey: inv.hasKey,
       showAmmo: Inventory.hasTool('pistol'),
       mag: weapon.mag,
@@ -2171,11 +2201,7 @@
       reloading: weapon.reloading,
       prompt,
       active: inv.active,
-      tools: Inventory.TOOLS.map((tool) => ({
-        id: tool.id,
-        key: tool.key,
-        owned: !!inv.owned[tool.id],
-      })),
+      tools: Inventory.beltSlots(),
     });
 
     if (!isDead) {

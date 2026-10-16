@@ -9,11 +9,14 @@
    * spawnList: [{ x, z, speed, sight, chase, attack, hp }]
    * sight = distancia para verte por primera vez. chase = hasta dónde te siguen.
    */
-  window.Game.createEnemies = function (scene, frame, spawnList) {
+  window.Game.createEnemies = function (scene, frame, spawnList, opts) {
     const Colliders = window.Game.Colliders;
     const Audio = window.Game.Audio;
     const PlayerHealth = window.Game.PlayerHealth;
     const NN = window.Game.NeuralNet || null;
+    // Cerebros prendidos salvo pedido (los self-tests usan clásico
+    // determinista; el juego usa neuronal).
+    const brainsOn = !opts || opts.brains !== false;
 
     const BODY = 0.45;
     const _pbUp = new THREE.Vector3();
@@ -48,7 +51,7 @@
     const BRAIN_SIZES = [6, 6, 4];
 
     function freshBrain() {
-      if (!NN) return null;
+      if (!NN || !brainsOn) return null;
       try {
         return NN.fresh(BRAIN_SIZES);
       } catch (e) {
@@ -59,7 +62,7 @@
     // Hijo de oleada: cruce de dos cerebros vivos + mutación (a veces
     // estructural). Así las oleadas evolucionan de verdad.
     function inheritBrain() {
-      if (!NN) return freshBrain();
+      if (!NN || !brainsOn) return freshBrain();
       try {
         const donors = enemies.filter((e) => e.alive && e.brain);
         if (donors.length >= 2 && Math.random() < 0.6) {

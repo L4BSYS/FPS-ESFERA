@@ -10,15 +10,15 @@
   const RES_ES = { wood: 'madera', stone: 'piedra', metal: 'metal' };
 
   const RECIPES = [
-    { name: '🔨 Martillo', cost: { wood: 4, stone: 2 }, need: null, tool: 'hammer' },
-    { name: '🪓 Hacha', cost: { wood: 4, stone: 3 }, need: 'hammer', tool: 'axe' },
-    { name: '⛏ Pico', cost: { wood: 2, stone: 6 }, need: 'axe', tool: 'pickaxe' },
-    { name: '🔥 Antorcha x2', cost: { wood: 2 }, need: null, tool: 'torch', torch: 2 },
-    { name: '🔫 Pistola (+6 balas)', cost: { metal: 10, wood: 4 }, need: 'pickaxe', tool: 'pistol', ammo: 6 },
-    { name: '🛠 Mesa de trabajo', cost: { wood: 6, stone: 4 }, placeBench: true },
-    { name: '📦 Balas x12', cost: { metal: 3, wood: 2 }, ammo: 12 },
-    { name: '➕ Venda (+30 vida)', cost: { wood: 4, stone: 2 }, heal: 30 },
-    { name: '🔧 Reparar mesa (+100)', cost: { wood: 3, stone: 2 }, repair: true },
+    { name: '🔨 Martillo', cost: { wood: 4, stone: 2 }, need: null, tool: 'hammer', group: 'Herramientas' },
+    { name: '🪓 Hacha', cost: { wood: 4, stone: 3 }, need: 'hammer', tool: 'axe', group: 'Herramientas' },
+    { name: '⛏ Pico', cost: { wood: 2, stone: 6 }, need: 'axe', tool: 'pickaxe', group: 'Herramientas' },
+    { name: '🔥 Antorcha x2', cost: { wood: 2 }, need: null, tool: 'torch', torch: 2, group: 'Suministros' },
+    { name: '🔫 Pistola (+6 balas)', cost: { metal: 10, wood: 4 }, need: 'pickaxe', tool: 'pistol', ammo: 6, group: 'Herramientas' },
+    { name: '🛠 Mesa de trabajo', cost: { wood: 6, stone: 4 }, placeBench: true, group: 'Mesa' },
+    { name: '📦 Balas x12', cost: { metal: 3, wood: 2 }, ammo: 12, group: 'Suministros' },
+    { name: '➕ Venda x2 (al inventario)', cost: { wood: 4, stone: 2 }, bandage: 2, group: 'Suministros' },
+    { name: '🔧 Reparar mesa (+100)', cost: { wood: 3, stone: 2 }, repair: true, group: 'Mesa' },
   ];
   window.Game.CraftRecipes = RECIPES;
 
@@ -991,6 +991,9 @@
       if (recipe.torch && Inventory.stackCount('torch') >= Inventory.stackMax('torch')) {
         return { ok: false, reason: 'no entran más antorchas' };
       }
+      if (recipe.bandage && Inventory.stackCount('bandage') >= Inventory.stackMax('bandage')) {
+        return { ok: false, reason: 'no entran más vendas' };
+      }
       if (recipe.repair && (!openBench || openBench.hp >= openBench.maxHp)) {
         return { ok: false, reason: 'ya está entera' };
       }
@@ -1105,6 +1108,7 @@
         label: (gate.ok ? '✅ ' : '🔒 ') + recipe.name + ' (' + costText(recipe.cost) + ')',
         enabled: gate.ok,
         reason: gate.reason,
+        group: recipe.group || 'Varios',
       };
     }
 
@@ -1268,6 +1272,7 @@
           label: '🧹 Vaciar zona (las mesas quedan)',
           enabled: built > 0,
           reason: built > 0 ? '' : 'nada que borrar',
+          group: 'Zona',
         });
         return rows;
       },
@@ -1304,7 +1309,6 @@
           const reason = gate.reason;
           return { message: reason.charAt(0).toUpperCase() + reason.slice(1) };
         }
-        if (recipe.heal && PlayerHealth.hp >= PlayerHealth.maxHp) return { message: 'La vida ya está llena' };
         if (recipe.placeBench) {
           // Sin gasto todavía: la mesa queda en mano con fantasma y el
           // jugador elige dónde ponerla (clic) o la guarda (Esc).
@@ -1321,10 +1325,19 @@
         }
         if (recipe.tool) Inventory.giveTool(recipe.tool);
         if (recipe.torch) Inventory.addStack('torch', recipe.torch);
-        if (recipe.heal) PlayerHealth.heal(recipe.heal);
+        if (recipe.bandage) Inventory.addStack('bandage', recipe.bandage);
         if (recipe.ammo && weaponRef) weaponRef.addReserve(recipe.ammo);
-        if (Audio) Audio.pickup(recipe.heal ? 'health' : 'ammo');
+        if (Audio) Audio.pickup(recipe.bandage ? 'health' : 'ammo');
         return { message: 'Crafteado: ' + recipe.name };
+      },
+
+      // Venda del inventario: se usa cuando el jugador dispone (+30 vida).
+      useBandage() {
+        if (PlayerHealth.hp >= PlayerHealth.maxHp) return { ok: false, text: 'La vida ya está llena' };
+        if (Inventory.takeStack('bandage', 1) !== 1) return { ok: false, text: 'No tenés vendas' };
+        PlayerHealth.heal(30);
+        if (Audio) Audio.pickup('health');
+        return { ok: true, text: 'Venda usada +30' };
       },
 
       tryInteract(playerWorldPos) {

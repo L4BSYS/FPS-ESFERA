@@ -92,6 +92,10 @@
     const loosies = [];
     const critters = [];
     const edibles = [];
+    // Iconos de estado compartidos (un canvas por estado, no uno por bicho).
+    const stateTex = {};
+    // Efectos de un uso (anillo de apareamiento): se animan en update().
+    const fx = [];
     const notices = [];
     const raycaster = new THREE.Raycaster();
     const _up = new THREE.Vector3();
@@ -312,6 +316,93 @@
     // comer y huyen del jugador. Fauna ambiente con la misma red neuronal
     // de los robots (5 sensores → giro, velocidad, ramoneo). Sin colisión:
     // atraviesan, no bloquean ni se cosechan.
+    // Iconos de estado: texturas por estado (ver `stateTex` arriba).
+    function stateTexture(state) {
+      if (stateTex[state]) return stateTex[state];
+      const glyphs = { seek: '👀', eat: '😋', flee: '❗', sick: '🤢', mate: '💕' };
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 64;
+      const g = canvas.getContext('2d');
+      g.font = '44px serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(glyphs[state] || '❔', 32, 34);
+      const tex = new THREE.CanvasTexture(canvas);
+      stateTex[state] = tex;
+      return tex;
+    }
+
+    // Efectos de un uso (ver `fx` arriba): se animan en update().
+    function spawnFxRing(worldPos) {
+      const up = worldPos.clone().normalize();
+      const mesh = new THREE.Mesh(
+        new THREE.RingGeometry(0.4, 0.55, 24),
+        new THREE.MeshBasicMaterial({ color: 0xff6fa2, transparent: true, opacity: 0.85, fog: false, depthWrite: false, side: THREE.DoubleSide })
+      );
+      mesh.raycast = function () {};
+      mesh.position.copy(worldPos).addScaledVector(up, 0.15);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), up);
+      scene.add(mesh);
+      fx.push({ mesh: mesh, t: 0 });
+    }
+
+    function updateFx(dt) {
+      for (let i = fx.length - 1; i >= 0; i--) {
+        const e = fx[i];
+        e.t += dt / 0.9;
+        if (e.t >= 1) {
+          scene.remove(e.mesh);
+          e.mesh.geometry.dispose();
+          e.mesh.material.dispose();
+          fx.splice(i, 1);
+          continue;
+        }
+        const s = 0.6 + 2.2 * e.t;
+        e.mesh.scale.set(s, s, s);
+        e.mesh.material.opacity = 0.85 * (1 - e.t);
+      }
+    }
+
+    function spawnCritter(dir, brain, small) {
+      const anchor = dir.clone().multiplyScalar(Config.PLANET_RADIUS);
+      const mesh = new THREE.Mesh(
+        new THREE.OctahedronGeometry(0.3, 0),
+        new THREE.MeshStandardMaterial({
+          color: 0x4fc36a, emissive: 0x1a5c2e, emissiveIntensity: 0.8,
+          roughness: 0.5, metalness: 0.1,
+        })
+      );
+      mesh.raycast = function () {};
+      const pos = anchor.clone().addScaledVector(dir, 0.35);
+      mesh.position.copy(pos);
+      if (small) mesh.scale.set(0.55, 0.55, 0.55);
+      scene.add(mesh);
+      const tag = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: stateTexture('seek'), transparent: true, depthWrite: false,
+      }));
+      tag.raycast = function () {};
+      tag.scale.set(0.55, 0.55, 1);
+      tag.visible = false;
+      scene.add(tag);
+      const c = {
+        dir: dir, mesh: mesh, tag: tag, pos: pos,
+        heading: crng() * Math.PI * 2,
+        hunger: crng() * 0.5,
+        sick: 0,
+        age: small ? 0 : 20,
+        cool: 0,
+        mateT: 0,
+        eatT: 0,
+        state: '',
+        phase: critters.length * 2.3,
+        brain: brain,
+        alive: true,
+      };
+      critters.push(c);
+      return c;
+    }
+
     function scatterCritters() {
       let guard = 0;
       while (critters.length < CRITTER_COUNT && guard < CRITTER_COUNT * 30) {
@@ -322,32 +413,13 @@
         const anchor = dir.clone().multiplyScalar(Config.PLANET_RADIUS);
         const probe = anchor.clone().addScaledVector(dir, 0.5);
         if (rockBlocked(probe)) continue;
-        const mesh = new THREE.Mesh(
-          new THREE.OctahedronGeometry(0.3, 0),
-          new THREE.MeshStandardMaterial({
-            color: 0x4fc36a, emissive: 0x1a5c2e, emissiveIntensity: 0.8,
-            roughness: 0.5, metalness: 0.1,
-          })
-        );
-        mesh.raycast = function () {};
-        const pos = anchor.clone().addScaledVector(dir, 0.35);
-        mesh.position.copy(pos);
-        scene.add(mesh);
         let brain = null;
         try {
           if (NN) brain = NN.fresh([5, 5, 3], crng);
         } catch (e) {
           brain = null;
         }
-        critters.push({
-          dir: dir, mesh: mesh, pos: pos,
-          heading: crng() * Math.PI * 2,
-          hunger: crng() * 0.5,
-          sick: 0,
-          phase: critters.length * 2.3,
-          brain: brain,
-          alive: true,
-        });
+        spawnCritter(dir, brain, false);
       }
     }
 
@@ -365,33 +437,54 @@
         if (Math.abs(up.y) >= 0.99) _ref.set(1, 0, 0);
         _east.crossVectors(up, _ref).normalize();
         _north.crossVectors(_east, up).normalize();
-        // Suelto o comida más cercana (comida, no toxina) en 14 m.
-        let food = null;
-        let foodDist = Infinity;
-        let foodEdible = null;
+        // Candidatos por categoría (una sola pasada): lo que SIGUE (para
+        // moverse y el icono) y lo que TOCA (contacto independiente). El
+        // contacto no depende del objetivo: si pisa algo, lo consume igual.
+        let nearLoosie = null;
+        let dLoosie = Infinity;
         for (let k = 0; k < loosies.length; k++) {
           const item = loosies[k];
           if (!item.alive) continue;
           const d = item.basePos.distanceTo(c.pos);
-          if (d < foodDist) {
-            foodDist = d;
-            food = item;
-            foodEdible = null;
+          if (d < dLoosie) {
+            dLoosie = d;
+            nearLoosie = item;
           }
         }
+        let nearFood = null;
+        let dFood = Infinity;
+        let nearToxin = null;
+        let dToxin = Infinity;
         for (let k = 0; k < edibles.length; k++) {
           const item = edibles[k];
-          if (!item.alive || item.edible !== 'food') continue;
+          if (!item.alive) continue;
           const d = item.basePos.distanceTo(c.pos);
-          if (d < foodDist) {
-            foodDist = d;
-            food = item;
-            foodEdible = item;
+          if (item.edible === 'food') {
+            if (d < dFood) {
+              dFood = d;
+              nearFood = item;
+            }
+          } else if (d < dToxin) {
+            dToxin = d;
+            nearToxin = item;
           }
         }
-        if (foodDist > 14) {
-          food = null;
-          foodDist = Infinity;
+        // Objetivo: sueltos y comida primero; sin nada, la toxina intriga.
+        let food = null;
+        let foodDist = Infinity;
+        let foodIsToxin = false;
+        if (dLoosie <= 14 || dFood <= 14) {
+          if (dLoosie <= dFood) {
+            food = nearLoosie;
+            foodDist = dLoosie;
+          } else {
+            food = nearFood;
+            foodDist = dFood;
+          }
+        } else if (dToxin <= 14) {
+          food = nearToxin;
+          foodDist = dToxin;
+          foodIsToxin = true;
         }
         _fwd.copy(_east).multiplyScalar(Math.sin(c.heading))
           .addScaledVector(_north, Math.cos(c.heading));
@@ -458,36 +551,113 @@
         }
         _fwd.copy(_east).multiplyScalar(Math.sin(c.heading))
           .addScaledVector(_north, Math.cos(c.heading));
+        // No atravesar: si hay pared/rocka adelante, virar hasta despejar.
+        // (Sin cajas propias a propósito: son fauna, no obstáculos.)
+        if (Colliders) {
+          _tmp.copy(c.pos).addScaledVector(_fwd, 0.8);
+          let blockedAhead = false;
+          try {
+            blockedAhead = Colliders.blocked(_tmp, 0.25, { feet: 0.1, top: 0.7 });
+          } catch (e) {
+            blockedAhead = false;
+          }
+          if (blockedAhead) {
+            c.heading += 3 * dt;
+            _fwd.copy(_east).multiplyScalar(Math.sin(c.heading))
+              .addScaledVector(_north, Math.cos(c.heading));
+          }
+        }
         c.pos.addScaledVector(_fwd, speed * dt);
         const bob = Math.sin(time * 6 + c.phase) * (0.03 + 0.1 * Math.max(0, graze));
         c.pos.copy(c.pos.clone().normalize().multiplyScalar(R + 0.35 + bob));
         c.mesh.position.copy(c.pos);
         c.mesh.lookAt(_tmp.copy(c.pos).addScaledVector(_fwd, 1).addScaledVector(up, 0.4));
         c.hunger = Math.min(1, c.hunger + dt * 0.015);
-        if (food && foodDist < 0.8) {
-          if (foodEdible) {
-            foodEdible.alive = false;
-            try { scene.remove(foodEdible.mesh); } catch (e) {}
-            foodEdible.respawn = EDIBLE_RESPAWN;
-          } else {
-            food.alive = false;
-            try { scene.remove(food.mesh); } catch (e) {}
-          }
-          c.hunger = 0;
+        c.age += dt;
+        if (c.cool > 0) c.cool -= dt;
+        if (c.mateT > 0) c.mateT -= dt;
+        if (c.eatT > 0) c.eatT -= dt;
+        // Crecer: los recién nacidos llegan a tamaño adulto en ~15 s.
+        if (c.age < 15) {
+          const s = 0.55 + 0.45 * Math.min(1, c.age / 15);
+          c.mesh.scale.set(s, s, s);
         }
-        // Pisó toxina: se enferma y se arrastra un rato (patrón visible).
-        if (!c.sick) {
-          for (let k = 0; k < edibles.length; k++) {
-            const item = edibles[k];
-            if (!item.alive || item.edible !== 'toxin') continue;
-            if (item.basePos.distanceTo(c.pos) >= 0.8) continue;
-            item.alive = false;
-            try { scene.remove(item.mesh); } catch (e) {}
-            item.respawn = EDIBLE_RESPAWN;
-            c.sick = 6;
-            c.mesh.material.color.setHex(0x6a8a3a);
-            break;
+        // Contacto: lo pisado se consume aunque se siguiera otra cosa.
+        // (Antes solo se evaluaba el interés más cercano: pisar B siguiendo
+        // a A no hacía nada.)
+        if (dLoosie < 0.8) {
+          nearLoosie.alive = false;
+          try { scene.remove(nearLoosie.mesh); } catch (e) {}
+          c.hunger = 0;
+          c.eatT = 1.2;
+        } else if (dFood < 0.8) {
+          nearFood.alive = false;
+          try { scene.remove(nearFood.mesh); } catch (e) {}
+          nearFood.respawn = EDIBLE_RESPAWN;
+          c.hunger = 0;
+          c.eatT = 1.2;
+        }
+        if (!c.sick && dToxin < 0.8) {
+          // Probó toxina: se enferma y se arrastra un rato (patrón visible).
+          nearToxin.alive = false;
+          try { scene.remove(nearToxin.mesh); } catch (e) {}
+          nearToxin.respawn = EDIBLE_RESPAWN;
+          c.sick = 6;
+          c.mesh.material.color.setHex(0x6a8a3a);
+        }
+        // Estado visible (pauta para el jugador): huida > enfermedad >
+        // corazón (comió / se apareó) > búsqueda > deambular (sin icono).
+        const fleeing = playerDist < 4;
+        let state = '';
+        if (fleeing) state = 'flee';
+        else if (c.sick > 0) state = 'sick';
+        else if (c.eatT > 0 || c.mateT > 0) state = c.mateT > c.eatT ? 'mate' : 'eat';
+        else if (food) state = 'seek';
+        if (state !== c.state) {
+          c.state = state;
+          if (!state) {
+            c.tag.visible = false;
+          } else {
+            c.tag.material.map = stateTexture(state);
+            c.tag.visible = true;
           }
+        }
+        if (c.tag.visible) {
+          c.tag.position.copy(c.pos).addScaledVector(up, 1.0);
+        }
+      }
+      // Apareamiento: dos adultos cerca, con cooldown y tope de población.
+      // El hijo hereda cruce + mutación (evolución visible) y nace chico.
+      const cap = CRITTER_COUNT * 2;
+      for (let i = 0; i < critters.length; i++) {
+        const a = critters[i];
+        if (!a.alive || a.age < 8 || a.cool > 0) continue;
+        for (let j = i + 1; j < critters.length; j++) {
+          const b = critters[j];
+          if (!b.alive || b.age < 8 || b.cool > 0) continue;
+          if (a.pos.distanceTo(b.pos) >= 1.2) continue;
+          if (critters.length >= cap) break;
+          let brain = null;
+          try {
+            if (NN && a.brain && b.brain) {
+              brain = NN.NeuralNetwork.crossover(a.brain, b.brain);
+              brain.mutate(0.15, 0.4);
+            } else if (NN) {
+              brain = NN.fresh([5, 5, 3], crng);
+            }
+          } catch (e) {
+            brain = null;
+          }
+          const mid = a.pos.clone().add(b.pos).multiplyScalar(0.5);
+          const child = spawnCritter(mid.clone().normalize(), brain, true);
+          child.pos.copy(mid.clone().normalize().multiplyScalar(R + 0.35));
+          child.mesh.position.copy(child.pos);
+          a.cool = 20;
+          b.cool = 20;
+          a.mateT = 2;
+          b.mateT = 2;
+          spawnFxRing(mid);
+          break;
         }
       }
     }
@@ -662,6 +832,7 @@
           if (Audio) Audio.pickup('ammo');
         });
         if (playerPos && dt > 0) updateCritters(dt, time, playerPos);
+        if (dt > 0) updateFx(dt);
       },
 
       dispose() {
@@ -673,9 +844,14 @@
         nodes.length = 0;
         critters.forEach((c) => {
           try { scene.remove(c.mesh); } catch (e) {}
+          try { scene.remove(c.tag); } catch (e) {}
           c.alive = false;
         });
         critters.length = 0;
+        for (let i = fx.length - 1; i >= 0; i--) {
+          scene.remove(fx[i].mesh);
+        }
+        fx.length = 0;
         edibles.forEach((item) => {
           try { scene.remove(item.mesh); } catch (e) {}
           item.alive = false;
