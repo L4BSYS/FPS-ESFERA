@@ -438,6 +438,13 @@
               return this._tempBox.setFromObject(object, true);
           }
 
+          // Grupos colisionables: nodos de recursos y tótems (sólidos),
+          // o pickups automáticos (comida/toxina) para detectar el contacto.
+          if (object.isGroup && (object.userData?.solid || (object.isCollectible && object.inContact))) {
+              object.updateMatrixWorld(true);
+              return this._tempBox.setFromObject(object, true);
+          }
+
           return null;
       }
 
@@ -956,6 +963,8 @@
                   basePosition.copy(this.axeBasePosition);
               } else if (this.currentTool === TOOLS.PICKAXE) {
                   basePosition.copy(this.pickaxeBasePosition);
+              } else {
+                  basePosition.copy(this.heldItemOffset);
               }
           }
 
@@ -1018,6 +1027,42 @@
           this.camera.rotation.x = Math.max(-this.config.maxPitch, Math.min(this.config.maxPitch, this.camera.rotation.x));
       }
 
+      // Golpe cuerpo a cuerpo (se usa el arma como objeto cuando no hay balas)
+      meleeAttack() {
+          if (isGamePaused || !this.camera) return false;
+          const origin = this.camera.getWorldPosition(new THREE.Vector3());
+          const dir = this.camera.getWorldDirection(new THREE.Vector3());
+          const ray = new THREE.Raycaster(origin, dir, 0, 2.6);
+          const targets = [];
+          try { npcs.forEach(n => { if (n && n.health > 0 && n.mesh) targets.push(n.mesh); }); } catch (e) {}
+          try { if (Array.isArray(placedBlocks)) targets.push(...placedBlocks); } catch (e) {}
+          const hits = ray.intersectObjects(targets, true);
+          for (const h of hits) {
+              let p = h.object, npc = null;
+              while (p) { if (p.userData && p.userData.parentCharacter instanceof NPC) { npc = p.userData.parentCharacter; break; } p = p.parent; }
+              if (npc && npc.health > 0) {
+                  try { npc.takeDamage(5); } catch (e) {}
+                  try { createHarvestEffect(h.point); } catch (e) {}
+                  try { playSound('harvest'); } catch (e) {}
+                  try { this.applyRecoil(); } catch (e) {}
+                  return true;
+              }
+              /*
+              Solo enemigos que no rompa bloques o que requiera mas esfuerzo
+              if (Array.isArray(placedBlocks) && placedBlocks.includes(h.object) && h.object.userData) {
+                  h.object.userData.health = (h.object.userData.health ?? 3) - 5;
+                  try { updateBlockAppearance(h.object); } catch (e) {}
+                  if (h.object.userData.health <= 0) { try { destroyBlock(h.object); } catch (e) {} }
+                  try { this.applyRecoil(); } catch (e) {}
+                  return true;
+              }
+              */
+              break;
+          }
+          try { this.applyRecoil(); } catch (e) {}
+          return false;
+      }
+
       handleMouseMove(event, sensitivity = this.config.sensitivity) {
           if (isGamePaused) return;
 
@@ -1048,7 +1093,7 @@
       updateToolHUD() {
           const hud = document.getElementById('toolHud');
           if (hud) {
-              const toolNames = {hands:'Manos', gun:'Pistola', hammer:'Martillo', axe:'Hacha', pickaxe:'Pico'};
+              const toolNames = {hands:'Manos', gun:'Pistola', hammer:'Martillo', axe:'Hacha', pickaxe:'Pico', torch:'Antorcha'};
               let toolText = `Herramienta: ${toolNames[this.currentTool] || this.currentTool}`;
               if (this.heldItem) {
                   toolText += `<br>En mano: ${this.heldItem.name || 'Item'}`;
@@ -1057,6 +1102,7 @@
               // Or use innerHTML if you need the <br> tag:
                hud.innerHTML = toolText.replace('<br>', '<br/>'); // Ensure self-closing for stricter HTML
           }
+          try { if (typeof refreshBuildBarVisibility === 'function') refreshBuildBarVisibility(); } catch (e) {}
       }
 
       setTool(newTool) {
@@ -1098,9 +1144,10 @@
       autoAssignQuickSlots() {
           // Find tools/weapons in inventory and assign to quick slots
           this.inventory.items.forEach((item, index) => {
-              if (index < 4) { // Only assign to first 4 slots
+              if (index < this.inventory.quickSlots.length) { // Only assign to available slots
                   if (item.type === 'weapon' || item.type === 'tool') {
-                      this.inventory.assignToQuickSlot(item, index);
+                      const emptySlot = this.inventory.quickSlots.findIndex(slot => !slot);
+                      if (emptySlot >= 0) this.inventory.assignToQuickSlot(item, emptySlot);
                   }
               }
           });
@@ -1289,6 +1336,23 @@
               return;
           }
 
+          // Handle loose resources separately - add to resource counts
+          if (def.type === 'resource') {
+              const key = def.resourceKey || def.id;
+              this.inventory.resources[key] = (this.inventory.resources[key] || 0) + (def.amount || 1);
+              this.scene.remove(item);
+              const ri = collidableObjects.indexOf(item);
+              if (ri > -1) collidableObjects.splice(ri, 1);
+              if (typeof worldItems !== 'undefined') {
+                  const wi = worldItems.indexOf(item);
+                  if (wi > -1) worldItems.splice(wi, 1);
+              }
+              playSound('pickup');
+              try { updateResourceHUD(); } catch (e) {}
+              try { showMessage('+' + (def.amount || 1) + ' ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
+              return;
+          }
+
           // Build inventory entry for regular items
           const inventoryItem = {
               ...def,
@@ -1387,12 +1451,10 @@
           const hits = ray.intersectObjects(collidableObjects, true);
 
           for (const hit of hits) {
-              const node = hit.object;
+              let node = hit.object;
+              while (node && !node.isResourceNode) node = node.parent;
 
-              if (!node.isResourceNode) {
-                  console.warn("Object is not a resource node.");
-                  continue;
-              }
+              if (!node || !node.isResourceNode) continue;
 
               if (typeof node.harvest !== 'function') {
                   console.error("Resource node missing .harvest() method!", node);
@@ -1690,6 +1752,7 @@
                       this.target = null;
                   } else {
                       this.smartAvoidance(collidables, player);
+                      this.tryBreakBlockAhead();
                       this.input.forward = -1;
                       const direction = new THREE.Vector3().subVectors(
                           focus.pos,
@@ -1705,11 +1768,12 @@
                           rotationSpeed
                       );
                       // Fire on the move: shoot while closing the distance
-                      if (distanceToPlayer <= this.rangedRange && this.attackCooldown <= 0 && this.energy > 30 &&
+                      if (distanceToPlayer <= this.rangedRange && this.attackCooldown <= 0 &&
+                          (focus.kind === 'base' || this.energy > 30) &&
                           (focus.kind === 'base' || hasLOS)) {
                           this.shootAt(focus.target);
                           this.attackCooldown = this.attackCooldownBase * 1.5;
-                          this.energy -= 20;
+                          if (focus.kind !== 'base') this.energy -= 20;
                       }
                       if (this.isOnGround) {
                           this.handleStepClimbing(collidables, intendedMove.clone().multiplyScalar(delta));
@@ -1733,17 +1797,19 @@
                       this.state = 'fleeing';
                       break;
                   }
-                  if (distanceToPlayer > this.attackRange && distanceToPlayer <= this.rangedRange && this.energy > 30) {
+                  if (distanceToPlayer > this.attackRange && distanceToPlayer <= this.rangedRange &&
+                      (focus.kind === 'base' || this.energy > 30)) {
                       this.attackMode = 'ranged';
                   } else {
                       this.attackMode = 'melee';
                   }
+                  this.tryBreakBlockAhead();
                   if (distanceToPlayer > this.attackRange * 2.0) {
                       this.state = 'chasing';
                   } else if (this.attackCooldown <= 0) {
                       this.attackFocus(focus);
                       this.attackCooldown = this.attackCooldownBase;
-                      if (this.attackMode === 'ranged') this.energy -= 20;
+                      if (this.attackMode === 'ranged' && focus.kind !== 'base') this.energy -= 20;
                   }
                   const dirAtk = new THREE.Vector3().subVectors(focus.pos, this.container.position).normalize();
                   const targetYAtk = Math.atan2(dirAtk.x, dirAtk.z);
@@ -1826,6 +1892,7 @@
               bullet.owner = 'enemy';
               bullet.shooter = this;
               bullet.damage = this.rangedDamage || 6;
+              bullet.structureDamage = Math.max(25, (this.rangedDamage || 6) * 4);
               bullet.velocity.multiplyScalar(0.75);
               bullet.lifetime = Math.min(bullet.lifetime, 3);
               bullet.mesh.material.color.setHex(0xff3333);
@@ -1857,12 +1924,42 @@
               const wb = focus.ref;
               if (!wb || wb.hp <= 0) return;
               if (this.attackMode === 'melee') {
-                  damageWorkbench(wb, this.attackDamage);
+                  damageWorkbench(wb, Math.max(20, (this.attackDamage || 8) * 3));
               } else {
                   this.shootAt(focus.target);
               }
           } else {
               this.attack(focus.ref);
+          }
+      }
+      // If a wall the player built blocks the path, tear it down instead of getting stuck
+      tryBreakBlockAhead() {
+          if (this.attackCooldown > 0) return false;
+          if (typeof placedBlocks === 'undefined' || !placedBlocks.length) return false;
+          const origin = this.container.position.clone();
+          origin.y += this.height * 0.4;
+          const fwd = new THREE.Vector3(0, 0, -1).applyEuler(this.container.rotation).normalize();
+          const reach = (this.attackRange || 2.5) + 0.9;
+          const ray = new THREE.Raycaster(origin, fwd, 0, reach);
+          let hits = [];
+          try { hits = ray.intersectObjects(placedBlocks, false); } catch (e) { return false; }
+          if (!hits.length) return false;
+          const block = hits[0].object;
+          if (!block || !placedBlocks.includes(block)) return false;
+          this.attackPlacedBlock(block);
+          this.attackCooldown = this.attackCooldownBase;
+          return true;
+      }
+      attackPlacedBlock(block) {
+          if (!block || !block.userData) return;
+          const info = BLOCK_MATERIALS[block.userData.type] || { health: 3 };
+          if (typeof block.userData.health !== 'number') block.userData.health = block.userData.maxHealth || info.health;
+          if (typeof block.userData.maxHealth !== 'number') block.userData.maxHealth = info.health;
+          block.userData.health -= Math.max(3, this.attackDamage || 8);
+          try { updateBlockAppearance(block); } catch (e) {}
+          try { playSound('hit'); } catch (e) {}
+          if (block.userData.health <= 0) {
+              try { destroyBlock(block); } catch (e) {}
           }
       }
       hasLineOfSight(target, collidables) {
@@ -1913,6 +2010,22 @@
            }
 
            return true; // No obstacles found
+      }
+
+      // Enemigos también consumen pickups automáticos: comida los cura, toxina los daña
+      handleCollectible(collectible) {
+          if (!collectible || collectible.userData.collected) return;
+          collectible.userData.collected = true;
+          try { this.scene.remove(collectible); } catch (e) {}
+          const ci = collidableObjects.indexOf(collectible);
+          if (ci > -1) collidableObjects.splice(ci, 1);
+          if (collectible.type === 'food') {
+              this.health = Math.min(this.maxHealth || 100, this.health + (collectible.userData.healAmount || 20));
+              try { createHarvestEffect(collectible.position); } catch (e) {}
+          } else if (collectible.type === 'toxin') {
+              try { createHarvestEffect(collectible.position); } catch (e) {}
+              try { this.takeDamage(collectible.userData.damageAmount || 30); } catch (e) {}
+          }
       }
 
       takeDamage(amount) {

@@ -67,12 +67,50 @@ body, html {
   line-height: 1.15;
 }
 #toolHud {
+  position: absolute;
+  bottom: 84px; right: 12px;
+  text-align: right;
   text-transform: uppercase;
   letter-spacing: 1px;
+  display: none; /* redundante: la herramienta ya se ve en el arma y los atajos */
 }
 #weaponHud {
-  margin-top: 20px;
+  position: absolute;
+  bottom: 12px; right: 12px;
+  text-align: right;
   font-size: 18px;
+}
+#inventoryHud {
+  position: absolute;
+  top: 10px; right: 10px;
+  text-align: right;
+  display: none; /* legado: la mochila se abre con la FAB / tecla Q */
+}
+#firebaseui-auth-container {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.85);
+  padding: 20px;
+  border-radius: 8px;
+  z-index: 1001;
+}
+/* Prompt de interacción (E) */
+.interaction-prompt {
+  position: fixed;
+  bottom: 20%; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  border: 2px solid var(--rg-green-dim);
+  color: var(--rg-ink);
+  padding: 10px 20px;
+  border-radius: 5px;
+  font-family: 'VT323', 'Courier New', monospace;
+  font-size: 20px;
+  transition: opacity 0.3s;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 100;
 }
 #weaponInfo {
   font-family: 'Press Start 2P', monospace;
@@ -161,6 +199,14 @@ body, html {
   border-color: var(--rg-green);
   background: rgba(51, 255, 102, 0.25);
 }
+.mobileBtn-sm {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 46px;
+  height: 46px;
+  font-size: 22px;
+}
 
 /* ============ Mensajes flotantes ============ */
 .hud-message {
@@ -231,6 +277,46 @@ body, html {
 }
 .quick-slot.empty .quick-slot-icon {
   font-size: 30px;
+}
+.quick-slots-container .quick-slot {
+  touch-action: none;
+}
+
+/* ============ Cinturón dentro de la mochila ============ */
+.rg-belt {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 4px 0 6px;
+}
+.rg-belt .quick-slot {
+  width: 48px;
+  height: 48px;
+  touch-action: none;
+  cursor: grab;
+}
+.rg-belt .quick-slot .quick-slot-icon {
+  font-size: 26px;
+}
+.rg-drag-handle {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.rg-drag-ghost {
+  position: fixed;
+  z-index: 3000;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: rgba(5, 8, 5, 0.92);
+  border: 2px solid var(--rg-green);
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: var(--rg-ink);
+  font-family: 'VT323', monospace;
+  font-size: 19px;
+  white-space: nowrap;
+  box-shadow: 0 0 14px rgba(51, 255, 102, 0.4);
 }
 
 /* ============ Mini-lista de mochila en HUD ============ */
@@ -425,6 +511,80 @@ body, html {
   padding: 7px 9px;
   border-width: 2px;
 }
+
+/* ============ Crafteo con iconos ============ */
+.rg-craft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 3px 0;
+  text-align: left;
+}
+.rg-craft .rg-craft-ico {
+  font-size: 20px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.rg-craft .rg-craft-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.rg-craft .rg-craft-name {
+  font-size: 9px;
+  color: var(--rg-ink);
+}
+.rg-craft .rg-craft-cost {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rg-cost {
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  line-height: 1;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #0d0f0d;
+  border: 1px solid #333;
+}
+.rg-cost.ok { color: #7dff9b; }
+.rg-cost.bad { color: #ff8a8a; }
+.rg-craft .rg-craft-lock {
+  flex: 0 0 auto;
+  font-family: 'VT323', monospace;
+  font-size: 15px;
+  color: var(--rg-amber);
+  white-space: nowrap;
+}
+.rg-craft:disabled {
+  cursor: not-allowed;
+}
+
+/* ============ Chips de materiales ============ */
+.rg-matbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.rg-mat {
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: #0d0f0d;
+  border: 1px solid var(--rg-green-dim);
+}
+.rg-mat b { color: var(--rg-green); margin-left: 3px; }
+.rg-mat-wood { border-color: #7a4f24; }
+.rg-mat-stone { border-color: #7d7d82; }
+.rg-mat-metal { border-color: #9aa4b0; }
+.rg-mat-ammo { border-color: var(--rg-amber); }
 
 /* ============ Pestañas ============ */
 .rg-tabs {
@@ -663,6 +823,150 @@ input[type="range"] {
   color: var(--rg-amber);
 }
 
+/* ============ Barra de construcción (martillo) ============ */
+.build-bar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 58px;
+  z-index: 300;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  max-width: 96vw;
+  background: rgba(5, 8, 5, 0.82);
+  border: 3px solid var(--rg-green-dim);
+  border-radius: 10px;
+  box-shadow: 0 0 18px rgba(51, 255, 102, 0.22);
+  font-family: 'VT323', monospace;
+  pointer-events: auto;
+}
+.build-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--rg-amber);
+}
+.build-mats {
+  display: flex;
+  gap: 8px;
+}
+.build-mat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  padding: 6px 8px;
+  cursor: pointer;
+  background: #161a16;
+  color: #fff;
+  border: 3px solid #3a4a3a;
+  border-radius: 8px;
+  font-family: 'VT323', monospace;
+  line-height: 1;
+  user-select: none;
+}
+.build-mat .bm-swatch {
+  width: 22px; height: 10px; border-radius: 2px; border: 1px solid #000; margin-bottom: 3px;
+}
+.build-mat .bm-name {
+  font-size: 14px; color: var(--rg-dim); text-transform: uppercase; letter-spacing: 1px;
+}
+.build-mat .bm-count {
+  font-size: 22px; color: var(--rg-ink);
+}
+.build-mat.active {
+  border-color: var(--rg-green);
+  background: #0e3a1a;
+  box-shadow: 0 0 12px rgba(51, 255, 102, 0.55);
+}
+.build-mat.empty {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.build-hint {
+  font-size: 15px;
+  color: var(--rg-dim);
+  text-align: center;
+}
+.build-zone {
+  font-size: 15px;
+  letter-spacing: 1px;
+  padding: 1px 8px;
+  border-radius: 4px;
+}
+.build-zone.ok { color: var(--rg-green); }
+.build-zone.warn { color: var(--rg-amber); }
+
+/* ============ HUD de la base (mesa de trabajo) ============ */
+.base-hud {
+  position: absolute;
+  top: 140px; left: 10px;
+  min-width: 190px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid var(--rg-line);
+  border-radius: 4px;
+  padding: 6px 10px;
+  display: none;
+}
+.base-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.base-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--rg-green);
+}
+.base-hp { font-size: 19px; color: var(--rg-ink); }
+.base-dist { font-size: 16px; color: var(--rg-dim); margin-top: 2px; }
+.base-hud .rg-hpbar { margin: 4px 0 0 0; }
+.base-hud.under-attack {
+  border-color: var(--rg-red);
+  animation: basePulse 0.55s infinite alternate;
+}
+.base-hud.under-attack .base-dist {
+  color: var(--rg-red);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+@keyframes basePulse {
+  from { box-shadow: 0 0 0 rgba(255, 68, 68, 0); }
+  to { box-shadow: 0 0 16px rgba(255, 68, 68, 0.8); }
+}
+
+/* ============ Objetivo actual ============ */
+.objective-hud {
+  position: absolute;
+  top: 100px; left: 10px;
+  max-width: 340px;
+  background: rgba(0, 0, 0, 0.55);
+  border-left: 3px solid var(--rg-amber);
+  border-radius: 0 4px 4px 0;
+  padding: 4px 10px;
+  font-size: 19px;
+  color: var(--rg-amber);
+  display: none;
+}
+
+/* ============ Flecha hacia la base ============ */
+.base-pointer {
+  position: fixed;
+  z-index: 350;
+  color: var(--rg-red);
+  font-size: 26px;
+  text-shadow: 2px 2px 0 #000;
+  pointer-events: none;
+  display: none;
+}
+
 /* ============ Responsive ============ */@media (max-width: 768px) {
   .quick-slots-container {
     bottom: 10px;
@@ -699,5 +1003,32 @@ input[type="range"] {
   .rg-btn {
     font-size: 9px;
     padding: 8px 10px;
+  }
+  .build-bar {
+    bottom: 150px;
+    gap: 2px;
+    padding: 6px;
+  }
+  .build-mat {
+    min-width: 46px;
+    padding: 4px 6px;
+  }
+  .build-bar .bm-name,
+  .build-bar .build-hint,
+  .build-bar .build-title {
+    display: none;
+  }
+  .rg-belt .quick-slot {
+    width: 42px;
+    height: 42px;
+  }
+  .objective-hud {
+    top: 92px;
+    max-width: 62vw;
+    font-size: 17px;
+  }
+  .base-hud {
+    top: 132px;
+    min-width: 150px;
   }
 }

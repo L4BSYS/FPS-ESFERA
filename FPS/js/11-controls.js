@@ -47,6 +47,7 @@
       window.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') {
               if (typeof paletteOpen !== 'undefined' && paletteOpen && !isGamePaused) { togglePalette(false); return; }
+              if (typeof pendingPlacement !== 'undefined' && pendingPlacement && !isGamePaused) { cancelPlacement(true); return; }
               if (typeof netChatOpen !== 'undefined' && netChatOpen) { toggleNetChat(false); return; }
               if (typeof closeTopModal === 'function' && closeTopModal()) return;
               togglePause(); return;
@@ -105,6 +106,11 @@
       // Mouse Buttons
       window.addEventListener('mousedown', (e) => {
           if (document.pointerLockElement === canvas && !isGamePaused && player) {
+              // Colocación pendiente (mesa/estructura): clic izquierdo confirma, derecho cancela
+              if (typeof pendingPlacement !== 'undefined' && pendingPlacement) {
+                  if (e.button === 0) { confirmPlacement(); return; }
+                  if (e.button === 2) { e.preventDefault(); cancelPlacement(true); return; }
+              }
               if (e.button === 0) { // Left click
                   // First check if we're looking at a pickup item
                   const lookingAtPickup = checkForPickupItems();
@@ -126,6 +132,7 @@
                           break;
 
                       case TOOLS.HANDS:
+                      case TOOLS.TORCH:
                           player.interactOrPickup();
                           break;
 
@@ -165,6 +172,8 @@
       canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
   function setupMobileControls() {
+      if (window.__mobileControlsReady) return;
+      window.__mobileControlsReady = true;
       const joystick = document.getElementById('joystickLeft');
       const knob = document.getElementById('joystickKnob');
       const rightArea = document.getElementById('rightTouchArea');
@@ -280,30 +289,79 @@
         player.mobileJumpPressed = false;
       });
 
-      actionBtn.addEventListener('touchstart', (e) => {
-          e.preventDefault();
-          switch(player.currentTool) {
-              case TOOLS.GUN: shoot(); break;
-              case TOOLS.HAMMER:
-                  if (typeof creatorMode !== 'undefined' && creatorMode) creatorPlace();
-                  else placeBlock();
-                  break;
-              case TOOLS.AXE:
-              case TOOLS.PICKAXE: player.handleAttack(); break;
-              default: player.interactOrPickup();
-          }
-      });
+      if (actionBtn) {
+          actionBtn.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              primaryAction();
+          });
+      }
 
-      // Add touch events for material buttons
-      document.querySelectorAll('.material-btn').forEach(btn => {
+      const secondaryBtn = document.getElementById('secondaryBtn');
+      if (secondaryBtn) {
+          secondaryBtn.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              secondaryAction();
+          });
+      }
+
+      const menuBtn = document.getElementById('menuBtn');
+      if (menuBtn) {
+          menuBtn.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              try { togglePause(); } catch (err) {}
+          });
+      }
+
+      // Add touch events for material buttons (legacy + build bar)
+      document.querySelectorAll('.material-btn, .build-mat').forEach(btn => {
           btn.addEventListener('touchstart', (e) => {
               e.preventDefault();
-              if(!btn.classList.contains('disabled')) {
+              if(!btn.classList.contains('disabled') && !btn.classList.contains('empty')) {
                   setBlockType(btn.dataset.type);
               }
           });
       });
 
+  }
+
+  // Acción principal (clic izquierdo / botón de acción táctil).
+  // Incluye abrir mesa/tótem, recoger objetos y la acción de la herramienta.
+  function primaryAction() {
+      if (typeof isGamePaused !== 'undefined' && isGamePaused) return;
+      if (typeof player === 'undefined' || !player) return;
+      if (typeof pendingPlacement !== 'undefined' && pendingPlacement) { confirmPlacement(); return; }
+      try {
+          if (typeof tryOpenWorkbench === 'function' && tryOpenWorkbench()) return;
+          if (typeof tryOpenTotem === 'function' && tryOpenTotem()) return;
+      } catch (e) {}
+      if (checkForPickupItems()) { player.interactOrPickup(); return; }
+      switch (player.currentTool) {
+          case TOOLS.GUN: shoot(); break;
+          case TOOLS.HAMMER:
+              if (typeof creatorMode !== 'undefined' && creatorMode) creatorPlace();
+              else placeBlock();
+              break;
+          case TOOLS.AXE:
+          case TOOLS.PICKAXE: player.handleAttack(); break;
+          default: player.interactOrPickup();
+      }
+  }
+
+  // Acción secundaria (clic derecho / botón táctil).
+  function secondaryAction() {
+      if (typeof isGamePaused !== 'undefined' && isGamePaused) return;
+      if (typeof player === 'undefined' || !player) return;
+      if (typeof pendingPlacement !== 'undefined' && pendingPlacement) { cancelPlacement(true); return; }
+      if (typeof creatorMode !== 'undefined' && creatorMode) { paletteHold = true; togglePalette(true); return; }
+      switch (player.currentTool) {
+          case TOOLS.HAMMER: creatorDelete(); break;
+          case TOOLS.HANDS:
+          case TOOLS.TORCH:
+              if (player.heldItem) player.dropItem();
+              break;
+          default:
+              if (player.heldItem) player.dropItem();
+      }
   }
   function updateActionButton() {
       if (!player) return;
@@ -317,31 +375,7 @@
       // Determine the best action based on context
       actionBtn.onclick = (e) => {
           e.preventDefault();
-
-          // Panels first (totem/workbench = mobile E key)
-          try {
-              if (typeof tryOpenWorkbench === 'function' && tryOpenWorkbench()) return;
-              if (typeof tryOpenTotem === 'function' && tryOpenTotem()) return;
-          } catch (e2) {}
-
-          // First try to pick up items if looking at one
-          const lookingAtPickup = checkForPickupItems();
-          if (lookingAtPickup) {
-              player.interactOrPickup();
-              return;
-          }
-
-          // Otherwise use current tool's primary action
-          switch(player.currentTool) {
-              case TOOLS.GUN: shoot(); break;
-              case TOOLS.HAMMER:
-                  if (typeof creatorMode !== 'undefined' && creatorMode) creatorPlace();
-                  else placeBlock();
-                  break;
-              case TOOLS.AXE:
-              case TOOLS.PICKAXE: player.handleAttack(); break;
-              default: player.interactOrPickup();
-          }
+          primaryAction();
       };
 
       // Update icon (unchanged)
@@ -351,6 +385,7 @@
           [TOOLS.HAMMER]: '🔨',
           [TOOLS.AXE]: '🪓',
           [TOOLS.PICKAXE]: '⛏️',
+          [TOOLS.TORCH]: '🔥',
           [TOOLS.HANDS]: '✊'
       }[tool] || '❔';
   }

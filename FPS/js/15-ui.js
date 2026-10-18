@@ -8,8 +8,10 @@ function itemIcon(item) {
       if (item.id === 'hammer') return '🔨 ';
       if (item.id === 'axe') return '🪓 ';
       if (item.id === 'pickaxe') return '⛏️ ';
+      if (item.id === 'torch') return '🔥 ';
       return '🔧 ';
   }
+  if (item.id === 'bandage') return '🩹 ';
   if (item.type === 'consumable' || item.id === 'food') return '🍎 ';
   if (item.id === 'toxin') return '☠️ ';
   if (item.type === 'ammo') return '📦 ';
@@ -21,23 +23,56 @@ function defKeyById(id) {
   return null;
 }
 // --- Crafteo compartido (pausa + mochila + mesa) ---
-var craftBtnRegistry = null;
-function ensureCraftRegistry() {
-  if (typeof craftBtnRegistry === 'undefined' || !craftBtnRegistry) craftBtnRegistry = [];
-  return craftBtnRegistry;
+function resIcon(k) {
+  if (k === 'wood') return '🪵';
+  if (k === 'stone') return '🪨';
+  if (k === 'metal') return '⚙️';
+  return '▫️';
 }
-function renderCraftButtons(container) {
+function recipeIcon(r) {
+  try {
+      if ((r.kind === 'tool' || r.kind === 'item') && ITEM_DEFINITIONS[r.defKey]) {
+          return itemIcon({ ...ITEM_DEFINITIONS[r.defKey] });
+      }
+  } catch (e) {}
+  if (r.id === 'bench') return '🛠️ ';
+  if (r.id === 'ammo') return '📦 ';
+  if (r.id === 'dressing') return '🩹 ';
+  return '🧰 ';
+}
+// station: 'hand' (mochila/pausa) o 'bench' (mesa de trabajo). Sin station = todas.
+function renderCraftButtons(container, station) {
   if (!container || container.dataset.rendered) return;
   container.dataset.rendered = '1';
-  ensureCraftRegistry();
   CRAFT_RECIPES.forEach((r, i) => {
+      if (station && r.station !== station) return;
       const b = document.createElement('button');
-      b.className = 'rg-btn rg-btn-small';
+      b.className = 'rg-btn rg-btn-small rg-craft';
+      b.dataset.idx = i;
+      b.innerHTML =
+          '<span class="rg-craft-ico">' + recipeIcon(r) + '</span>' +
+          '<span class="rg-craft-body">' +
+              '<span class="rg-craft-name">' + (r.name || r.label) + '</span>' +
+              '<span class="rg-craft-cost"></span>' +
+          '</span>' +
+          '<span class="rg-craft-lock" style="display:none;"></span>';
       b.addEventListener('click', () => craftItem(i));
       container.appendChild(b);
-      craftBtnRegistry.push({ btn: b, i });
   });
   try { refreshCraftUI(); } catch (e) {}
+}
+// Chips de materiales disponibles (madera/piedra/metal + balas)
+function renderMaterialChips(el) {
+  if (!el) return;
+  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
+  if (!inv) { el.innerHTML = ''; return; }
+  const names = (typeof RESOURCE_ES !== 'undefined') ? RESOURCE_ES : {};
+  let html = ['wood', 'stone', 'metal'].map(k =>
+      '<span class="rg-mat rg-mat-' + k + '" title="' + (names[k] || k) + '">' +
+      resIcon(k) + '<b>' + (inv.resources[k] || 0) + '</b></span>').join('');
+  const ammoTxt = Object.keys(inv.ammo || {}).map(a => a + ': ' + inv.ammo[a]).join(' · ');
+  if (ammoTxt) html += '<span class="rg-mat rg-mat-ammo">📦 ' + ammoTxt + '</span>';
+  el.innerHTML = html;
 }
 function setCraftStatus(t) {
   setPauseStatus(t);
@@ -68,7 +103,7 @@ function invShowTab(which) {
   if (!items || !craft) return;
   items.style.display = which === 'items' ? 'block' : 'none';
   craft.style.display = which === 'craft' ? 'block' : 'none';
-  if (which === 'craft') { renderCraftButtons(craft); try { refreshCraftUI(); } catch (e) {} }
+  if (which === 'craft') { renderCraftButtons(craft, 'hand'); try { refreshCraftUI(); } catch (e) {} }
 }
 function renderInvFab() {
   let fab = document.getElementById('invFab');
@@ -119,13 +154,15 @@ function refreshInvModal() {
       const eq = inv.equippedItem === item;
       const info = document.createElement('span');
       info.style.flex = '1';
+      info.className = 'rg-drag-handle';
+      info.setAttribute('data-idx', idx);
       info.innerHTML = '<span style="font-size:20px;">' + itemIcon(item) + '</span> ' + item.name +
           ((item.stackable && item.quantity > 1) ? ' x' + item.quantity : '') +
           (eq ? ' <b style="color:#4CAF50;">(equipada)</b>' : '');
       row.appendChild(info);
       const useBtn = document.createElement('button');
-      const usable = !!item.toolType || item.id === 'food';
-      useBtn.textContent = item.id === 'food' ? 'Comer' : (eq ? 'En uso' : 'Equipar');
+      const usable = !!item.toolType || item.healAmount > 0;
+      useBtn.textContent = item.healAmount > 0 ? 'Usar' : (eq ? 'En uso' : 'Equipar');
       useBtn.className = 'rg-btn rg-btn-small';
       useBtn.disabled = !usable;
       useBtn.addEventListener('click', () => invUseItem(idx));
@@ -137,18 +174,117 @@ function refreshInvModal() {
       row.appendChild(dropBtn);
       grid.appendChild(row);
   });
+  renderBelt();
   const foot = document.getElementById('invFoot');
-  if (foot) {
-      const ammoTxt = Object.keys(inv.ammo).map(a => a + ': ' + inv.ammo[a]).join(' · ');
-      const resTxt = ['wood', 'stone', 'metal'].map(k => (typeof RESOURCE_ES !== 'undefined' ? (RESOURCE_ES[k] || k) : k) + ': ' + (inv.resources[k] || 0)).join(' · ');
-      foot.textContent = 'Balas: ' + ammoTxt + ' | Materiales: ' + resTxt;
-  }
+  if (foot) renderMaterialChips(foot);
 }
+
+// --- Cinturón (atajos 1-5): se puede arrastrar y soltar ---
+function renderBelt() {
+  const belt = document.getElementById('invBelt');
+  if (!belt || typeof player === 'undefined' || !player) return;
+  const inv = player.inventory;
+  belt.innerHTML = '';
+  inv.quickSlots.forEach((_, index) => {
+      const slot = document.createElement('div');
+      slot.className = 'quick-slot';
+      slot.setAttribute('data-slot', index);
+      slot.addEventListener('click', () => { try { inv.quickSelect(index); renderBelt(); } catch (e) {} });
+      belt.appendChild(slot);
+  });
+  inv.updateQuickSlotUI();
+}
+
+let _beltDrag = null;
+function _beltSlotUnder(x, y) {
+  const els = document.querySelectorAll('#invBelt .quick-slot');
+  for (const el of Array.from(els)) {
+      const r = el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return parseInt(el.getAttribute('data-slot'), 10);
+  }
+  return -1;
+}
+function _beltGhost(item, x, y) {
+  let g = document.getElementById('beltGhost');
+  if (!g) {
+      g = document.createElement('div');
+      g.id = 'beltGhost';
+      g.className = 'rg-drag-ghost';
+      document.body.appendChild(g);
+  }
+  g.textContent = itemIcon(item) + ' ' + item.name;
+  g.style.left = x + 'px';
+  g.style.top = y + 'px';
+  return g;
+}
+function startBeltDrag(item, fromSlot, x, y) {
+  if (!item) return;
+  _beltDrag = { item, fromSlot, moved: false, x, y };
+  _beltGhost(item, x, y);
+}
+function moveBeltDrag(x, y) {
+  if (!_beltDrag) return;
+  if (Math.abs(x - _beltDrag.x) + Math.abs(y - _beltDrag.y) > 6) _beltDrag.moved = true;
+  const g = document.getElementById('beltGhost');
+  if (g) { g.style.left = x + 'px'; g.style.top = y + 'px'; }
+}
+function endBeltDrag(x, y) {
+  if (!_beltDrag) return;
+  const drag = _beltDrag;
+  _beltDrag = null;
+  const g = document.getElementById('beltGhost');
+  if (g) g.remove();
+  if (!drag.moved) {
+      if (drag.fromSlot >= 0) { try { player.inventory.quickSelect(drag.fromSlot); } catch (e) {} }
+      return;
+  }
+  const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
+  if (!inv) return;
+  const target = _beltSlotUnder(x, y);
+  if (target >= 0) {
+      const existing = inv.quickSlots.findIndex(s => s && drag.item && s.id === drag.item.id);
+      if (drag.fromSlot >= 0) {
+          const tmp = inv.quickSlots[target];
+          inv.quickSlots[target] = inv.quickSlots[drag.fromSlot];
+          inv.quickSlots[drag.fromSlot] = tmp;
+      } else {
+          if (existing >= 0 && existing !== target) inv.quickSlots[existing] = null;
+          inv.quickSlots[target] = drag.item;
+      }
+  } else if (drag.fromSlot >= 0) {
+      inv.clearQuickSlot(drag.fromSlot);
+      return;
+  } else {
+      return; // dropped nothing meaningful
+  }
+  inv.updateQuickSlotUI();
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (!invOpen) return;
+  if (e.target && e.target.closest && e.target.closest('button')) return;
+  const handle = e.target && e.target.closest ? e.target.closest('.rg-drag-handle') : null;
+  if (handle) {
+      const idx = parseInt(handle.getAttribute('data-idx'), 10);
+      const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
+      if (inv && inv.items[idx]) { e.preventDefault(); startBeltDrag(inv.items[idx], -1, e.clientX, e.clientY); }
+      return;
+  }
+  const slotEl = e.target && e.target.closest ? e.target.closest('#invBelt .quick-slot') : null;
+  if (slotEl) {
+      const idx = parseInt(slotEl.getAttribute('data-slot'), 10);
+      const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
+      if (inv && inv.quickSlots[idx]) { e.preventDefault(); startBeltDrag(inv.quickSlots[idx], idx, e.clientX, e.clientY); }
+  }
+});
+document.addEventListener('pointermove', (e) => { if (_beltDrag) moveBeltDrag(e.clientX, e.clientY); });
+document.addEventListener('pointerup', (e) => { if (_beltDrag) endBeltDrag(e.clientX, e.clientY); });
+document.addEventListener('pointercancel', (e) => { if (_beltDrag) endBeltDrag(e.clientX, e.clientY); });
 function invUseItem(idx) {
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (!inv || !inv.items[idx]) return;
   const item = inv.items[idx];
-  if (item.id === 'food') {
+  if (item.healAmount > 0) {
       player.health = Math.min(player.maxHealth || 100, player.health + (item.healAmount || 30));
       inv.removeItem(item, 1);
       try { player.updateStatsHUD(); playSound('health-regen'); } catch (e) {}
@@ -280,6 +416,7 @@ function applyPausePanels() {
 }
 function showGameOver() {
   try { if (typeof player !== 'undefined' && player) player.health = Math.min(player.health, 0); } catch (e) {}
+  try { if (typeof cancelPlacement === 'function') cancelPlacement(true); } catch (e) {}
   const go = document.getElementById('gameOver');
   if (go && go.style.display !== 'flex') {
       const stats = document.getElementById('gameOverStats');

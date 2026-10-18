@@ -101,15 +101,38 @@
         // (Muro de prueba eliminado)
 
       // --- Resources Wood stone metal
-        let woodnode = createResourceNode('wood', new THREE.Vector3(-4, 0, 14), 100);
+        let woodnode = createResourceNode('wood', new THREE.Vector3(-4, groundTopY(-4, 14), 14), 100);
         collidableObjects.push(woodnode);
         scene.add(woodnode);
-        let stonenode = createResourceNode('stone', new THREE.Vector3(4, 0, 14), 100);
+        let stonenode = createResourceNode('stone', new THREE.Vector3(4, groundTopY(4, 14), 14), 100);
         collidableObjects.push(stonenode);
         scene.add(stonenode);
-        let metalnode = createResourceNode('metal', new THREE.Vector3(0, 0, 18), 100);
+        let metalnode = createResourceNode('metal', new THREE.Vector3(0, groundTopY(0, 18), 18), 100);
         collidableObjects.push(metalnode);
         scene.add(metalnode);
+
+      // --- Clusteres de recursos repartidos por el mapa ---
+        try {
+            const clusters = [
+                ['wood', -22, 8, 5], ['wood', 26, -10, 4], ['wood', -32, -22, 5],
+                ['stone', 22, 14, 5], ['stone', -16, 28, 4], ['stone', 8, -28, 4],
+                ['metal', 32, 8, 4], ['metal', -26, -8, 4], ['metal', 6, 32, 3]
+            ];
+            clusters.forEach(([t, x, z, n]) => {
+                if (typeof spawnResourceCluster === 'function') spawnResourceCluster(t, x, z, n);
+            });
+        } catch (e) { console.warn('No se pudieron crear clusteres de recursos', e); }
+
+      // --- Recursos sueltos (se juntan apretando E, sin herramienta) ---
+        [[-3, 11], [-2.2, 12], [3.5, 11], [5.5, 19]].forEach(([x, z]) => {
+            placeWorldItem('branch', new THREE.Vector3(x, 0.35, z));
+        });
+        [[3, 13], [3.7, 14], [2.5, 20]].forEach(([x, z]) => {
+            placeWorldItem('pebble', new THREE.Vector3(x, 0.35, z));
+        });
+        [[-3, 20], [-4, 21], [6, 16]].forEach(([x, z]) => {
+            placeWorldItem('scrap', new THREE.Vector3(x, 0.35, z));
+        });
 
       // --- NPCs ---
         spawnRobot(new THREE.Vector3(20, 0, 30)); // Spawn one at specific location
@@ -132,10 +155,13 @@
                 item.model.name = itemDef.id;
                 item.model.userData = {
                     collected: false,
-                    itemData: item
+                    itemData: item,
+                    healAmount: itemDef.healAmount,
+                    damageAmount: itemDef.damageAmount
                 };
                 if (itemDef.type === 'consumable') {
                   item.model.isCollectible = true;
+                  item.model.inContact = true;          // pickup automático al tocarlo
                   item.model.type = itemDef.id;       // e.g. 'health' or 'damage'
                 }            
                 scene.add(item.model);
@@ -154,6 +180,13 @@
         placeTotem(['Cosechá nodos:', 'hacha: madera', 'pico: piedra/metal'], 0, 12.5);
         createWorldItem(ITEM_DEFINITIONS.food, new THREE.Vector3(-1.5, 1, 22));
         createWorldItem(ITEM_DEFINITIONS.key_golden, new THREE.Vector3(1.5, 1, 25));
+        // Pickups automáticos repartidos: la comida cura y la toxina daña a quien la toca
+        [[-18, 6], [18, -6], [24, 14], [-22, -10], [10, -20]].forEach(([x, z]) => {
+            createWorldItem(ITEM_DEFINITIONS.toxin, new THREE.Vector3(x, groundTopY(x, z) + 0.5, z));
+        });
+        [[16, 8], [-16, -4], [22, -14], [-20, 18], [-8, -22]].forEach(([x, z]) => {
+            createWorldItem(ITEM_DEFINITIONS.food, new THREE.Vector3(x, groundTopY(x, z) + 0.5, z));
+        });
         // Mini-base demo: mesa + pared + puerta con llave + escalera
         placeTotem(['E en la mesa:', 'crafteá herramientas', 'y defendé tu base'], 0, 23);
         placeWorkbench(new THREE.Vector3(0, 0, 26));
@@ -182,6 +215,7 @@
         player.updateToolHUD();
         player.autoAssignQuickSlots();
         player.inventory.updateQuickSlotUI(); // Initial render
+        try { updateResourceHUD(); } catch (e) {}
 
       // --- Renderer ---
       renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });

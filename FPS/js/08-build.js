@@ -18,6 +18,97 @@
       );
   }
 
+  // --- Decaimiento de la zona reclamada cuando muere la mesa ---
+  var decayingBlocks = [];
+  var DECAY_TOTAL_MS = 30000;
+  function startZoneDecay(wb) {
+      if (!wb || !Array.isArray(placedBlocks)) return;
+      const cx = wb.pos.x, cz = wb.pos.z;
+      const r = wb.claimRadius || (typeof CLAIM_RADIUS !== 'undefined' ? CLAIM_RADIUS : 14);
+      const list = [];
+      for (const b of placedBlocks) {
+          const dx = b.position.x - cx, dz = b.position.z - cz;
+          const d = Math.hypot(dx, dz);
+          if (d <= r + 0.75) list.push({ b, d });
+      }
+      list.sort((a, c) => c.d - a.d); // los más lejanos primero
+      const now = performance.now();
+      const step = (DECAY_TOTAL_MS * 0.45) / Math.max(1, list.length);
+      list.forEach((item, i) => {
+          const b = item.b;
+          if (!b.userData || b.userData.decay) return;
+          b.userData.decay = true;
+          b.userData.decayStart = now + i * step;
+          b.userData.decayDur = DECAY_TOTAL_MS * 0.55;
+          if (!decayingBlocks.includes(b)) decayingBlocks.push(b);
+      });
+      if (list.length) showPlacementMessage('¡Comenzó el decaimiento de la base!');
+  }
+  function cancelZoneDecay(cx, cz) {
+      const r = (typeof CLAIM_RADIUS !== 'undefined' ? CLAIM_RADIUS : 14);
+      for (let i = decayingBlocks.length - 1; i >= 0; i--) {
+          const b = decayingBlocks[i];
+          if (!b || !b.userData) { decayingBlocks.splice(i, 1); continue; }
+          const dx = b.position.x - cx, dz = b.position.z - cz;
+          if (dx * dx + dz * dz <= r * r) {
+              b.userData.decay = false;
+              b.userData.decayStart = 0;
+              try {
+                  b.scale.setScalar(1);
+                  if (b.material) { b.material.opacity = 1; b.material.transparent = false; }
+                  if (b.userData.maxHealth) {
+                      b.userData.health = b.userData.maxHealth;
+                      updateBlockAppearance(b);
+                  }
+              } catch (e) {}
+              decayingBlocks.splice(i, 1);
+          }
+      }
+  }
+  function updateBlockDecay(delta) {
+      if (!decayingBlocks.length) return;
+      const now = performance.now();
+      for (let i = decayingBlocks.length - 1; i >= 0; i--) {
+          const b = decayingBlocks[i];
+          if (!b || !b.userData || !placedBlocks.includes(b)) { decayingBlocks.splice(i, 1); continue; }
+          if (!b.userData.decayStart || now < b.userData.decayStart) continue;
+          const dur = b.userData.decayDur || DECAY_TOTAL_MS;
+          const p = Math.min(1, (now - b.userData.decayStart) / dur);
+          // Se degrada como si lo estuvieran atacando: pierde vida y muestra el daño
+          const maxHp = b.userData.maxHealth || 1;
+          b.userData.health = Math.max(0.0001, maxHp * (1 - p));
+          try { updateBlockAppearance(b); } catch (e) {}
+          if (p >= 1) {
+              decayingBlocks.splice(i, 1);
+              try { destroyBlock(b); } catch (e) {}
+          }
+      }
+  }
+  // --- Anillo de zona reclamada + HUD de zona de construcción ---
+  function updateClaimRings(t) {
+      if (typeof workbenches === 'undefined' || typeof player === 'undefined' || !player) return;
+      const px = player.container.position.x, pz = player.container.position.z;
+      const hammer = player.currentTool === TOOLS.HAMMER;
+      for (const wb of workbenches) {
+          if (!wb || !wb.ring) continue;
+          const r = wb.claimRadius || (typeof CLAIM_RADIUS !== 'undefined' ? CLAIM_RADIUS : 14);
+          const d = Math.hypot(px - wb.pos.x, pz - wb.pos.z);
+          const show = hammer || d < r * 1.25 || wb.hp < wb.maxHp;
+          wb.ring.visible = show;
+          if (show) wb.ring.material.opacity = 0.1 + Math.abs(Math.sin((t || 0) * 2)) * 0.08;
+      }
+  }
+  function updateBuildZoneHUD() {
+      const el = document.getElementById('buildZone');
+      if (!el) return;
+      const hasBench = (typeof workbenches !== 'undefined') && workbenches.some(w => w && w.hp > 0);
+      const inside = hasBench && typeof player !== 'undefined' && player && typeof isInAnyClaim === 'function' &&
+          isInAnyClaim(player.container.position);
+      if (!hasBench) { el.textContent = 'Sin mesa: crafteá una para reclamar la zona'; el.className = 'build-zone warn'; }
+      else if (inside) { el.textContent = 'Dentro de tu base'; el.className = 'build-zone ok'; }
+      else { el.textContent = 'Fuera del área de tu base'; el.className = 'build-zone warn'; }
+  }
+
   function isPositionValid(position) {
       const snappedPos = snapToGrid(position);
       const positionKey = getGridKey(snappedPos.x, snappedPos.y, snappedPos.z);
@@ -50,6 +141,13 @@
       if (typeof creatorMode !== 'undefined' && creatorMode) {
           lastInvalidReason = "";
           return true;
+      }
+
+      // 1.5 Zona reclamada: solo se construye dentro del área de una mesa de trabajo
+      if (typeof isInAnyClaim === 'function' && !isInAnyClaim(snappedPos)) {
+          const hasBench = (typeof workbenches !== 'undefined') && workbenches.some(w => w && w.hp > 0);
+          lastInvalidReason = hasBench ? 'Fuera del área de tu base' : 'Craftéa y colocá una mesa de trabajo';
+          return false;
       }
 
       // 2. Ground-level blocks (foundations)
@@ -691,40 +789,42 @@
   }
 // --- Resources
   function updateResourceHUD() {
-      const resDiv = document.getElementById('resources');
-      if(!resDiv || !player) return;
-      
-      // Create buttons for each material type
-      const buttonsHTML = Object.entries(BLOCK_MATERIALS).map(([type, data]) => {
+      const bar = document.getElementById('buildMats');
+      if (!bar || !player) return;
+
+      const matNames = { wood: 'Madera', stone: 'Piedra', metal: 'Metal' };
+      const matKeys = { wood: 'Z', stone: 'X', metal: 'C' };
+      bar.innerHTML = Object.entries(BLOCK_MATERIALS).map(([type, data]) => {
           const isActive = currentBlockType === type;
-          const color = data.material.color.getHexString();
-          const hasResources = player.inventory.resources[type] > 0;
-          
+          const color = '#' + data.material.color.getHexString();
+          const count = player.inventory.resources[type] || 0;
+          const empty = count <= 0;
           return `
-              <button class="material-btn ${isActive ? 'active' : ''} ${!hasResources ? 'disabled' : ''}" 
-                      data-type="${type}" 
-                      style="background-color:#${color};"
-                      title="[${type.toUpperCase().charAt(0)}] ${type.charAt(0).toUpperCase() + type.slice(1)}">
-                      ${player.inventory.resources[type]}
+              <button class="build-mat ${isActive ? 'active' : ''} ${empty ? 'empty' : ''}"
+                      data-type="${type}"
+                      title="${matNames[type] || type} (${matKeys[type] || ''}) — te quedan ${count}">
+                  <span class="bm-swatch" style="background:${color};"></span>
+                  <span class="bm-name">${matNames[type] || type}</span>
+                  <span class="bm-count">${count}</span>
               </button>
           `;
       }).join('');
 
-      resDiv.innerHTML = `
-          <h3>Resources</h3>
-          <div class="material-buttons">
-              ${buttonsHTML}
-          </div>
-      `;
-
-      // Add event listeners to new buttons
-      document.querySelectorAll('.material-btn').forEach(btn => {
+      bar.querySelectorAll('.build-mat').forEach(btn => {
           btn.addEventListener('click', () => {
-              if(!btn.classList.contains('disabled')) {
-                  setBlockType(btn.dataset.type);
-              }
+              if (!btn.classList.contains('empty')) setBlockType(btn.dataset.type);
           });
       });
+
+      refreshBuildBarVisibility();
+  }
+  // Muestra la barra de construcción solo con el martillo en mano (fuera del modo creador)
+  function refreshBuildBarVisibility() {
+      const bar = document.getElementById('buildBar');
+      if (!bar) return;
+      const show = !isGamePaused && !(typeof creatorMode !== 'undefined' && creatorMode) &&
+          typeof player !== 'undefined' && player && player.currentTool === TOOLS.HAMMER;
+      bar.style.display = show ? 'flex' : 'none';
   }
   function createHarvestEffect(position) {
       const spark = new THREE.Mesh(
@@ -735,6 +835,56 @@
       scene.add(spark);
       setTimeout(() => scene.remove(spark), 300);
   }
+  function buildResourceNodeModel(type) {
+      // Modelo con la base apoyada en y=0 para que se asiente en el suelo
+      const g = new THREE.Group();
+      const useShadow = (m) => { m.receiveShadow = true; return m; };
+      if (type === 'wood') {
+          const bark = new THREE.MeshStandardMaterial({ color: 0x6b4a2b, roughness: 0.9, metalness: 0.0 });
+          const cutWood = new THREE.MeshStandardMaterial({ color: 0x9a6a35, roughness: 0.85, metalness: 0.0 });
+          const leaf = new THREE.MeshStandardMaterial({ color: 0x3f7a35, roughness: 0.9, metalness: 0.0 });
+          const stump = useShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 0.9, 10), bark));
+          stump.castShadow = true;
+          stump.position.y = 0.45; g.add(stump);
+          const cut = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.06, 10), cutWood);
+          cut.position.y = 0.92; g.add(cut);
+          [[-0.62, 0.18, 0.22], [0.58, 0.16, -0.28]].forEach(([x, y, z], i) => {
+              const log = useShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 1.05, 8), i ? cutWood : bark));
+              log.rotation.set(Math.PI / 2, 0, i ? 0.5 : -0.4);
+              log.position.set(x, y, z); g.add(log);
+          });
+          [[-0.35, 1.0, 0.18], [0.3, 1.18, -0.15], [0.0, 1.32, 0.0]].forEach(([x, y, z]) => {
+              const puff = new THREE.Mesh(new THREE.SphereGeometry(0.34, 8, 6), leaf);
+              puff.position.set(x, y, z); g.add(puff);
+          });
+      } else if (type === 'stone') {
+          const rock = new THREE.MeshStandardMaterial({ color: 0x8a8a8a, roughness: 0.95, metalness: 0.0 });
+          const rockDark = new THREE.MeshStandardMaterial({ color: 0x6f6f6f, roughness: 0.95, metalness: 0.0 });
+          const rocks = [[0, 0.42, 0, 0.62], [0.55, 0.28, 0.3, 0.42], [-0.5, 0.3, -0.25, 0.46], [0.1, 0.24, -0.55, 0.36]];
+          rocks.forEach(([x, y, z, r], i) => {
+              const m = useShadow(new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), i % 2 ? rockDark : rock));
+              m.position.set(x, y, z); m.rotation.set(Math.random(), Math.random(), Math.random());
+              if (i === 0) m.castShadow = true;
+              g.add(m);
+          });
+      } else {
+          const rock = new THREE.MeshStandardMaterial({ color: 0x4a4a52, roughness: 0.85, metalness: 0.3 });
+          const ore = new THREE.MeshStandardMaterial({ color: 0x9aa4b0, roughness: 0.3, metalness: 0.95 });
+          const rocks = [[0, 0.45, 0, 0.6], [0.55, 0.3, 0.28, 0.42], [-0.5, 0.32, -0.22, 0.44]];
+          rocks.forEach(([x, y, z, r], i) => {
+              const m = useShadow(new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), rock));
+              m.position.set(x, y, z); m.rotation.set(Math.random(), Math.random(), Math.random());
+              if (i === 0) m.castShadow = true;
+              g.add(m);
+          });
+          [[0.05, 0.85, 0.05, 0.16], [0.4, 0.55, 0.1, 0.12], [-0.3, 0.6, -0.1, 0.13]].forEach(([x, y, z, r]) => {
+              const c = new THREE.Mesh(new THREE.OctahedronGeometry(r, 0), ore);
+              c.position.set(x, y, z); c.rotation.set(Math.random(), Math.random(), Math.random());
+              g.add(c);
+          });
+      }
+      return g;
+  }
   function createResourceNode(type, position) {
       // Get the material definition from BLOCK_MATERIALS
       const materialDef = BLOCK_MATERIALS[type];
@@ -744,16 +894,23 @@
       }
 
       // Create the node using the unified material
-      const node = new THREE.Mesh(
-          materialDef.geometry.clone(), // Clone the geometry
-          materialDef.material.clone() // Clone the material so each node has its own instance
-      );
-      
+      const node = buildResourceNodeModel(type);
+
       node.position.copy(position);
       node.type = type;
       node.isResourceNode = true;
       node.health = materialDef.resourceHealth || 50; // Fallback to 50 if not defined
       node.isHarvested = false;
+      // Collider: el nodo es sólido para jugador y enemigos
+      node.userData.solid = true;
+      node.isStatic = true;
+      try {
+          node.updateMatrixWorld(true);
+          const b = new THREE.Box3().setFromObject(node, true);
+          // Recortamos la altura del follaje para un collider más natural
+          b.max.y = Math.min(b.max.y, b.min.y + 1.3);
+          node.userData.worldBoundingBox = b;
+      } catch (e) {}
 
       node.harvest = function (efficiency) {
           if (this.isHarvested) return 0;
@@ -794,7 +951,33 @@
           collidableObjects.push(node);
       }
   }
+  function spawnResourceCluster(type, cx, cz, count) {
+      count = count || 4;
+      const placed = [];
+      let spawnCount = 0;
+      for (let i = 0; i < count; i++) {
+          let x = cx, z = cz, ok = false;
+          for (let t = 0; t < 14; t++) {
+              const a = Math.random() * Math.PI * 2;
+              const r = 1.4 + Math.random() * 4.5;
+              x = cx + Math.cos(a) * r; z = cz + Math.sin(a) * r;
+              if (placed.every(q => Math.hypot(q.x - x, q.z - z) > 1.7)) { ok = true; break; }
+          }
+          if (!ok) continue;
+          const y = (typeof groundTopY === 'function') ? groundTopY(x, z) : 0;
+          const node = createResourceNode(type, new THREE.Vector3(x, y, z));
+          if (!node) continue;
+          scene.add(node);
+          if (typeof collidableObjects !== 'undefined' && collidableObjects.indexOf(node) === -1) {
+              collidableObjects.push(node);
+          }
+          placed.push({ x, z });
+          spawnCount++;
+      }
+      return spawnCount;
+  }
 // --- World Building Methods
+
   function createLockedDoor(position) {
       const door = new THREE.Mesh(
           new THREE.BoxGeometry(2, 4, 0.2),

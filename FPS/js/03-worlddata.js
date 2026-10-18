@@ -42,7 +42,8 @@ const TOOLS = {
     GUN: 'gun',
     HAMMER: 'hammer',
     AXE: 'axe',
-    PICKAXE: 'pickaxe'    
+    PICKAXE: 'pickaxe',
+    TORCH: 'torch'
 };
 const ITEM_DEFINITIONS = {
     // Tools and Weapons
@@ -55,18 +56,35 @@ const ITEM_DEFINITIONS = {
       damage: 15,
       fireRate: 0.2,
       createModel: () => {
-        const gunGeo = new THREE.BoxGeometry(0.3, 0.1, 0.8);
-        const gunMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
-        const model = new THREE.Mesh(gunGeo, gunMat);
-        model.position.set(0.5, -0.3, -1);
+        const g = new THREE.Group();
+        const steel = new THREE.MeshStandardMaterial({ color: 0x2b2d33, metalness: 0.85, roughness: 0.35 });
+        const steelDark = new THREE.MeshStandardMaterial({ color: 0x161719, metalness: 0.9, roughness: 0.4 });
+        const gripMat = new THREE.MeshStandardMaterial({ color: 0x4a3320, roughness: 0.85 });
 
-        // Add a muzzle point for bullet origin
+        const slide = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.13, 0.62), steel);
+        slide.position.set(0, 0.02, -0.02); g.add(slide);
+        const slideTop = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.03, 0.6), steelDark);
+        slideTop.position.set(0, 0.1, -0.02); g.add(slideTop);
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.36, 10), steelDark);
+        barrel.rotation.x = Math.PI / 2; barrel.position.set(0, 0.02, -0.42); g.add(barrel);
+        const grip = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.4, 0.17), gripMat);
+        grip.position.set(0, -0.2, 0.16); grip.rotation.x = -0.28; g.add(grip);
+        const guard = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.018, 6, 14, Math.PI), steel);
+        guard.rotation.x = Math.PI / 2; guard.position.set(0, -0.09, -0.04); g.add(guard);
+        const trigger = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.07, 0.025), steelDark);
+        trigger.position.set(0, -0.07, -0.04); g.add(trigger);
+        const sightF = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.03, 0.02), steelDark);
+        sightF.position.set(0, 0.13, -0.3); g.add(sightF);
+        const sightB = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.03, 0.02), steelDark);
+        sightB.position.set(0, 0.13, 0.22); g.add(sightB);
+        const mag = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, 0.1), steelDark);
+        mag.position.set(0, -0.16, 0.02); g.add(mag);
+
         const muzzle = new THREE.Object3D();
-        muzzle.position.set(0, 0, -0.4);
+        muzzle.position.set(0, 0.02, -0.62);
         muzzle.name = 'muzzlePoint';
-        model.add(muzzle);
-
-        return model;
+        g.add(muzzle);
+        return g;
       },
       stackable: false
     },
@@ -76,15 +94,19 @@ const ITEM_DEFINITIONS = {
       type: 'tool',
       toolType: TOOLS.HAMMER,
       createModel: () => {
-        const handleGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.4, 8);
-        const handleMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-        const hammerHandle = new THREE.Mesh(handleGeo, handleMat);
-        const headGeo = new THREE.BoxGeometry(0.2, 0.1, 0.08);
-        const headMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
-        const hammerHead = new THREE.Mesh(headGeo, headMat);
-        hammerHead.position.y = 0.2;
-        hammerHandle.add(hammerHead);
-        return hammerHandle;
+        const g = new THREE.Group();
+        const wood = new THREE.MeshStandardMaterial({ color: 0x8B5A2B, roughness: 0.85 });
+        const wrap = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.95 });
+        const metal = new THREE.MeshStandardMaterial({ color: 0x7c828a, metalness: 0.8, roughness: 0.35 });
+        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.036, 0.52, 8), wood);
+        g.add(handle);
+        const gripWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.042, 0.042, 0.14, 8), wrap);
+        gripWrap.position.y = -0.2; g.add(gripWrap);
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.1, 0.11), metal);
+        head.position.y = 0.26; g.add(head);
+        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.17, 4), metal);
+        claw.rotation.z = Math.PI / 2; claw.position.set(0.18, 0.26, 0); g.add(claw);
+        return g;
       },
       stackable: false
     },
@@ -95,15 +117,21 @@ const ITEM_DEFINITIONS = {
       toolType: TOOLS.AXE,
       efficiency: 2,
       createModel: () => {
-        const handleGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.4, 8);
-        const handleMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-        const hammerHandle = new THREE.Mesh(handleGeo, handleMat);
-        const headGeo = new THREE.BoxGeometry(0.3, 0.3, 0.05);
-        const headMat = new THREE.MeshStandardMaterial({ color: 0x0F6666 });
-        const hammerHead = new THREE.Mesh(headGeo, headMat);
-        hammerHead.position.y = 0.2;
-        hammerHandle.add(hammerHead);
-        return hammerHandle;
+        const g = new THREE.Group();
+        const wood = new THREE.MeshStandardMaterial({ color: 0x8B5A2B, roughness: 0.85 });
+        const wrap = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.95 });
+        const metal = new THREE.MeshStandardMaterial({ color: 0x9aa2ab, metalness: 0.85, roughness: 0.3 });
+        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.034, 0.58, 8), wood);
+        g.add(handle);
+        const gripWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.14, 8), wrap);
+        gripWrap.position.y = -0.22; g.add(gripWrap);
+        const eye = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.16, 0.14), metal);
+        eye.position.y = 0.28; g.add(eye);
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.32, 0.3), metal);
+        blade.position.set(0.07, 0.28, 0.09); g.add(blade);
+        const cheek = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.2, 4), metal);
+        cheek.rotation.set(Math.PI / 2, 0, Math.PI / 2); cheek.position.set(0.06, 0.28, 0.18); g.add(cheek);
+        return g;
       },
       stackable: false
     },
@@ -114,15 +142,21 @@ const ITEM_DEFINITIONS = {
       toolType: TOOLS.PICKAXE,
       efficiency: 2,
       createModel: () => {
-        const handleGeo = new THREE.CylinderGeometry(0.04, 0.05, 0.4, 8);
-        const handleMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-        const hammerHandle = new THREE.Mesh(handleGeo, handleMat);
-        const headGeo = new THREE.BoxGeometry(0.2, 0.2, 0.12);
-        const headMat = new THREE.MeshStandardMaterial({ color: 0x6666F6 });
-        const hammerHead = new THREE.Mesh(headGeo, headMat);
-        hammerHead.position.y = 0.2;
-        hammerHandle.add(hammerHead);
-        return hammerHandle;
+        const g = new THREE.Group();
+        const wood = new THREE.MeshStandardMaterial({ color: 0x8B5A2B, roughness: 0.85 });
+        const wrap = new THREE.MeshStandardMaterial({ color: 0x3a2a1a, roughness: 0.95 });
+        const metal = new THREE.MeshStandardMaterial({ color: 0x9aa2ab, metalness: 0.85, roughness: 0.3 });
+        const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.034, 0.58, 8), wood);
+        g.add(handle);
+        const gripWrap = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.14, 8), wrap);
+        gripWrap.position.y = -0.22; g.add(gripWrap);
+        const cross = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.07), metal);
+        cross.position.y = 0.28; g.add(cross);
+        const tipL = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.18, 6), metal);
+        tipL.rotation.z = Math.PI / 2; tipL.position.set(-0.32, 0.28, 0); g.add(tipL);
+        const tipR = new THREE.Mesh(new THREE.ConeGeometry(0.045, 0.18, 6), metal);
+        tipR.rotation.z = -Math.PI / 2; tipR.position.set(0.32, 0.28, 0); g.add(tipR);
+        return g;
       },
       stackable: false
     },            
@@ -135,17 +169,26 @@ const ITEM_DEFINITIONS = {
         stackable: true,
         maxStack: 5,
         createModel: () => {
-          const itemGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.4, 8);
-          const itemMat = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-          const item = new THREE.Mesh(itemGeo, itemMat);
-          item.isCollectible = true;
-          item.inContact = true;
-          item.type = 'health';
-          item.userData = {
-              healAmount: 30,
-              collected: false
-          };
-          return item;
+          const g = new THREE.Group();
+          const bunMat = new THREE.MeshStandardMaterial({ color: 0xd9a441, roughness: 0.9 });
+          const meatMat = new THREE.MeshStandardMaterial({ color: 0x7a3b1e, roughness: 0.85 });
+          const cheeseMat = new THREE.MeshStandardMaterial({ color: 0xffd54a, roughness: 0.7 });
+          const lettuceMat = new THREE.MeshStandardMaterial({ color: 0x67b34a, roughness: 0.9 });
+          const bottom = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.24, 0.14, 12), bunMat);
+          bottom.position.y = -0.12; g.add(bottom);
+          const meat = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.42), meatMat);
+          g.add(meat);
+          const cheese = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.04, 0.46), cheeseMat);
+          cheese.position.y = 0.06; g.add(cheese);
+          const lettuce = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.05, 6, 14), lettuceMat);
+          lettuce.rotation.x = Math.PI / 2; lettuce.position.y = 0.1; g.add(lettuce);
+          const top = new THREE.Mesh(new THREE.SphereGeometry(0.26, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), bunMat);
+          top.position.y = 0.14; g.add(top);
+          g.isCollectible = true;
+          g.inContact = true;
+          g.type = 'food';
+          g.userData = { healAmount: 30, collected: false };
+          return g;
         }
     },
 
@@ -157,17 +200,23 @@ const ITEM_DEFINITIONS = {
         stackable: true,
         maxStack: 3,
         createModel: () => {
-          const itemGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.4, 8);
-          const itemMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
-          const item = new THREE.Mesh(itemGeo, itemMat);
-          item.isCollectible = true;
-          item.inContact = true;
-          item.type = 'damage';
-          item.userData = {
-              damageAmount: 30,
-              collected: false
-          };
-          return item;
+          const g = new THREE.Group();
+          const glassMat = new THREE.MeshStandardMaterial({ color: 0x2f8b4a, roughness: 0.2, metalness: 0.1, transparent: true, opacity: 0.85 });
+          const liquidMat = new THREE.MeshStandardMaterial({ color: 0x8dff7a, emissive: 0x2f8b1a, emissiveIntensity: 0.5, roughness: 0.4 });
+          const capMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.6 });
+          const body = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 0.4, 12), glassMat);
+          g.add(body);
+          const liquid = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.26, 12), liquidMat);
+          liquid.position.y = -0.05; g.add(liquid);
+          const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 0.12, 10), glassMat);
+          neck.position.y = 0.24; g.add(neck);
+          const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.06, 10), capMat);
+          cap.position.y = 0.31; g.add(cap);
+          g.isCollectible = true;
+          g.inContact = true;
+          g.type = 'toxin';
+          g.userData = { damageAmount: 30, collected: false };
+          return g;
         }
     },
     
@@ -181,17 +230,25 @@ const ITEM_DEFINITIONS = {
         stackable: true,
         maxStack: 5,
         createModel: () => {
-            const geo = new THREE.BoxGeometry(0.2, 0.1, 0.4);
-            const mat = new THREE.MeshStandardMaterial({ color: 0x555555 });
-            const mesh = new THREE.Mesh(geo, mat);
-            mesh.isCollectible = true;
-            mesh.type = 'ammo';
-            mesh.userData = {
+            const g = new THREE.Group();
+            const boxMat = new THREE.MeshStandardMaterial({ color: 0x4a4e55, roughness: 0.6, metalness: 0.3 });
+            const brassMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.3 });
+            const box = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.22), boxMat);
+            g.add(box);
+            const lid = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.03, 0.24), boxMat);
+            lid.position.y = 0.09; g.add(lid);
+            for (let i = -1; i <= 1; i++) {
+                const b = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.12, 8), brassMat);
+                b.rotation.x = Math.PI / 2; b.position.set(i * 0.09, 0.14, 0); g.add(b);
+            }
+            g.isCollectible = true;
+            g.type = 'ammo';
+            g.userData = {
                 ammoType: 'pistol',
                 amount: 12,
                 collected: false
             };
-            return mesh;
+            return g;
         }
     },
 
@@ -258,6 +315,137 @@ const ITEM_DEFINITIONS = {
             return group;
         },
         stackable: false
+    },
+
+    // Recursos que se juntan sin herramienta (se suman a wood/stone/metal)
+    branch: {
+        id: 'branch',
+        name: 'Rama',
+        type: 'resource',
+        resourceKey: 'wood',
+        amount: 2,
+        stackable: true,
+        maxStack: 9,
+        createModel: () => {
+            const g = new THREE.Group();
+            const mat = new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.9 });
+            const main = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.6, 6), mat);
+            main.rotation.z = Math.PI / 2.2;
+            g.add(main);
+            const twig = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.35, 5), mat);
+            twig.position.set(0.1, 0.12, 0);
+            twig.rotation.z = -Math.PI / 3;
+            g.add(twig);
+            return g;
+        }
+    },
+    pebble: {
+        id: 'pebble',
+        name: 'Piedra suelta',
+        type: 'resource',
+        resourceKey: 'stone',
+        amount: 2,
+        stackable: true,
+        maxStack: 9,
+        createModel: () => {
+            const g = new THREE.Group();
+            const mat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.95 });
+            [[0, 0, 0, 0.16], [0.14, 0.03, 0.05, 0.11], [-0.1, 0.02, -0.08, 0.1]].forEach(([x, y, z, r]) => {
+                const m = new THREE.Mesh(new THREE.DodecahedronGeometry(r, 0), mat);
+                m.position.set(x, y, z);
+                g.add(m);
+            });
+            return g;
+        }
+    },
+    scrap: {
+        id: 'scrap',
+        name: 'Chatarra',
+        type: 'resource',
+        resourceKey: 'metal',
+        amount: 2,
+        stackable: true,
+        maxStack: 9,
+        createModel: () => {
+            const g = new THREE.Group();
+            const mat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.8, roughness: 0.4 });
+            const plate = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.05, 0.25), mat);
+            plate.rotation.y = 0.4;
+            g.add(plate);
+            const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.12, 8), mat);
+            bolt.position.set(0.12, 0.06, 0);
+            g.add(bolt);
+            const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.3, 6), mat);
+            rod.rotation.z = Math.PI / 2.5;
+            rod.position.set(-0.1, 0.08, 0.05);
+            g.add(rod);
+            return g;
+        }
+    },
+
+    // Consumible: cura 30 al usarla desde la mochila
+    bandage: {
+        id: 'bandage',
+        name: 'Venda',
+        type: 'consumable',
+        healAmount: 30,
+        stackable: true,
+        maxStack: 10,
+        createModel: () => {
+            const g = new THREE.Group();
+            const roll = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.18, 0.18, 0.16, 12),
+                new THREE.MeshStandardMaterial({ color: 0xf2f2ec, roughness: 0.9 })
+            );
+            roll.rotation.z = Math.PI / 2;
+            g.add(roll);
+            const band = new THREE.Mesh(
+                new THREE.BoxGeometry(0.28, 0.5, 0.03),
+                new THREE.MeshStandardMaterial({ color: 0xd94f4f, roughness: 0.8 })
+            );
+            band.position.set(0.05, -0.28, 0);
+            band.rotation.z = 0.3;
+            g.add(band);
+            return g;
+        }
+    },
+
+    // Herramienta-antorchas: emite luz mientras la tenés equipada
+    torch: {
+        id: 'torch',
+        name: 'Antorcha',
+        type: 'tool',
+        toolType: TOOLS.TORCH,
+        stackable: false,
+        createModel: () => {
+            const g = new THREE.Group();
+            const handle = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.03, 0.04, 0.5, 6),
+                new THREE.MeshStandardMaterial({ color: 0x6b4a2a, roughness: 0.9 })
+            );
+            handle.position.y = -0.1;
+            g.add(handle);
+            const flame = new THREE.Mesh(
+                new THREE.ConeGeometry(0.09, 0.24, 8),
+                new THREE.MeshBasicMaterial({ color: 0xffb300 })
+            );
+            flame.position.y = 0.28;
+            g.add(flame);
+            const core = new THREE.Mesh(
+                new THREE.ConeGeometry(0.05, 0.14, 8),
+                new THREE.MeshBasicMaterial({ color: 0xfff2a8 })
+            );
+            core.position.y = 0.3;
+            g.add(core);
+            const light = new THREE.PointLight(0xffb060, 1.6, 16, 2);
+            light.position.y = 0.34;
+            light.name = 'torchLight';
+            g.add(light);
+            g.userData.flame = flame;
+            g.userData.core = core;
+            g.userData.light = light;
+            return g;
+        }
     },
 };
 // Configuration Constants

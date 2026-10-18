@@ -98,6 +98,10 @@
               if (this.equippedItem === item) {
                   this.unequipItem();
               }
+              // Limpiar atajos que apuntaban al objeto eliminado
+              for (let i = 0; i < this.quickSlots.length; i++) {
+                  if (this.quickSlots[i] === item) this.quickSlots[i] = null;
+              }
           }
           
           this.updateInventoryUI();
@@ -300,7 +304,10 @@
       updateWeaponHUD() {
           const weaponDiv = document.getElementById('weaponInfo');
           if (!weaponDiv) return;
-          
+          const hud = document.getElementById('weaponHud');
+          const hasItem = !!this.equippedItem;
+          if (hud) hud.style.display = hasItem ? 'block' : 'none';
+
           if (this.equippedItem?.type === 'weapon') {
               weaponDiv.textContent = `${this.equippedItem.name}`;
           } else if (this.equippedItem?.type === 'tool') {
@@ -315,6 +322,14 @@
           if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return;
           
           const item = this.quickSlots[slotIndex];
+          if (item && item.healAmount > 0 && this.items.includes(item)) {
+              // Consumibles: el atajo los usa directamente
+              this.player.health = Math.min(this.player.maxHealth || 100, this.player.health + (item.healAmount || 30));
+              this.removeItem(item, 1);
+              try { this.player.updateStatsHUD(); playSound('health-regen'); } catch (e) {}
+              this.updateQuickSlotUI();
+              return;
+          }
           if (item && this.items.includes(item)) {
               this.equipItem(item);
               // Update player's current tool based on the equipped item
@@ -353,7 +368,9 @@
 
       updateQuickSlotUI() {
           const quickSlotElements = document.querySelectorAll('.quick-slot');
-          quickSlotElements.forEach((el, index) => {
+          quickSlotElements.forEach((el) => {
+              const index = parseInt(el.getAttribute('data-slot'), 10);
+              if (isNaN(index)) return;
               el.innerHTML = '';
               el.classList.remove('active');
               
@@ -371,21 +388,25 @@
                       icon.textContent = {
                           [TOOLS.HAMMER]: '🔨',
                           [TOOLS.AXE]: '🪓',
-                          [TOOLS.PICKAXE]: '⛏️'
+                          [TOOLS.PICKAXE]: '⛏️',
+                          [TOOLS.TORCH]: '🔥'
                       }[item.toolType] || '❔';
+                  } else if (item.healAmount > 0) {
+                      icon.textContent = '🍖';
+                  } else if (typeof itemIcon === 'function') {
+                      icon.textContent = itemIcon(item);
                   }
                   
-                  // Add right-click to clear
-                  el.addEventListener('contextmenu', (e) => {
-                      e.preventDefault();
-                      this.clearQuickSlot(index);
-                  });
+                  el.setAttribute('title', item.name + (item.healAmount > 0 ? ' — usar/equipar' : ''));
+                  el.oncontextmenu = (e) => { e.preventDefault(); this.clearQuickSlot(index); };
                   
                   // Highlight if equipped
                   if (this.equippedItem === item) {
                       el.classList.add('active');
                   }
               } else {
+                  el.removeAttribute('title');
+                  el.oncontextmenu = (e) => { e.preventDefault(); this.clearQuickSlot(index); };
                   // Empty slot - show placeholder
                   icon.textContent = '＋';
                   icon.style.opacity = '0.5';

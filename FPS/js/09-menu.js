@@ -185,7 +185,7 @@
       craftTitle.className = 'rg-h';
       craftTitle.textContent = 'Crafting';
       craftDiv.appendChild(craftTitle);
-      renderCraftButtons(craftDiv);
+      renderCraftButtons(craftDiv, 'hand');
       pauseDiv.appendChild(craftDiv);
 
       // --- Online section (multijugador Fase 1) ---

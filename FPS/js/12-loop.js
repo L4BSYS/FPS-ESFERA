@@ -5,7 +5,10 @@
 
       const weapon = player.inventory.equippedItem;
       if (weapon.ammoType && player.inventory.ammo[weapon.ammoType] <= 0) {
-          playSound('weapon_empty');
+          // Sin balas: usar el arma como objeto de golpe (melee)
+          const hit = (typeof player.meleeAttack === 'function') ? player.meleeAttack() : false;
+          if (!hit) playSound('weapon_empty');
+          shootCooldown = 0.4;
           return;
       }
 
@@ -64,9 +67,24 @@
       // Set cooldown
       shootCooldown = 0.12;
   }
+// --- Antorcha: parpadeo de llama/luz cuando está equipada ---
+  var torchFlickerT = 0;
+  function updateTorchFlame(delta) {
+      try {
+          const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
+          const eq = inv && inv.equippedItem;
+          if (!eq || !eq.model || eq.toolType !== TOOLS.TORCH) return;
+          torchFlickerT += delta;
+          const ud = eq.model.userData || {};
+          if (ud.light) ud.light.intensity = 1.4 + Math.sin(torchFlickerT * 18) * 0.18 + Math.random() * 0.12;
+          if (ud.flame) {
+              const s = 1 + Math.sin(torchFlickerT * 22) * 0.12;
+              ud.flame.scale.set(s, s, s);
+          }
+      } catch (e) {}
+  }
 // --- Animation Loop ---
-  function animate() {
-      requestAnimationFrame(animate);
+  function animate() {      requestAnimationFrame(animate);
       const delta = Math.min(clock.getDelta(), 0.05); // Clamp delta time to prevent large jumps
 
       // --- Updates only when NOT paused ---
@@ -110,6 +128,14 @@
 
           updateCreatorGhost();
 
+          updatePlacementGhost();
+
+          updateTorchFlame(delta);
+
+          try { if (typeof updateBlockDecay === 'function') updateBlockDecay(delta); } catch (e) {}
+          try { if (typeof updateClaimRings === 'function') updateClaimRings(clock.elapsedTime); } catch (e) {}
+          try { if (typeof updateBuildZoneHUD === 'function') updateBuildZoneHUD(); } catch (e) {}
+
           updateBlockPhysics(delta); // Update falling blocks regardless of tool
           updateActiveParticleSystems(delta);
 
@@ -123,6 +149,11 @@
 
       // Red siempre (pausado o no): presencia viva y vecinos interpolados
       try { if (typeof netUpdate === 'function') netUpdate(delta); } catch (e) {}
+
+      // HUD de base/objetivo/barra de construcción (se auto-ocultan en pausa)
+      try { updateBaseHUD(); } catch (e) {}
+      try { updateObjectiveHUD(); } catch (e) {}
+      try { refreshBuildBarVisibility(); } catch (e) {}
 
       // --- Always Render ---
       // Ensure camera has a position even if player hasn't updated (e.g., first frame)

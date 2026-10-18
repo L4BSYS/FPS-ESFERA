@@ -36,6 +36,7 @@
           // Ownership: null = player bullet, 'enemy' = NPC bullet
           this.owner = null;
           this.damage = 15;
+          this.structureDamage = 15;
           this.shooter = null;
 
           // Trail effect
@@ -187,7 +188,7 @@
                let bw = hitObject;
                while (bw) {
                    if (bw.userData && bw.userData.benchRef && bw.userData.benchRef.hp > 0) {
-                       damageWorkbench(bw.userData.benchRef, this.damage || 15);
+                       damageWorkbench(bw.userData.benchRef, this.structureDamage || this.damage || 15);
                        this.createImpactEffect(hitObject, hitPosition);
                        return;
                    }
@@ -254,7 +255,9 @@
           if (!blockInfo) return;
 
           // Calculate damage based on bullet power and block resistance
-          const damage = Math.max(1, 5 - blockInfo.resistance); // Base 5 damage minus resistance
+          const damage = (this.owner === 'enemy')
+              ? Math.max(3, this.structureDamage || 25)
+              : Math.max(1, 5 - blockInfo.resistance); // Base 5 damage minus resistance
           
           // Initialize health if not set
           if (block.userData.health === undefined) {

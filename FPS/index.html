@@ -16,17 +16,30 @@
   <div id="hud">
     <div id="crosshair">+</div>
     <div id="stats">Vida: 100</div>
-    <div id="firebaseui-auth-container" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:rgba(0,0,0,0.8); padding:20px; border-radius:8px;"></div>
-    <div id="toolHud" style="position:absolute; bottom:10px; right:10px;">Herramienta: Pistola </div>
-    <div id="weaponHud" style="position:absolute; bottom:20px; right:10px;">
+    <div id="objectiveHud" class="objective-hud"></div>
+    <div id="baseHud" class="base-hud">
+      <div class="base-head"><span class="base-label">🛠 Base</span><span id="baseHpTxt" class="base-hp">—</span></div>
+      <div class="rg-hpbar"><div id="baseHpBar"></div></div>
+      <div id="baseDist" class="base-dist"></div>
+    </div>
+    <div id="firebaseui-auth-container" style="display:none;"></div>
+    <div id="toolHud">Herramienta: Pistola</div>
+    <div id="weaponHud">
         <div id="weaponInfo"></div>
         <div id="ammoType"></div>
         <div id="ammo"></div>
     </div>
-        <div id="inventoryHud" style="position:absolute; top:10px; right:10px;">
+    <div id="inventoryHud">
         <div id="inventory" class="hud-element"></div>
-        <div id="resources" class="hud-element" style="text-align:right;"></div>
     </div>
+  </div>
+
+  <!-- Barra de construcción (martillo): materiales + cantidad -->
+  <div id="buildBar" class="build-bar">
+    <div class="build-title">Construir</div>
+    <div id="buildMats" class="build-mats"></div>
+    <div id="buildZone" class="build-zone ok">Dentro de tu base</div>
+    <div class="build-hint">Z · X · C o clic para elegir — clic para poner, clic derecho para romper · solo dentro del área de tu mesa</div>
   </div>
 
   <!-- Mobile Controls -->
@@ -35,7 +48,9 @@
       <div id="joystickKnob"></div>
     </div>
     <div id="rightTouchArea"></div>
+    <div class="mobileBtn mobileBtn-sm" id="menuBtn" title="Menú (pausa)">☰</div>
     <div id="mobileButtons">
+      <div class="mobileBtn" id="secondaryBtn" title="Acción secundaria">↩</div>
       <div class="mobileBtn" id="actionBtn">?</div>
       <div class="mobileBtn" id="jumpBtn">↑</div>
     </div>
@@ -46,24 +61,11 @@
       <div class="quick-slot" data-slot="1"></div>
       <div class="quick-slot" data-slot="2"></div>
       <div class="quick-slot" data-slot="3"></div>
+      <div class="quick-slot" data-slot="4"></div>
   </div>
 
 
-  <div id="interactionPrompt" style="
-      position: fixed;
-      bottom: 20%;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0,0,0,0.7);
-      color: white;
-      padding: 10px 20px;
-      border-radius: 5px;
-      font-family: Arial, sans-serif;
-      transition: opacity 0.3s;
-      opacity: 0;
-      pointer-events: none;
-      z-index: 100;
-  "></div>
+  <div id="interactionPrompt" class="interaction-prompt"></div>
 
   <div id="gameOver" class="rg-overlay">
       <h2 class="rg-title danger">☠ MORISTE</h2>
@@ -75,7 +77,7 @@
       <div class="rg-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
   </div>
 
-  <div id="invModal" class="rg-overlay" style="justify-content:center; align-items:center;">
+  <div id="invModal" class="rg-overlay">
     <div class="rg-panel rg-modalbox">
       <h2 class="rg-title">🎒 Mochila</h2>
       <div style="margin-bottom:8px;">
@@ -83,15 +85,19 @@
         <button onclick="invShowTab('craft')" class="rg-btn rg-btn-small">Crafteo</button>
         <button onclick="toggleInventory()" class="rg-btn rg-btn-small" style="float:right;">Cerrar (Q)</button>
       </div>
+      <div id="invBelt" class="rg-belt"></div>
+      <div class="rg-hint" style="margin:2px 0 8px;">Cinturón: arrastrá una cosa de la mochila a un casillero para darle atajo (1-5) · arrastrá afuera o clic derecho para quitarla</div>
       <div id="invItems"></div>
-      <div id="invCraft" style="display:none;"></div>
-      <div id="invFoot" class="rg-stats" style="font-size:18px;"></div>
+      <div id="invCraft" style="display:none;">
+        <div class="rg-hint" style="margin-bottom:6px;">🧰 Básicos a mano · las armas, balas y vendas se hacen en la mesa de trabajo</div>
+      </div>
+      <div id="invFoot" class="rg-matbar"></div>
       <div id="invMsg" class="rg-status"></div>
       <div class="rg-hint">Q o ESC para cerrar · Equipar/Comer con el botón · Soltar deja el objeto en el suelo</div>
     </div>
   </div>
 
-  <div id="totemModal" class="rg-overlay" style="justify-content:center; align-items:center;">
+  <div id="totemModal" class="rg-overlay">
     <div class="rg-panel rg-modalbox narrow">
       <h2 class="rg-title">🗿 Tótem de info</h2>
       <div id="totemBody" style="font-size:22px; line-height:1.6;"></div>
@@ -100,18 +106,20 @@
       </div>
     </div>
   </div>
-  <div id="benchModal" class="rg-overlay" style="justify-content:center; align-items:center;">
+  <div id="benchModal" class="rg-overlay">
     <div class="rg-panel rg-modalbox" style="border-color:var(--rg-amber);">
       <h2 class="rg-title">🛠 Mesa de trabajo — tu base</h2>
       <div style="font-size:19px;">Estructura: <span id="benchHpTxt"></span></div>
       <div class="rg-hpbar"><div id="benchHpBar" style="background:#4CAF50; width:100%;"></div></div>
+      <div class="rg-hint" style="margin-bottom:6px;">Armas · munición · vendas — lo avanzado se hace acá</div>
       <div id="benchCraft"></div>
+      <div id="benchFoot" class="rg-matbar"></div>
       <div style="margin-top:8px;">
         <button onclick="repairBench()" class="rg-btn rg-btn-small rg-btn-warn">Reparar +100 (3 madera + 2 piedra)</button>
         <button onclick="toggleBench(false)" class="rg-btn rg-btn-small" style="float:right;">Cerrar (E/ESC)</button>
       </div>
       <div id="benchMsg" class="rg-status"></div>
-      <div class="rg-hint">Si la rompen los enemigos, la perdés. ¡Defendela!</div>
+      <div class="rg-hint">Reclama 14 bloques a la redonda: solo podés construir ahí. Si la rompen, tus bloques decaen y se libera la zona.</div>
     </div>
   </div>
 
