@@ -494,7 +494,7 @@
 
       scene.add(particles);
       activeParticleSystems.push(particles); // Add to central list for updates
-      playSound(`block_break_${type}`);
+      playSoundAt(`block_break_${type}`, position, { gain: 0.9, maxDist: 40 });
   }
   function updateActiveParticleSystems(delta) {
       const gravityEffect = GRAVITY * 0.5; // Particles less affected by gravity maybe
@@ -932,6 +932,8 @@
   }
   function respawnNode(node) {
       if (!node) return;
+      // Si el nodo fue eliminado del mundo (teardown / regeneración), no revivirlo
+      if (!node.parent) return;
       // If a player-built block now occupies the spot, retry later instead of overlapping
       try {
           const taken = placedBlocks.some(b =>
@@ -975,6 +977,239 @@
           spawnCount++;
       }
       return spawnCount;
+  }
+
+  // ------------------------------------------------------------
+  //  Generación procedural de recursos (dispersión + clusters mixtos)
+  // ------------------------------------------------------------
+  const RESOURCE_LEVELS = {
+      none:     { label: 'Sin recursos',  density: 0 },
+      low:      { label: 'Pocos',         density: 0.0011 },
+      normal:   { label: 'Normal',        density: 0.0018 },
+      high:     { label: 'Abundantes',    density: 0.0028 },
+      abundant: { label: 'Exuberantes',   density: 0.0040 }
+  };
+  const RESOURCE_MAX_NODES = 120;
+
+  function resourceDensityFor(level) {
+      const d = RESOURCE_LEVELS[level];
+      return d ? d.density : 0;
+  }
+  function resourceLevelLabel(level) {
+      return (RESOURCE_LEVELS[level] && RESOURCE_LEVELS[level].label) || 'Sin recursos';
+  }
+  function resourceTargetCount(size, level) {
+      const d = resourceDensityFor(level);
+      if (d <= 0) return 0;
+      const area = Math.max(1600, size * size);
+      return Math.max(4, Math.min(RESOURCE_MAX_NODES, Math.round(area * d)));
+  }
+  function clearAutoResources() {
+      let removed = 0;
+      if (typeof resourceNodes !== 'undefined') {
+          resourceNodes.slice().forEach(function (node) {
+              if (!node || !node.userData || !node.userData.autoResource) return;
+              try { scene.remove(node); } catch (e) {}
+              const ci = collidableObjects.indexOf(node);
+              if (ci > -1) collidableObjects.splice(ci, 1);
+              const ri = resourceNodes.indexOf(node);
+              if (ri > -1) resourceNodes.splice(ri, 1);
+              removed++;
+          });
+      }
+      if (typeof worldItems !== 'undefined') {
+          worldItems.slice().forEach(function (item) {
+              if (!item || !item.userData || !item.userData.autoResource) return;
+              try { scene.remove(item); } catch (e) {}
+              const ci = collidableObjects.indexOf(item);
+              if (ci > -1) collidableObjects.splice(ci, 1);
+              const wi = worldItems.indexOf(item);
+              if (wi > -1) worldItems.splice(wi, 1);
+              removed++;
+          });
+      }
+      return removed;
+  }
+  function resourceTypeBag() {
+      // Bolsa con proporciones estables: 3 madera, 3 piedra, 2 metal, mezclada.
+      const bag = ['wood', 'wood', 'wood', 'stone', 'stone', 'stone', 'metal', 'metal'];
+      for (let i = bag.length - 1; i > 0; i--) {
+          const j = (Math.random() * (i + 1)) | 0;
+          const t = bag[i]; bag[i] = bag[j]; bag[j] = t;
+      }
+      return bag;
+  }
+  function resourceSatelliteType(dominant) {
+      const r = Math.random();
+      if (r < 0.72) return dominant;
+      if (dominant === 'wood') return r < 0.86 ? 'stone' : 'metal';
+      if (dominant === 'stone') return r < 0.88 ? 'wood' : 'metal';
+      return r < 0.9 ? 'stone' : 'wood';
+  }
+  function looseKeyFor(type) {
+      if (type === 'wood') return 'branch';
+      if (type === 'stone') return 'pebble';
+      return 'scrap';
+  }
+  function pickLooseKey(dominant) {
+      const r = Math.random();
+      if (r < 0.75) return looseKeyFor(dominant);
+      const others = ['wood', 'stone', 'metal'].filter(function (t) { return t !== dominant; });
+      return looseKeyFor(others[(Math.random() * others.length) | 0]);
+  }
+
+  // Genera clusters alrededor de una grilla dispersa (estratificada + jitter),
+  // con un cluster inicial cerca del spawn y mezcla de tipos en cada cluster.
+  function generateWorldResources(def, opts) {
+      opts = opts || {};
+      if (opts.clear) clearAutoResources();
+      if (typeof createResourceNode !== 'function' || typeof scene === 'undefined') return { nodes: 0, loose: 0 };
+
+      const size = Math.max(40, (def && def.size) || 120);
+      const level = (def && def.resourceLevel) || 'normal';
+      const target = resourceTargetCount(size, level);
+      if (!target) return { nodes: 0, loose: 0 };
+
+      const margin = Math.max(8, size * 0.06);
+      const b = Math.max(10, size / 2 - margin);
+      const spawn = (def && def.spawn) || { x: 0, z: 0 };
+      const sx0 = typeof spawn.x === 'number' ? spawn.x : 0;
+      const sz0 = typeof spawn.z === 'number' ? spawn.z : 0;
+      const placed = [];
+      const centers = [];
+      let made = 0;
+      let looseMade = 0;
+
+      function canPlace(x, z) {
+          if (Math.abs(x) > b || Math.abs(z) > b) return false;
+          if (Math.hypot(x - sx0, z - sz0) < 5.5) return false;
+          for (let i = 0; i < placed.length; i++) {
+              if (Math.hypot(placed[i].x - x, placed[i].z - z) < 1.7) return false;
+          }
+          return true;
+      }
+      function addNode(type, x, z) {
+          if (!canPlace(x, z)) return false;
+          const y = (typeof groundTopY === 'function') ? groundTopY(x, z) : 0;
+          const node = createResourceNode(type, new THREE.Vector3(x, y, z));
+          if (!node) return false;
+          node.userData.autoResource = true;
+          scene.add(node);
+          if (typeof collidableObjects !== 'undefined' && collidableObjects.indexOf(node) === -1) {
+              collidableObjects.push(node);
+          }
+          placed.push({ x: x, z: z, type: type });
+          made++;
+          return true;
+      }
+      function placeLoose(key, x, z) {
+          if (!canPlace(x, z)) return false;
+          if (typeof placeWorldItem !== 'function') return false;
+          const item = placeWorldItem(key, new THREE.Vector3(x, 0.35, z));
+          if (!item) return false;
+          item.userData.autoResource = true;
+          item.userData.autoLoose = true;
+          placed.push({ x: x, z: z, type: key });
+          looseMade++;
+          return true;
+      }
+      // Reparte elementos sueltos (rama/piedra/chatarra) alrededor de un punto.
+      function scatterLoose(counts, cx, cz, minR, maxR) {
+          Object.keys(counts).forEach(function (key) {
+              for (let i = 0; i < counts[key]; i++) {
+                  for (let t = 0; t < 40; t++) {
+                      const a = Math.random() * Math.PI * 2;
+                      const r = minR + Math.random() * (maxR - minR);
+                      if (placeLoose(key, cx + Math.cos(a) * r, cz + Math.sin(a) * r)) break;
+                  }
+              }
+          });
+      }
+      function placeCluster(cx, cz, dominant, count) {
+          const radiusMax = 2.0 + Math.random() * 3.6;
+          let attempts = 0;
+          for (let i = 0; i < count && attempts < count * 24; attempts++) {
+              const a = Math.random() * Math.PI * 2;
+              const r = 0.9 + Math.random() * radiusMax;
+              if (addNode(resourceSatelliteType(dominant), cx + Math.cos(a) * r, cz + Math.sin(a) * r)) i++;
+          }
+          // Elementos sueltos junto a los nodos, para arrancar sin herramientas.
+          const looseCount = 1 + (Math.random() < 0.35 ? 1 : 0);
+          for (let j = 0; j < looseCount; j++) {
+              for (let t = 0; t < 20; t++) {
+                  const a = Math.random() * Math.PI * 2;
+                  const r = 1.0 + Math.random() * 4.0;
+                  if (placeLoose(pickLooseKey(dominant), cx + Math.cos(a) * r, cz + Math.sin(a) * r)) break;
+              }
+          }
+      }
+
+      // Kit inicial alrededor del spawn: alcanza para martillo + mesa + hacha.
+      // (rama = 2 madera, piedra suelta = 2 piedra, chatarra = 2 metal)
+      scatterLoose({ branch: 7, pebble: 5, scrap: 2 }, sx0, sz0, 6, 12);
+
+      // Cluster inicial: siempre hacia adentro del mapa, a 13-18 del spawn.
+      let starter = 0;
+      if (target >= 10) {
+          let dx = -sx0, dz = -sz0;
+          if (Math.hypot(dx, dz) < 1) {
+              const a = Math.random() * Math.PI * 2;
+              dx = Math.cos(a); dz = Math.sin(a);
+          }
+          const len = Math.hypot(dx, dz) || 1;
+          const dist = 13 + Math.random() * 5;
+          let cx = Math.max(-b, Math.min(b, sx0 + (dx / len) * dist));
+          let cz = Math.max(-b, Math.min(b, sz0 + (dz / len) * dist));
+          if (Math.hypot(cx - sx0, cz - sz0) >= 7) {
+              starter = 5;
+              placeCluster(cx, cz, 'wood', starter);
+              centers.push({ x: cx, z: cz });
+          }
+      }
+
+      // Grilla estratificada: celdas barajadas para dispersar los clusters.
+      const remaining = Math.max(0, target - made);
+      const clusterCount = Math.max(1, Math.min(26, Math.round(remaining / 5.4)));
+      const grid = Math.max(1, Math.ceil(Math.sqrt(clusterCount)));
+      const cell = (b * 2) / grid;
+      const cells = [];
+      for (let gz = 0; gz < grid; gz++) {
+          for (let gx = 0; gx < grid; gx++) cells.push({ gx: gx, gz: gz });
+      }
+      for (let i = cells.length - 1; i > 0; i--) {
+          const j = (Math.random() * (i + 1)) | 0;
+          const t = cells[i]; cells[i] = cells[j]; cells[j] = t;
+      }
+      const bag = resourceTypeBag();
+      for (let i = 0; i < clusterCount; i++) {
+          const c = cells[i % cells.length];
+          let cx = -b + (c.gx + 0.5) * cell + (Math.random() - 0.5) * cell * 0.55;
+          let cz = -b + (c.gz + 0.5) * cell + (Math.random() - 0.5) * cell * 0.55;
+          if (Math.hypot(cx - sx0, cz - sz0) < 9) {
+              const a = Math.atan2(cz - sz0, cx - sx0) || 0;
+              cx = sx0 + Math.cos(a) * 9;
+              cz = sz0 + Math.sin(a) * 9;
+          }
+          cx = Math.max(-b, Math.min(b, cx));
+          cz = Math.max(-b, Math.min(b, cz));
+          const left = Math.max(0, target - made);
+          const leftClusters = clusterCount - i;
+          const base = Math.round(left / Math.max(1, leftClusters));
+          let count = Math.max(3, Math.min(9, base + ((Math.random() * 3) | 0) - 1));
+          count = Math.max(1, Math.min(count, left));
+          placeCluster(cx, cz, bag[i % bag.length], count);
+          centers.push({ x: cx, z: cz });
+      }
+
+      // Relleno: nodos sueltos alrededor de clusters existentes.
+      let guard = 0;
+      while (made < target && guard++ < target * 8 && centers.length) {
+          const c = centers[(Math.random() * centers.length) | 0];
+          const a = Math.random() * Math.PI * 2;
+          const r = 4 + Math.random() * 7;
+          addNode(resourceSatelliteType('wood'), c.x + Math.cos(a) * r, c.z + Math.sin(a) * r);
+      }
+      return { nodes: made, loose: looseMade };
   }
 // --- World Building Methods
 

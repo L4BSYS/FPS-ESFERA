@@ -321,11 +321,11 @@ function invDropItem(idx) {
   refreshInvModal();
 }
 // --- Teclas configurables (estilo RUST, humilde: solo acciones, WASD fijo) ---
-var KeyMap = { interact: 'e', inventory: 'q', palette: 'b' };
+var KeyMap = { interact: 'e', inventory: 'q', palette: 'b', creator: 'g' };
 const KEY_RESERVED = ['w', 'a', 's', 'd', ' ', 'shift', 'escape', 'tab', '1', '2', '3', '4', '5'];
 try {
   const saved = JSON.parse(localStorage.getItem('lagrieta_keys') || 'null');
-  if (saved) for (const k of ['interact', 'inventory', 'palette']) {
+  if (saved) for (const k of ['interact', 'inventory', 'palette', 'creator']) {
       if (typeof saved[k] === 'string' && saved[k].length === 1) {
           const v = saved[k].toLowerCase();
           if (!KEY_RESERVED.includes(v)) KeyMap[k] = v;
@@ -339,7 +339,7 @@ function renderKeyRows() {
   const box = document.getElementById('keyRows');
   if (!box) return;
   box.innerHTML = '';
-  [['interact', 'Usar / interactuar'], ['inventory', 'Mochila'], ['palette', 'Barra creador']].forEach(([k, label]) => {
+  [['interact', 'Usar / interactuar'], ['inventory', 'Mochila'], ['palette', 'Barra creador'], ['creator', 'Modo creador']].forEach(([k, label]) => {
       const row = document.createElement('div');
       row.className = 'rg-keys-row';
       const lab = document.createElement('span');
@@ -387,9 +387,9 @@ function showPauseTab(name) {
   if (typeof pauseUI === 'undefined' || !pauseUI.panels) return;
   pauseUI.activeTab = name;
   applyPausePanels();
-  if (name === 'create') refreshCreatorHint();
-  if (name === 'online' && typeof refreshOnlineTab === 'function') { try { refreshOnlineTab(); } catch (e) {} }
-  if (name === 'world' && typeof refreshTrialBox === 'function') { try { refreshTrialBox(); } catch (e) {} }
+  if (name === 'build') refreshCreatorHint();
+  if (name === 'play' && typeof renderLevelsPanel === 'function') { try { renderLevelsPanel(); } catch (e) {} }
+  if (name === 'account' && typeof refreshOnlineTab === 'function') { try { refreshOnlineTab(); } catch (e) {} }
   if (pauseUI.tabs) for (const k in pauseUI.tabs) {
     if (pauseUI.tabs[k]) pauseUI.tabs[k].classList.toggle('on', k === name);
   }
@@ -408,7 +408,7 @@ function refreshCreatorHint() {
 }
 function applyPausePanels() {
   if (typeof pauseUI === 'undefined' || !pauseUI.panels) return;
-  const active = pauseUI.activeTab || 'status';
+  const active = pauseUI.activeTab || 'play';
   for (const k in pauseUI.panels) {
     const vis = (active === k);
     pauseUI.panels[k].forEach(el => { if (el) el.style.display = vis ? 'block' : 'none'; });
@@ -620,7 +620,9 @@ async function refreshOnlineTab() {
   let sector = '?';
   try { if (typeof netSector !== 'undefined' && netSector) sector = netSector; } catch (e) {}
   if (st) {
-      st.textContent = online ? ('Conectado · sector ' + sector + ' · vecinos: ' + nb) : 'Sin conexión (ingresá con Google para el online)';
+      let lvl = '';
+      try { if (typeof LEVEL !== 'undefined' && LEVEL.current) { const d = (typeof resolveLevelDef === 'function') ? resolveLevelDef(LEVEL.current) : null; lvl = ' · ' + ((d && d.name) || LEVEL.current); } } catch (e) {}
+      st.textContent = online ? ('Conectado' + lvl + ' · sector ' + sector + ' · vecinos: ' + nb) : 'Sin conexión (ingresá con Google para el online)';
       try { if (typeof netError !== 'undefined' && netError) st.textContent += ' · red: ' + netError; } catch (e) {}
   }
   if (pl) {

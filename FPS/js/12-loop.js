@@ -94,6 +94,7 @@
           // Update Player
           if (player) {
               player.update(delta, keys, collidableObjects);
+              try { if (typeof updateHeartbeat === 'function') updateHeartbeat(delta); } catch (e) {}
           }
 
           // Update NPCs
@@ -106,6 +107,8 @@
 
           updateWaveManager();
           try { if (typeof trialUpdate === 'function') trialUpdate(); } catch (e) {}
+          try { if (typeof updateAmbience === 'function') updateAmbience(delta); } catch (e) {}
+          try { if (typeof updateNeuralFauna === 'function') updateNeuralFauna(delta); } catch (e) {}
 
           // Update Bullets (iterate backwards for safe removal)
           for (let i = bullets.length - 1; i >= 0; i--) {

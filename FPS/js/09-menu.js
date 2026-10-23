@@ -23,7 +23,7 @@
       const tabBar = document.createElement('div');
       tabBar.className = 'rg-tabs';
       pauseUI.tabs = {};
-      [['status', 'Estado'], ['account', 'Cuenta'], ['world', 'Mundo'], ['create', 'Crear'], ['craft', 'Crafteo'], ['online', 'Online'], ['settings', 'Ajustes']].forEach(([key, label]) => {
+      [['play', 'Jugar'], ['craft', 'Craftear'], ['build', 'Construir'], ['account', 'Cuenta'], ['settings', 'Ajustes']].forEach(([key, label]) => {
         const b = document.createElement('button');
         b.textContent = label;
         b.className = 'rg-tab';
@@ -54,7 +54,7 @@
       authDiv.appendChild(userInfo);
       const loginBtn = document.createElement('button');
       loginBtn.className = 'rg-btn';
-      loginBtn.textContent = 'Entrar con Google';
+      loginBtn.textContent = 'Ingresar con Google';
       loginBtn.addEventListener('click', () => {
         if (!window.firebase || !firebase.auth) { setPauseStatus('El login se está cargando, probá de nuevo'); return; }
         const provider = new firebase.auth.GoogleAuthProvider();
@@ -117,6 +117,7 @@
       pauseUI.sceneSection = sceneDiv;
       const trialDiv = document.createElement('div');
       trialDiv.className = 'rg-section';
+      trialDiv.style.display = 'none'; // legado: ya no se muestra (los mundos lo reemplazan)
       const trialTitle = document.createElement('h4');
       trialTitle.textContent = 'Trial';
       trialTitle.className = 'rg-h';
@@ -126,12 +127,24 @@
       trialDiv.appendChild(trialBox);
       pauseDiv.appendChild(trialDiv);
 
+      // --- Mundos (gestor de niveles/portales) ---
+      const levelsDiv = document.createElement('div');
+      levelsDiv.className = 'rg-section';
+      const levelsTitle = document.createElement('h4');
+      levelsTitle.className = 'rg-h';
+      levelsTitle.textContent = 'Mundos';
+      levelsDiv.appendChild(levelsTitle);
+      const levelsPanel = document.createElement('div');
+      levelsPanel.id = 'levelsPanel';
+      levelsDiv.appendChild(levelsPanel);
+      pauseDiv.appendChild(levelsDiv);
+
       // --- Creator section (works offline, no sign-in needed) ---
       const creatorDiv = document.createElement('div');
       creatorDiv.className = 'rg-section';
       const creatorTitle = document.createElement('h4');
       creatorTitle.className = 'rg-h';
-      creatorTitle.textContent = 'Modo Creador';
+      creatorTitle.textContent = 'Construir libre';
       creatorDiv.appendChild(creatorTitle);
       const creatorBtn = document.createElement('button');
       creatorBtn.className = 'rg-btn';
@@ -183,16 +196,16 @@
 
       const craftTitle = document.createElement('h4');
       craftTitle.className = 'rg-h';
-      craftTitle.textContent = 'Crafting';
+      craftTitle.textContent = 'Craftear';
       craftDiv.appendChild(craftTitle);
       renderCraftButtons(craftDiv, 'hand');
       pauseDiv.appendChild(craftDiv);
 
-      // --- Online section (multijugador Fase 1) ---
+      // --- Online (multijugador: presencia + chat, por mundo) ---
       const onlineDiv = document.createElement('div');
       onlineDiv.className = 'rg-section';
       const onlineTitle = document.createElement('h4');
-      onlineTitle.textContent = 'Online';
+      onlineTitle.textContent = 'Jugadores en este mundo';
       onlineTitle.className = 'rg-h';
       onlineDiv.appendChild(onlineTitle);
       const onlineStatus = document.createElement('div');
@@ -203,25 +216,19 @@
       onlinePlayers.id = 'onlinePlayers';
       onlinePlayers.className = 'rg-hint';
       onlineDiv.appendChild(onlinePlayers);
-      const sharedInfo = document.createElement('div');
-      sharedInfo.id = 'sharedInfo';
-      sharedInfo.className = 'rg-hint';
-      onlineDiv.appendChild(sharedInfo);
       const btnRefresh = document.createElement('button');
       btnRefresh.textContent = 'Actualizar';
       btnRefresh.className = 'rg-btn rg-btn-small';
       btnRefresh.addEventListener('click', () => refreshOnlineTab());
       onlineDiv.appendChild(btnRefresh);
-      const btnDown = document.createElement('button');
-      btnDown.textContent = 'Bajar escena compartida';
-      btnDown.className = 'rg-btn rg-btn-small rg-btn-primary';
-      btnDown.addEventListener('click', () => loadSharedScene());
-      onlineDiv.appendChild(btnDown);
-      const btnUp = document.createElement('button');
-      btnUp.textContent = 'Publicar la mía';
-      btnUp.className = 'rg-btn rg-btn-small rg-btn-warn';
-      btnUp.addEventListener('click', () => publishSharedScene());
-      onlineDiv.appendChild(btnUp);
+      const btnChat = document.createElement('button');
+      btnChat.textContent = 'Abrir chat';
+      btnChat.className = 'rg-btn rg-btn-small rg-btn-primary';
+      btnChat.addEventListener('click', () => {
+          try { togglePause(); } catch (e) {}
+          try { toggleNetChat(true); } catch (e) {}
+      });
+      onlineDiv.appendChild(btnChat);
       const ghostRow = document.createElement('div');
       ghostRow.style.marginTop = '6px';
       const ghostChk = document.createElement('input');
@@ -236,7 +243,7 @@
           } catch (e) {}
       });
       const ghostLab = document.createElement('span');
-      ghostLab.textContent = ' Ver fantasmas';
+      ghostLab.textContent = ' Ver jugadores';
       ghostLab.style.fontSize = '18px';
       ghostRow.appendChild(ghostChk);
       ghostRow.appendChild(ghostLab);
@@ -269,9 +276,10 @@
       audioDiv.appendChild(volSlider);
       const sfxBtn = document.createElement('button');
       sfxBtn.className = 'rg-btn';
-      sfxBtn.textContent = 'Efectos: Sí';
+      sfxBtn.textContent = sfxEnabled ? 'Efectos: Sí' : 'Efectos: No';
       sfxBtn.addEventListener('click', () => {
-        sfxEnabled = !sfxEnabled;
+        if (typeof setSfxEnabled === 'function') setSfxEnabled(!sfxEnabled);
+        else sfxEnabled = !sfxEnabled;
         sfxBtn.textContent = sfxEnabled ? 'Efectos: Sí' : 'Efectos: No';
       });
       audioDiv.appendChild(sfxBtn);
@@ -333,15 +341,13 @@
       status.id = 'pauseStatus';
       pauseDiv.appendChild(status);
       pauseUI.panels = {
-        status: [statsDiv, controlsDiv],
-        account: [authDiv],
-        world: [sceneDiv, trialDiv],
-        create: [creatorDiv],
+        play: [levelsDiv],
         craft: [craftDiv],
-        online: [onlineDiv],
-        settings: [audioDiv]
+        build: [creatorDiv],
+        account: [statsDiv, authDiv, onlineDiv],
+        settings: [audioDiv, controlsDiv]
       };
-      showPauseTab('status');
+      showPauseTab('play');
       document.body.appendChild(pauseDiv);
       try { renderKeyRows(); } catch (e) {}
       wirePauseAuth();
@@ -389,6 +395,8 @@
           pauseMenu.style.display = 'block';
           refreshPauseStats();
           try { refreshCraftUI(); } catch (e) {}
+          // Si estás creando un mundo, abrir directo "Jugar" (tiene el botón Guardar)
+          try { if (typeof LEVEL !== 'undefined' && LEVEL.working && typeof showPauseTab === 'function') showPauseTab('play'); } catch (e) {}
           try {
             if (window.firebase && firebase.auth && firebase.apps.length && firebase.auth().currentUser) {
                 updatePauseAuthUI(firebase.auth().currentUser);

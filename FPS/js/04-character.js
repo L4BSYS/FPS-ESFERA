@@ -769,6 +769,7 @@
 
           // Effects State
           this.headBobTimer = 0;
+          this.footstepTimer = 0;
           this.weaponBasePosition = new THREE.Vector3(0.25, -0.2, -0.4); // Re-evaluate Y
           this.hammerBasePosition = new THREE.Vector3(0.3, -0.3, -0.5); // Re-evaluate Y
           this.axeBasePosition = new THREE.Vector3(0.3, -0.3, -0.5); // Re-evaluate Y
@@ -804,17 +805,69 @@
           }
           this.processInput(keys, delta); // Handle player input first to set this.input
 
+          const wasGrounded = this.isOnGround;
+          const fallSpeed = Math.max(0, -this.velocity.y);
+
           // Call Character's update for physics, movement, base stats
           super.update(delta, collidables);
 
           // Player-specific updates AFTER movement/physics
           const isMovingHorizontally = (Math.abs(this.input.forward - this.input.backward) > 0.1 || Math.abs(this.input.left - this.input.right) > 0.1) && this.isOnGround;
+
+          if (!wasGrounded && this.isOnGround && fallSpeed > 3) {
+              try { playSound('land', { gain: Math.min(1, fallSpeed / 14) }); } catch (e) {}
+          }
+          this.updateFootsteps(delta, isMovingHorizontally);
           
           this.updateInteractionRaycast();
           this.updateHeadBob(delta, isMovingHorizontally);
           this.updateToolSwayAndBob(delta); // Unified sway/bob for current tool/item
           this.updateCameraRotation(delta);
           this.updateStatsHUD(); // Update HUD display
+      }
+
+      updateFootsteps(delta, isMoving) {
+          if (!isMoving || !this.isOnGround) {
+              this.footstepTimer = Math.min(this.footstepTimer || 0, 0.1);
+              return;
+          }
+          const speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+          if (speed < 0.7) {
+              this.footstepTimer = 0;
+              return;
+          }
+          this.footstepTimer = (this.footstepTimer || 0) - delta;
+          if (this.footstepTimer > 0) return;
+          const sprint = this.isSprinting && speed > this.config.speed * 1.05;
+          const interval = sprint ? 0.27 : 0.39;
+          this.footstepTimer = interval * (0.9 + Math.random() * 0.2);
+          try {
+              playSound('footstep', {
+                  gain: Math.min(1.1, 0.55 + speed / 14),
+                  sprint: sprint,
+                  surface: this.footstepSurface()
+              });
+          } catch (e) {}
+      }
+
+      footstepSurface() {
+          try {
+              if (typeof THREE === 'undefined' || typeof groundMesh === 'undefined' || !groundMesh) return 'dirt';
+              const origin = this.container.position.clone();
+              origin.y -= this.halfHeight - 0.1;
+              const ray = new THREE.Raycaster(origin, new THREE.Vector3(0, -1, 0), 0, 0.6);
+              const list = [groundMesh].concat(typeof placedBlocks !== 'undefined' ? placedBlocks : []);
+              const hits = ray.intersectObjects(list, true);
+              if (hits.length) {
+                  let o = hits[0].object;
+                  while (o) {
+                      const t = o.userData && o.userData.type;
+                      if (t === 'wood' || t === 'stone' || t === 'metal') return t;
+                      o = o.parent;
+                  }
+              }
+          } catch (e) {}
+          return 'dirt';
       }
 
       flyUpdate(delta, keys) {
@@ -1043,7 +1096,7 @@
               if (npc && npc.health > 0) {
                   try { npc.takeDamage(5); } catch (e) {}
                   try { createHarvestEffect(h.point); } catch (e) {}
-                  try { playSound('harvest'); } catch (e) {}
+                  try { playSound('hit'); } catch (e) {}
                   try { this.applyRecoil(); } catch (e) {}
                   return true;
               }
@@ -1193,9 +1246,15 @@
                   }
                   let promptText = '';
                   if (target.userData?.isDoor) {
-                      promptText = target.userData.locked ? 
-                          "[E] Unlock Door (Requires Key)" : 
-                          `[E] ${target.userData.open ? "Close" : "Open"} Door`;
+                      if (target.userData.target) {
+                          promptText = target.userData.locked ?
+                              "[E] Necesitás la llave para cruzar" :
+                              `[E] Cruzar la puerta`;
+                      } else {
+                          promptText = target.userData.locked ? 
+                              "[E] Unlock Door (Requires Key)" : 
+                              `[E] ${target.userData.open ? "Close" : "Open"} Door`;
+                      }
                   } else if (target.isPickupable) {
                       promptText = `[E] Pickup ${target.name || "Item"}`;
                   } else if (target.isInteractable) {
@@ -1302,6 +1361,11 @@
                   }
               }
           }
+
+          // Puerta-portal: al abrirla, viajamos al nivel destino
+          if (door.userData.open && door.userData.target && typeof goThroughDoor === 'function') {
+              goThroughDoor(door);
+          }
       }
 
       pickupItem(item) {
@@ -1370,7 +1434,7 @@
               if (inventoryItem.type === 'weapon' || inventoryItem.type === 'tool') {
                   // Add to first empty quick slot
                   const emptySlot = this.inventory.quickSlots.findIndex(slot => !slot);
-                  if (emptySlot >= 0 && emptySlot < 4) {
+                  if (emptySlot >= 0 && emptySlot < this.inventory.quickSlots.length) {
                       this.inventory.assignToQuickSlot(inventoryItem, emptySlot);
                   }
                   // Re-run auto-assign to organize slots
@@ -1485,10 +1549,17 @@
               const gained = node.harvest(efficiency);
 
               if (gained > 0) {
-                  this.inventory.resources[node.type] = (this.inventory.resources[node.type] || 0) + gained;
+                  // Fauna neuronal: un nodo polinizado da +1 recurso
+                  const pollinated = !!(node.userData && node.userData.pollinatedUntil &&
+                      performance.now() < node.userData.pollinatedUntil);
+                  const amount = gained + (pollinated ? 1 : 0);
+                  this.inventory.resources[node.type] = (this.inventory.resources[node.type] || 0) + amount;
                   updateResourceHUD();
                   createHarvestEffect(hit.point);
-                  playSound('harvest');
+                  playSoundAt('harvest', hit.point, { surface: node.type, gain: 0.9, maxDist: 30 });
+                  if (pollinated) {
+                      try { showMessage('¡Polinizado! +1 ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[node.type]) || node.type)); } catch (e) {}
+                  }
               }
 
               break;
@@ -1590,6 +1661,12 @@
           this.attackDamage = npcConfig.attackDamage || 10;
           this.wanderTimer = 0;
           this.wanderTarget = null;
+          this.idleTimer = 0;
+          this.brain = null;      // Red neuronal (22-neural-fauna.js)
+          this.brainOut = null;
+          this.brainTimer = 0;
+          this.baseHunt = null;   // Mesa de trabajo detectada mientras vaga
+          this.homePos = null;
 
           this.lastKnownPlayerPos = null;
           this.lostPlayerTimer = 0;
@@ -1605,6 +1682,7 @@
           this.healthRegenIdleRate = 1.5; // HP/sec when out of combat a while
           this.lastDamageTs = 0;
           this.isHostile = true;
+          this.servoTimer = 2.5 + Math.random() * 5;
 
           // Visual representation (can be passed in or created)
           this.mesh = visualMesh || this.createVisual();
@@ -1622,7 +1700,13 @@
           const hbMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.9 });
           this.healthBar = new THREE.Mesh(hbGeo, hbMat);
           this.healthBar.position.set(0, this.height + 0.4, 0);
+          this.healthBar.visible = false;
           this.container.add(this.healthBar);
+          this.healthBarRangeSq = 18 * 18;
+          this._hbTarget = new THREE.Vector3();
+          this.eyeGlow = (this.mesh && typeof this.mesh.getObjectByName === 'function')
+              ? this.mesh.getObjectByName('NPC_EyeGlow')
+              : null;
       }
 
       createVisual() {
@@ -1664,12 +1748,25 @@
 
            // Update health bar
            if (this.healthBar && camera) {
-               this.healthBar.rotation.copy(camera.rotation);
-               const hpRatio = Math.max(0, Math.min(1, this.health / this.maxHealth));
-               this.healthBar.scale.x = hpRatio;
-               if (hpRatio > 0.6) this.healthBar.material.color.set(0x00ff00);
-               else if (hpRatio > 0.3) this.healthBar.material.color.set(0xffaa00);
-               else this.healthBar.material.color.set(0xff0000);
+               const inBarRange = player && player.container
+                   ? this.container.position.distanceToSquared(player.container.position) <= this.healthBarRangeSq
+                   : false;
+               this.healthBar.visible = inBarRange && this.health > 0;
+               if (inBarRange) {
+                   this.healthBar.lookAt(camera.getWorldPosition(this._hbTarget));
+                   const hpRatio = Math.max(0, Math.min(1, this.health / this.maxHealth));
+                   this.healthBar.scale.x = hpRatio;
+                   if (hpRatio > 0.6) this.healthBar.material.color.set(0x00ff00);
+                   else if (hpRatio > 0.3) this.healthBar.material.color.set(0xffaa00);
+                   else this.healthBar.material.color.set(0xff0000);
+               }
+           }
+           if (this.eyeGlow) {
+               this.eyeGlow.visible = this.health > 0;
+               const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0045);
+               this.eyeGlow.material.opacity = 0.55 + pulse * 0.4;
+               const gs = 0.9 + pulse * 0.4;
+               this.eyeGlow.scale.set(gs, gs, 1);
            }
            // Update attack cooldown
           if (this.attackCooldown > 0) {
@@ -1686,6 +1783,25 @@
                   const rate = this.state === 'fleeing' ? this.healthRegenRate : this.healthRegenIdleRate;
                   this.health = Math.min(this.maxHealth, this.health + rate * delta);
                   this.mesh.userData.health = this.health;
+              }
+          }
+
+          // Servo mecánico ocasional, espacializado
+          if (this.health > 0 && this.container && !(typeof creatorMode !== 'undefined' && creatorMode)) {
+              this.servoTimer = (this.servoTimer || 0) - delta;
+              if (this.servoTimer <= 0) {
+                  const moving = Math.abs(this.velocity.x) + Math.abs(this.velocity.z) > 1.2;
+                  const alert = this.state === 'chasing' || this.state === 'attacking' || this.state === 'fleeing';
+                  this.servoTimer = (moving ? 3.2 : 5.5) + Math.random() * 4;
+                  if (typeof playSoundAt === 'function') {
+                      try {
+                          playSoundAt('robot_servo', this.container.position, {
+                              gain: alert ? 0.6 : 0.4,
+                              maxDist: 24,
+                              alert: alert
+                          });
+                      } catch (e) {}
+                  }
               }
           }
 
@@ -1729,16 +1845,48 @@
           }
           const focus = this.selectFocus(player);
           const distanceToPlayer = this.container.position.distanceTo(focus.pos);
+          const playerDist = this.container.position.distanceTo(player.container.position);
           const hasLOS = this.hasLineOfSight(player, collidables);
 
           // --- State Machine ---
           switch (this.state) {
               case 'idle':
-                  if (this.isHostile && distanceToPlayer < this.detectionRange && hasLOS) {
+                  if (this.isHostile && playerDist < this.detectionRange && hasLOS) {
                       this.state = 'chasing';
                       this.target = player;
+                  } else {
+                      this.idleTimer = (this.idleTimer || 0) + delta;
+                      if (this.isHostile && this.idleTimer > 2.5) {
+                          this.state = 'wandering';
+                          this.idleTimer = 0;
+                      }
                   }
                   break;
+
+              case 'wandering': {
+                  // Si ve al jugador, lo persigue; si encontró una base, va por ella.
+                  if (this.isHostile && playerDist < this.detectionRange && hasLOS) {
+                      this.state = 'chasing';
+                      this.target = player;
+                      break;
+                  }
+                  if (this.baseHunt) {
+                      this.state = 'chasing';
+                      break;
+                  }
+                  this.wanderTimer = (this.wanderTimer || 0) + delta;
+                  const out = this.brainOut || [Math.random(), 0.65, 0.5];
+                  const turn = (out[0] - 0.5) * 2.2;
+                  this.container.rotation.y += turn * delta;
+                  this.smartAvoidance(collidables, player);
+                  this.tryBreakBlockAhead();
+                  if (out[1] > 0.5) this.input.forward = -1;
+                  else if (out[1] < 0.18) this.input.backward = -1;
+                  if (this.isOnGround) {
+                      this.handleStepClimbing(collidables, intendedMove.clone().multiplyScalar(delta));
+                  }
+                  break;
+              }
 
               case 'chasing':
                   if (this.health <= this.maxHealth * this.fleeHealthThreshold && distanceToPlayer < this.detectionRange) {
@@ -1897,10 +2045,22 @@
               bullet.lifetime = Math.min(bullet.lifetime, 3);
               bullet.mesh.material.color.setHex(0xff3333);
               bullet.mesh.material.emissive.setHex(0xff0000);
+              try { playSoundAt('enemy_shot', muzzlePos, { gain: 0.9, maxDist: 55 }); } catch (e) {}
           } catch (e) { console.error('NPC shoot failed:', e); }
       }
 
       selectFocus(player) {
+          // Prioridad: base detectada mientras vagaba (la "recuerda" hasta destruirla)
+          if (this.baseHunt) {
+              if (this.baseHunt.hp <= 0) {
+                  this.baseHunt = null;
+              } else {
+                  return {
+                      kind: 'base', ref: this.baseHunt, pos: this.baseHunt.pos,
+                      target: { container: { position: this.baseHunt.pos }, height: 1.4, collider: this.baseHunt.mesh, mesh: this.baseHunt.mesh }
+                  };
+              }
+          }
           // Persigue al jugador, pero si tu base está mucho más cerca, va por la base
           const toPlayer = this.container.position.distanceTo(player.container.position);
           let best = null, bestD = Infinity;
@@ -2032,7 +2192,10 @@
           this.health -= amount;
           this.lastDamageTs = performance.now();
           this.mesh.userData.health = this.health; // Sync health
-          
+
+          // Si el jugador le pega, deja de obsesionarse con la base y lo enfrenta
+          this.baseHunt = null;
+
           // Become hostile if not already
           if (this.state === 'idle' || this.state === 'wandering') {
               this.isHostile = true;
@@ -2121,7 +2284,7 @@
           const deathPos = new THREE.Vector3();
           enemy.getWorldPosition(deathPos);
 
-          playSound('explosion');
+          playSoundAt('explosion', deathPos, { gain: 0.9, maxDist: 60 });
 
           for (let i = 0; i < particleCount; i++) {
               const isBlood = Math.random() > 0.3;

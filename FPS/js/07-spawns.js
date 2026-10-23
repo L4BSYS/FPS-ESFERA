@@ -63,6 +63,29 @@
       return item;
   }
 // --- Robot NPC Spawner ---
+  let _enemyEyeGlowTex = null;
+  function enemyEyeGlowTexture() {
+      if (_enemyEyeGlowTex) return _enemyEyeGlowTex;
+      if (typeof document === 'undefined') return null;
+      try {
+          const c = document.createElement('canvas');
+          c.width = c.height = 128;
+          const g = c.getContext('2d');
+          const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+          grad.addColorStop(0, 'rgba(255,245,225,1)');
+          grad.addColorStop(0.18, 'rgba(255,90,65,0.95)');
+          grad.addColorStop(0.45, 'rgba(255,30,20,0.42)');
+          grad.addColorStop(1, 'rgba(255,0,0,0)');
+          g.fillStyle = grad;
+          g.fillRect(0, 0, 128, 128);
+          _enemyEyeGlowTex = new THREE.CanvasTexture(c);
+          _enemyEyeGlowTex.minFilter = THREE.LinearFilter;
+          _enemyEyeGlowTex.magFilter = THREE.LinearFilter;
+      } catch (e) {
+          _enemyEyeGlowTex = null;
+      }
+      return _enemyEyeGlowTex;
+  }
   function spawnRobot(pos = null, minX = -20, maxX = 20, minZ = -20, maxZ = 20) {
       const robotGroup = new THREE.Group();
       robotGroup.name = "RobotNPC_VisualGroup"; // More descriptive name
@@ -95,12 +118,38 @@
       robotGroup.add(head);
 
       // Eye (single glowing slit)
-      const eyeMat = new THREE.MeshStandardMaterial({ color: 0xFF0000, roughness: 0.3, metalness: 0.2 });
-      const eyeGeo = new THREE.BoxGeometry(0.3, 0.05, 0.05);
+      const eyeMat = new THREE.MeshStandardMaterial({
+          color: 0xFF1A12,
+          emissive: 0xFF1A12,
+          emissiveIntensity: 3.2,
+          roughness: 0.25,
+          metalness: 0.1,
+          toneMapped: false
+      });
+      const eyeGeo = new THREE.BoxGeometry(0.34, 0.07, 0.06);
       const eye = new THREE.Mesh(eyeGeo, eyeMat);
       // *** CHANGE: Position eye relative to head center ***
       eye.position.set(0, head.position.y + 0.05, robotHeadRadius - 0.02); // On the front surface of head sphere
       robotGroup.add(eye);
+
+      // Halo rojo: hace visible al enemigo en la oscuridad y a distancia
+      const eyeGlowTex = enemyEyeGlowTexture();
+      if (eyeGlowTex) {
+          const eyeGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+              map: eyeGlowTex,
+              transparent: true,
+              opacity: 0.8,
+              depthWrite: false,
+              depthTest: true,
+              blending: THREE.AdditiveBlending
+          }));
+          eyeGlow.name = 'NPC_EyeGlow';
+          eyeGlow.position.copy(eye.position);
+          eyeGlow.position.z += 0.03;
+          eyeGlow.scale.set(1.05, 1.05, 1);
+          eyeGlow.raycast = function () {};
+          robotGroup.add(eyeGlow);
+      }
 
       // --- NPC Character Setup ---
       const npcConfig = {

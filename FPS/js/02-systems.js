@@ -910,6 +910,7 @@ function attachToolModel(entry, def) {
   try {
       if (!entry) return;
       if (!entry.model && def && def.createModel) entry.model = def.createModel();
+      if (entry.model) entry.model.userData.isToolModel = true;
       if (entry.model && typeof player !== 'undefined' && player && player.camera &&
           entry.model.parent !== player.camera) {
           player.camera.add(entry.model);
@@ -918,17 +919,38 @@ function attachToolModel(entry, def) {
       }
   } catch (e) {}
 }
+// Descolgar del camera cualquier modelo de herramienta que ya no esté en la mochila.
+// Evita el "martillo trabado" cuando se resetea el inventario o se sale del modo creador.
+function detachOrphanToolModels() {
+  try {
+      if (typeof player === 'undefined' || !player || !player.camera) return;
+      const keep = new Set();
+      const inv = player.inventory;
+      (inv && inv.items ? inv.items : []).forEach(function (it) { if (it && it.model) keep.add(it.model); });
+      if (inv && inv.equippedItem && inv.equippedItem.model) keep.add(inv.equippedItem.model);
+      player.camera.children.slice().forEach(function (ch) {
+          if (!ch) return;
+          const isTool = (ch.userData && ch.userData.isToolModel) || ch.isToolModel;
+          if (isTool && !keep.has(ch)) {
+              try { player.camera.remove(ch); } catch (e) {}
+          }
+      });
+  } catch (e) {}
+}
 function grantCreatorHammer() {
   try {
       if (typeof player === 'undefined' || !player || !player.inventory) return;
       const inv = player.inventory;
       let entry = inv.items.find(i => i.toolType === 'hammer');
+      let granted = false;
       if (!entry) {
           const def = ITEM_DEFINITIONS.hammer;
           entry = { ...def, quantity: 1 };
           if (!inv.addItem(entry)) return;
           entry = inv.items.find(i => i.toolType === 'hammer') || entry;
+          granted = true;
       }
+      if (granted) entry.creatorOnly = true;
       attachToolModel(entry, ITEM_DEFINITIONS.hammer);
       player.setTool('hammer');
   } catch (e) { console.error(e); }
@@ -945,6 +967,7 @@ function placeWorldItem(key, position) {
   model.name = itemDef.id;
   model.userData = Object.assign({}, model.userData, { collected: false, itemData: item, itemKey: key, creatorPlaced: true });
   if (itemDef.type === 'consumable') { model.isCollectible = true; model.type = itemDef.id; }
+  if (itemDef.type === 'key' && typeof decorateGoldenKey === 'function') decorateGoldenKey(model);
   scene.add(model);
   collidableObjects.push(model);
   if (!worldItems.includes(model)) worldItems.push(model);
@@ -1086,12 +1109,16 @@ function creatorDelete() {
 }
 // --- Scene snapshot with props (back-compat: old saves only have blocks) ---
 function serializeProps(list, isNode) {
-  return list.map(o => ({
-    k: isNode ? o.type : (o.userData && o.userData.itemKey),
-    x: Math.round(o.position.x * 100) / 100,
-    y: Math.round(o.position.y * 100) / 100,
-    z: Math.round(o.position.z * 100) / 100
-  })).filter(d => d.k);
+  return list.map(o => {
+    const d = {
+      k: isNode ? o.type : (o.userData && o.userData.itemKey),
+      x: Math.round(o.position.x * 100) / 100,
+      y: Math.round(o.position.y * 100) / 100,
+      z: Math.round(o.position.z * 100) / 100
+    };
+    if (o.userData && o.userData.autoResource) d.a = 1;
+    return d;
+  }).filter(d => d.k);
 }
 function clearWorldProps() {
   [...worldItems, ...resourceNodes].forEach(o => {
@@ -1173,11 +1200,19 @@ function deserializeProps(items, nodes, benches, extras) {
   let n = 0;
   (Array.isArray(items) ? items : []).slice(0, 500).forEach(d => {
       if (typeof d.x !== 'number' || typeof d.y !== 'number' || typeof d.z !== 'number') return;
-      if (placeWorldItem(d.k, new THREE.Vector3(d.x, d.y, d.z))) n++;
+      const item = placeWorldItem(d.k, new THREE.Vector3(d.x, d.y, d.z));
+      if (item) {
+          if (d.a) item.userData.autoResource = true;
+          n++;
+      }
   });
   (Array.isArray(nodes) ? nodes : []).slice(0, 500).forEach(d => {
       if (typeof d.x !== 'number' || typeof d.y !== 'number' || typeof d.z !== 'number') return;
-      if (placeResourceNode(d.k, new THREE.Vector3(d.x, d.y, d.z))) n++;
+      const node = placeResourceNode(d.k, new THREE.Vector3(d.x, d.y, d.z));
+      if (node) {
+          if (d.a) node.userData.autoResource = true;
+          n++;
+      }
   });
   return n;
 }
@@ -1335,6 +1370,33 @@ function setCreatorMode(on) {
       if (typeof player !== 'undefined' && player && typeof player.creatorFly === 'undefined') player.creatorFly = true;
       registerExistingProps();
       grantCreatorHammer();
+  } else {
+      // Al salir del modo creador: devolver el martillo prestado y limpiar modelos huérfanos
+      try {
+          if (typeof player !== 'undefined' && player && player.inventory) {
+              const inv = player.inventory;
+              const borrowed = inv.items.filter(function (i) { return i && i.creatorOnly; });
+              borrowed.forEach(function (it) {
+                  try { inv.removeItem(it, it.quantity || 1); } catch (e) {}
+              });
+              if (borrowed.length) {
+                  try {
+                      const stillHammer = inv.equippedItem && inv.equippedItem.toolType === TOOLS.HAMMER;
+                      if (!stillHammer || !inv.items.some(function (i) { return i.toolType === TOOLS.HAMMER; })) {
+                          player.currentTool = TOOLS.HANDS;
+                          inv.unequipItem();
+                      } else {
+                          player.setTool(TOOLS.HAMMER);
+                      }
+                  } catch (e) {}
+                  try { player.updateToolHUD(); } catch (e) {}
+                  try { inv.updateQuickSlotUI(); } catch (e) {}
+                  try { updateActionButton(); } catch (e) {}
+              }
+          }
+      } catch (e) {}
+      try { if (typeof player !== 'undefined' && player) player.updateToolModelVisibility(); } catch (e) {}
+      try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
   }
   try {
       enemySpawns.forEach(sp => { if (sp.marker) sp.marker.visible = creatorMode; });
@@ -1360,6 +1422,9 @@ function updateWaveManager() {
   try {
     if (typeof player !== 'undefined' && player && player.health <= 0) return; // no respawn after game over
   } catch (e) {}
+  // Sin puntos de spawn de enemigos en este mundo, no hay oleadas
+  // (evita que aparezcan enemigos "heredados" de otro nivel).
+  if (typeof enemySpawns === 'undefined' || !enemySpawns.length) { waveRespawnAt = 0; return; }
   const alive = npcs.filter((n) => n && n.health > 0).length;
   if (alive > 0) { waveRespawnAt = 0; return; }
   if (!waveRespawnAt) {
@@ -1371,9 +1436,7 @@ function updateWaveManager() {
       waveRespawnAt = 0;
       waveNumber++;
       const count = Math.min(2 + waveNumber, 6);
-      const pts = (typeof enemySpawns !== 'undefined' && enemySpawns.length)
-          ? enemySpawns
-          : ENEMY_SPAWN_POINTS.map(v => ({ x: v.x, z: v.z }));
+      const pts = enemySpawns;
       for (let k = 0; k < count; k++) {
           const sp = pts[k % pts.length];
           spawnRobot(new THREE.Vector3(sp.x + (Math.random() - 0.5) * 4, 0, sp.z + (Math.random() - 0.5) * 4));

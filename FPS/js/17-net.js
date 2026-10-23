@@ -14,6 +14,7 @@ var netAcc = 0;
 var netLastSent = 0;
 var netLastPayload = '';
 var netSector = null;
+var netLevel = null;   // escena/nivel actual: la red se aísla por nivel
 var netPlayerRef = null;
 var netPresRef = null;
 var netSubs = {}; // sector -> { playersRef, cbs }
@@ -32,6 +33,25 @@ function netDb() {
     if (window.LAGRIETA_DB_URL) return firebase.app().database(window.LAGRIETA_DB_URL);
     return firebase.database();
   } catch (e) { return null; }
+}
+// Raíz de la red para la escena actual. Los jugadores sólo comparten presencia/chat
+// con quienes están en el MISMO nivel (evita que mundos distintos se pisen).
+function netBase() {
+  return netLevel ? ('levels/' + netLevel) : 'global';
+}
+// Llamado por loadLevel/teardown. Si cambia de escena, se desuscribe y limpia avatares.
+function netSetLevel(id) {
+  const next = id || null;
+  if (next === netLevel) return;
+  netLevel = next;
+  netSector = null;
+  netLastPayload = '';
+  try { if (netPlayerRef) { try { netPlayerRef.onDisconnect().cancel(); } catch (e) {} try { netPlayerRef.remove(); } catch (e) {} } } catch (e) {}
+  netPlayerRef = null;
+  for (const k in netSubs) netUnsub(k);
+  for (const uid in remotes) netRemoveAvatar(uid);
+  netChatOff();
+  netEnsureChat(null); // recolocar panel de chat
 }
 function netSectorOf(x, z) {
   return Math.floor(x / NET_SECTOR) + '_' + Math.floor(z / NET_SECTOR);
@@ -58,6 +78,8 @@ function netStart(user) {
     netColor = netColorFor(netUid);
     netOn = true;
     netSector = null;
+    // Sincronizar la escena activa para publicar en la red correcta
+    try { if (typeof LEVEL !== 'undefined' && LEVEL.current) netLevel = LEVEL.current; } catch (e) {}
     const db = netDb();
     if (!db) return;
     netPresRef = db.ref('presence/' + netUid);
@@ -73,7 +95,7 @@ function netStop() {
     netChatOff();
     for (const uid in remotes) netRemoveAvatar(uid);
   } catch (e) {}
-  netOn = false; netUid = null; netSector = null; netPlayerRef = null; netPresRef = null;
+  netOn = false; netUid = null; netSector = null; netPlayerRef = null; netPresRef = null; netLevel = null;
 }
 function netUnsub(k) {
   const s = netSubs[k];
@@ -91,7 +113,7 @@ function netEnsureSectors(cx, cz) {
   if (!db) return;
   for (const k in need) {
     if (netSubs[k]) continue;
-    const ref = db.ref('sectors/' + k + '/players');
+    const ref = db.ref(netBase() + '/sectors/' + k + '/players');
     const onAdd = (snap) => { try { netError = ''; } catch (e) {} if (snap.key !== netUid) netAvatar(snap.key, snap.val()); };
     const onChg = (snap) => { try { netError = ''; } catch (e) {} if (snap.key !== netUid) netAvatar(snap.key, snap.val()); };
     const onRem = (snap) => netRemoveAvatar(snap.key);
@@ -119,6 +141,8 @@ function netAvatar(uid, d) {
   if (typeof d.x === 'number') { r.tx = d.x; r.ty = d.y || 0; r.tz = d.z; }
   if (typeof d.yaw === 'number') r.yaw = d.yaw;
   r.last = Date.now();
+  // Caído = casi transparente (feedback barato sin lógica de combate)
+  try { r.mesh.material.opacity = (typeof d.hp === 'number' && d.hp <= 0) ? 0.3 : 0.92; } catch (e) {}
   if (d.n && r.name !== d.n) { r.name = d.n; netRetag(r, d.n, d.c); }
   r.mesh.visible = true;
   r.tag.visible = true;
@@ -184,6 +208,7 @@ function netUpdate(delta) {
       }
   } catch (e) {}
   // publicar propio (throttle)
+  if (!netLevel) return; // sin escena activa no publicamos presencia
   netAcc += (delta || 0.016);
   if (netAcc < 0.125) return;
   netAcc = 0;
@@ -194,7 +219,7 @@ function netUpdate(delta) {
           const db = netDb();
           if (db) {
               if (netPlayerRef) { try { netPlayerRef.remove(); } catch (e) {} }
-              netPlayerRef = db.ref('sectors/' + sector + '/players/' + netUid);
+              netPlayerRef = db.ref(netBase() + '/sectors/' + sector + '/players/' + netUid);
               try { netPlayerRef.onDisconnect().remove(); } catch (e) {}
           }
           netSector = sector;
@@ -233,10 +258,11 @@ function netEnsureChat(sector) {
   renderNetChat();
   const box = document.getElementById('netChatLog');
   if (box) box.innerHTML = '';
+  if (!sector) return; // sin escena: solo dejamos el panel listo
   const db = netDb();
   if (!db) return;
   try {
-      netChatRef = db.ref('sectors/' + sector + '/chat').limitToLast(25);
+      netChatRef = db.ref(netBase() + '/sectors/' + sector + '/chat').limitToLast(25);
       netChatRef.on('child_added', (snap) => {
           const d = snap.val();
           if (!d || typeof d.m !== 'string') return;
@@ -256,13 +282,39 @@ function renderNetChat() {
   panel.id = 'netChat';
   panel.style.display = 'none';
   panel.innerHTML = '<div id="netChatLog"></div>' +
+      '<div id="netChatEmotes"></div>' +
       '<input id="netChatInput" maxlength="140" placeholder="T: hablar · Enter: enviar" autocomplete="off">';
   document.body.appendChild(panel);
+  const emotes = document.getElementById('netChatEmotes');
+  [['👋', 'saluda'], ['❤️', 'manda cariño'], ['⚠️', 'avisa peligro'], ['🤝', 'quiere cooperar'], ['🆘', 'pide ayuda']]
+    .forEach(function (e) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'rg-emote';
+      b.textContent = e[0];
+      b.title = e[1];
+      b.addEventListener('click', function () { netEmote(e[0]); });
+      emotes.appendChild(b);
+    });
   const input = document.getElementById('netChatInput');
   input.addEventListener('keydown', (ev) => {
       ev.stopPropagation();
       if (ev.key === 'Enter') netChatSend();
   });
+}
+// Emote rápido: mensaje corto sin gastar teclado. Barato para el servidor.
+function netEmote(text) {
+  if (!netOn || !netChatSector) return;
+  const now = Date.now();
+  if (now - netChatLastSend < 700) return;
+  netChatLastSend = now;
+  const db = netDb();
+  if (!db) return;
+  try {
+      db.ref(netBase() + '/sectors/' + netChatSector + '/chat').push({
+          u: netUid, n: netName, m: text, t: firebase.database.ServerValue.TIMESTAMP
+      });
+  } catch (e) {}
 }
 function netChatLine(name, msg, mine) {
   const box = document.getElementById('netChatLog');
@@ -301,7 +353,7 @@ function netChatSend() {
   const db = netDb();
   if (!db) return;
   try {
-      db.ref('sectors/' + netChatSector + '/chat').push({
+      db.ref(netBase() + '/sectors/' + netChatSector + '/chat').push({
           u: netUid, n: netName, m: text, t: firebase.database.ServerValue.TIMESTAMP
       });
   } catch (e) {}

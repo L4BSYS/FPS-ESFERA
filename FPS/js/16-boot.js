@@ -1,7 +1,7 @@
 // js/16-boot.js (part 16/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // --- Start ---
 init();
-try { if (typeof trialStart === 'function') trialStart('trial-1'); } catch (e) {}console.log("Ground Mesh: ", groundMesh);
+console.log("Ground Mesh: ", groundMesh);
 console.log("Collidables: ", collidableObjects.length);
 
 if (debugMode) {
@@ -25,3 +25,4 @@ document.body.appendChild(overlay);
 // === Initialize ===
 initSounds();
 startAmbientMusic();
+try { if (typeof startAmbientBed === 'function') startAmbientBed(); } catch (e) {}

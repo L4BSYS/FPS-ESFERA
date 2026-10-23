@@ -223,35 +223,23 @@ function showTrialModal(ms, isBest) {
   try { document.exitPointerLock(); } catch (e) {}
   m.style.display = 'flex';
 }
-// --- Caja del trial en pestaña Mundo ---
+// --- Caja del trial en pestaña Mundo (repurposada al sistema de niveles) ---
 function refreshTrialBox() {
   const box = document.getElementById('trialBox');
   if (!box) return;
   box.innerHTML = '';
   const title = document.createElement('div');
   title.className = 'rg-hint';
-  if (!trialActive) {
-      title.textContent = 'Trial: El Despertar — spawn, llave, puerta. Timer desde el primer paso.';
-      box.appendChild(title);
-      const b = document.createElement('button');
-      b.textContent = 'Jugar trial';
-      b.className = 'rg-btn rg-btn-small rg-btn-primary';
-      b.addEventListener('click', () => trialStart('trial-1'));
-      box.appendChild(b);
-  } else {
-      const best = trialBest(trialActive.def.id);
-      title.textContent = trialActive.def.name + (trialActive.finished ? ' ✓' : trialActive.started ? ' ⏱' : ' (movéte para arrancar)') +
-          (best ? ' · best ' + trialFmt(best) : '');
-      box.appendChild(title);
-      const r = document.createElement('button');
-      r.textContent = 'Reiniciar';
-      r.className = 'rg-btn rg-btn-small';
-      r.addEventListener('click', () => trialStart(trialActive.def.id));
-      box.appendChild(r);
-      const q = document.createElement('button');
-      q.textContent = 'Abandonar';
-      q.className = 'rg-btn rg-btn-small';
-      q.addEventListener('click', () => trialStop());
-      box.appendChild(q);
-  }
+  title.textContent = 'El tutorial te enseña a jugar. Cada nivel es una celda con puertas-portal a otros mundos.';
+  box.appendChild(title);
+  const b = document.createElement('button');
+  b.textContent = 'Jugar tutorial';
+  b.className = 'rg-btn rg-btn-small rg-btn-primary';
+  b.addEventListener('click', () => { try { loadLevel('tutorial'); } catch (e) {} });
+  box.appendChild(b);
+  const c = document.createElement('button');
+  c.textContent = 'Gestor de niveles';
+  c.className = 'rg-btn rg-btn-small';
+  c.addEventListener('click', () => { try { showPauseTab('play'); } catch (e) {} });
+  box.appendChild(c);
 }

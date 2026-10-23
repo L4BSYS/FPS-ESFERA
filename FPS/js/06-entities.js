@@ -10,6 +10,8 @@
       }
       return false;
   }
+  const _nearMissCam = new THREE.Vector3();
+  const _nearMissClosest = new THREE.Vector3();
   class Bullet {
       constructor(startPosition, direction) {
           this.mesh = new THREE.Mesh(
@@ -38,6 +40,7 @@
           this.damage = 15;
           this.structureDamage = 15;
           this.shooter = null;
+          this.passPlayed = false;
 
           // Trail effect
           this.trail = this.createTrail();
@@ -147,6 +150,37 @@
 
           // Update collider box (less critical if using raycasting)
           // this.colliderBox.setFromObject(this.mesh);
+
+          if (this.owner === 'enemy' && !this.passPlayed) this.checkNearMiss(previousPosition);
+      }
+
+      checkNearMiss(previousPosition) {
+          if (this.passPlayed) return;
+          if (typeof player === 'undefined' || !player || !player.camera) return;
+          try {
+              player.camera.getWorldPosition(_nearMissCam);
+              const ax = previousPosition.x, ay = previousPosition.y, az = previousPosition.z;
+              const bx = this.mesh.position.x, by = this.mesh.position.y, bz = this.mesh.position.z;
+              const abx = bx - ax, aby = by - ay, abz = bz - az;
+              const apx = _nearMissCam.x - ax, apy = _nearMissCam.y - ay, apz = _nearMissCam.z - az;
+              const lenSq = abx * abx + aby * aby + abz * abz;
+              const t = lenSq > 0.000001
+                  ? Math.max(0, Math.min(1, (apx * abx + apy * aby + apz * abz) / lenSq))
+                  : 0;
+              _nearMissClosest.set(ax + abx * t, ay + aby * t, az + abz * t);
+              const dist = _nearMissCam.distanceTo(_nearMissClosest);
+              if (dist > 2.5) return;
+              const movingToward = this.velocity.x * (_nearMissCam.x - bx)
+                  + this.velocity.y * (_nearMissCam.y - by)
+                  + this.velocity.z * (_nearMissCam.z - bz);
+              if (movingToward >= 0) return;
+              this.passPlayed = true;
+              const gain = Math.max(0.2, 1 - dist / 2.8);
+              playSound('bullet_whiz', {
+                  pan: typeof worldPan === 'function' ? worldPan(_nearMissClosest) : 0,
+                  gain: gain
+              });
+          } catch (e) {}
       }
 
       handleHit(hitObject, hitPosition) {
@@ -213,6 +247,7 @@
               player.updateStatsHUD();
           } catch (e) {}
           try { playSound('damage-taken'); } catch (e) {}
+          try { playSoundAt('flesh_hit', hitPosition, { gain: 0.8, maxDist: 35 }); } catch (e) {}
           this.createBloodEffect(hitPosition);
           if (player.health <= 0) {
               showGameOver();
@@ -227,6 +262,7 @@
           
           // Create blood effect
           this.createBloodEffect(hitPosition);
+          try { playSoundAt('flesh_hit', hitPosition, { gain: 0.9, maxDist: 35 }); } catch (e) {}
           
           // Visual feedback on mesh
           if (npc.mesh && npc.mesh.material) {
@@ -277,6 +313,18 @@
       }
 
       createImpactEffect(hitObject, hitPosition) {
+          try {
+              let snd = 'impact_stone';
+              let node = hitObject;
+              while (node) {
+                  const t = node.userData && node.userData.type;
+                  if (t === 'wood') { snd = 'impact_wood'; break; }
+                  if (t === 'metal') { snd = 'impact_metal'; break; }
+                  if (t === 'stone') { snd = 'impact_stone'; break; }
+                  node = node.parent;
+              }
+              playSoundAt(snd, hitPosition, { gain: 0.8, maxDist: 45 });
+          } catch (e) {}
           // Impact particles (Sparks/Dust)
           const particleCount = 10;
           const particles = new THREE.Group();

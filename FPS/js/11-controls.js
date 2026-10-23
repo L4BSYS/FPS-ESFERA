@@ -77,6 +77,10 @@
           else if (key === 't' && !isTypingTarget(e)) { // Chat de sector
               if (typeof toggleNetChat === 'function') toggleNetChat();
           }
+          else if (key === KeyMap.creator) { // Toggle modo creador
+              if (isTypingTarget(e)) return;
+              if (typeof setCreatorMode === 'function') setCreatorMode(!(typeof creatorMode !== 'undefined' && creatorMode));
+          }
           else if (key === KeyMap.palette) { // Creator palette bar (no pause needed)
               if (isTypingTarget(e)) return;
               if (typeof creatorMode !== 'undefined' && creatorMode) togglePalette();
@@ -312,6 +316,14 @@
           });
       }
 
+      const chatBtn = document.getElementById('chatBtn');
+      if (chatBtn) {
+          chatBtn.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              try { if (typeof toggleNetChat === 'function') toggleNetChat(); } catch (err) {}
+          });
+      }
+
       // Add touch events for material buttons (legacy + build bar)
       document.querySelectorAll('.material-btn, .build-mat').forEach(btn => {
           btn.addEventListener('touchstart', (e) => {
@@ -400,7 +412,7 @@
 
       const raycaster = new THREE.Raycaster(rayOrigin, rayDirection, 0.1, player.config.interactionReach);
       const interactables = collidableObjects.filter(obj => 
-          obj.visible && obj.isPickupable && !obj.userData.collected
+          obj.visible && ((obj.isPickupable && !obj.userData.collected) || (obj.userData && obj.userData.isDoor))
       );
 
       const hits = raycaster.intersectObjects(interactables, true);

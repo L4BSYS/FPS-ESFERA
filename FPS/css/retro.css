@@ -207,6 +207,9 @@ body, html {
   height: 46px;
   font-size: 22px;
 }
+#chatBtn {
+  right: 68px;
+}
 
 /* ============ Mensajes flotantes ============ */
 .hud-message {
@@ -796,6 +799,25 @@ input[type="range"] {
   border-radius: 4px;
   padding: 5px 7px;
 }
+#netChatEmotes {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.rg-emote {
+  font-size: 18px;
+  line-height: 1;
+  padding: 3px 6px;
+  background: #0a0d0a;
+  border: 2px solid var(--rg-green-dim);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--rg-ink);
+}
+.rg-emote:hover {
+  background: #163016;
+}
 
 /* ============ Trial (timer + objetivo) ============ */
 #trialHud {
@@ -1031,4 +1053,71 @@ input[type="range"] {
     top: 132px;
     min-width: 150px;
   }
+}
+
+/* ============ Gestor de niveles ============ */
+.level-hud {
+  position: fixed;
+  top: 10px; left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid var(--rg-line);
+  border-radius: 4px;
+  padding: 3px 12px;
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: var(--rg-ink);
+  z-index: 250;
+  pointer-events: none;
+}
+.level-fade {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: #000;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  display: none;
+  pointer-events: none;
+  z-index: 4000;
+}
+.rg-menu-wrap {
+  max-height: 82vh;
+  overflow-y: auto;
+  min-width: min(560px, 92vw);
+}
+.rg-menubtns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin: 8px 0;
+}
+.rg-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid var(--rg-line);
+  border-radius: 6px;
+  padding: 5px 10px;
+  margin: 6px 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+.rg-card .rg-card-name {
+  flex: 1;
+  font-size: 19px;
+}
+.rg-doorwrap .rg-keys-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+.rg-doorwrap .rg-select {
+  flex: 1;
+}
+@media (max-width: 768px) {
+  .level-hud { font-size: 15px; top: 6px; padding: 2px 8px; }
+  .rg-menu-wrap { min-width: 94vw; max-height: 88vh; }
+  .rg-card .rg-card-name { font-size: 16px; }
 }

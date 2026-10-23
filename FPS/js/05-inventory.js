@@ -102,6 +102,8 @@
               for (let i = 0; i < this.quickSlots.length; i++) {
                   if (this.quickSlots[i] === item) this.quickSlots[i] = null;
               }
+              // Descolgar el modelo del camera si ya no está en la mochila
+              try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
           }
           
           this.updateInventoryUI();

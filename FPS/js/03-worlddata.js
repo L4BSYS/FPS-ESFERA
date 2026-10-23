@@ -259,43 +259,41 @@ const ITEM_DEFINITIONS = {
         type: 'key',
         description: 'A shiny golden key that unlocks special doors',
         createModel: () => {
-            // Create a 3D model for the key
             const group = new THREE.Group();
-            
-            // Key bow (top part)
-            const bowGeo = new THREE.TorusGeometry(0.2, 0.05, 16, 32);
-            const bowMat = new THREE.MeshStandardMaterial({ 
-                color: 0xFFD700, 
-                metalness: 0.9,
-                roughness: 0.3
+            const goldMat = new THREE.MeshStandardMaterial({
+                color: 0xFFD24A,
+                emissive: 0xFFB000,
+                emissiveIntensity: 1.1,
+                metalness: 0.95,
+                roughness: 0.22,
+                toneMapped: false
             });
-            const bow = new THREE.Mesh(bowGeo, bowMat);
-            bow.rotation.x = Math.PI/2;
+
+            const bow = new THREE.Mesh(new THREE.TorusGeometry(0.34, 0.085, 18, 36), goldMat);
             group.add(bow);
-            
-            // Key shaft
-            const shaftGeo = new THREE.CylinderGeometry(0.03, 0.03, 0.6, 8);
-            const shaftMat = new THREE.MeshStandardMaterial({ 
-                color: 0xFFD700,
-                metalness: 0.8,
-                roughness: 0.4
-            });
-            const shaft = new THREE.Mesh(shaftGeo, shaftMat);
-            shaft.position.y = -0.3;
+
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.85, 10), goldMat);
+            shaft.position.y = -0.75;
             group.add(shaft);
-            
-            // Key teeth (simple version)
-            const teethGeo = new THREE.BoxGeometry(0.15, 0.05, 0.05);
-            const teeth = new THREE.Mesh(teethGeo, bowMat);
-            teeth.position.set(0, -0.6, 0);
-            group.add(teeth);
-            
-            // Add glow effect
-            const glow = new THREE.PointLight(0xFFD700, 0.5, 1);
-            glow.position.set(0, 0, 0);
-            group.add(glow);
-            
-            // Set up key properties
+
+            const tooth1 = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.09, 0.09), goldMat);
+            tooth1.position.set(0.10, -1.06, 0);
+            group.add(tooth1);
+
+            const tooth2 = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.09, 0.09), goldMat);
+            tooth2.position.set(0.07, -1.18, 0);
+            group.add(tooth2);
+
+            const gem = new THREE.Mesh(new THREE.SphereGeometry(0.09, 14, 10), new THREE.MeshStandardMaterial({
+                color: 0xFFF3B8,
+                emissive: 0xFFD24A,
+                emissiveIntensity: 2.4,
+                metalness: 0.5,
+                roughness: 0.18,
+                toneMapped: false
+            }));
+            group.add(gem);
+
             group.name = "Golden Key";
             group.isCollectible = true;
             group.inContact = false;
@@ -303,15 +301,27 @@ const ITEM_DEFINITIONS = {
             group.userData = {
                 collected: false,
                 itemData: ITEM_DEFINITIONS.key_golden,
-                keyId: 'golden_key' // Unique identifier for what this key opens
+                keyId: 'golden_key'
             };
-            
-            // Add rotation animation
+
             group.userData.update = (delta) => {
-                group.rotation.y += delta * 0.5; // Rotate slowly
-                group.position.y = Math.sin(Date.now() * 0.002) * 0.1 + 1; // Bob up and down
+                group.rotation.y += delta * 0.35;
+                group.position.y = Math.sin(Date.now() * 0.002) * 0.12 + 1.05;
+                const fx = group.userData.objectiveFx;
+                if (fx) {
+                    const p = 0.5 + 0.5 * Math.sin(Date.now() * 0.0022);
+                    if (fx.halo) {
+                        fx.halo.material.opacity = 0.55 + p * 0.4;
+                        const hs = 2.5 + p * 0.7;
+                        fx.halo.scale.set(hs, hs, 1);
+                    }
+                    if (fx.beam) fx.beam.material.opacity = 0.07 + p * 0.07;
+                    if (fx.core) fx.core.material.opacity = 0.14 + p * 0.1;
+                    if (fx.ring) fx.ring.material.opacity = 0.18 + p * 0.3;
+                    if (fx.light) fx.light.intensity = 1.3 + p * 0.9;
+                }
             };
-            
+
             return group;
         },
         stackable: false
@@ -448,6 +458,173 @@ const ITEM_DEFINITIONS = {
         }
     },
 };
+let _goldenKeyGlowTex = null;
+function goldenKeyGlowTexture() {
+    if (_goldenKeyGlowTex) return _goldenKeyGlowTex;
+    if (typeof document === 'undefined') return null;
+    try {
+        const c = document.createElement('canvas');
+        c.width = c.height = 128;
+        const g = c.getContext('2d');
+        const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, 'rgba(255,250,220,1)');
+        grad.addColorStop(0.22, 'rgba(255,220,110,0.9)');
+        grad.addColorStop(0.5, 'rgba(255,185,40,0.35)');
+        grad.addColorStop(1, 'rgba(255,170,0,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 128, 128);
+        _goldenKeyGlowTex = new THREE.CanvasTexture(c);
+        _goldenKeyGlowTex.minFilter = THREE.LinearFilter;
+        _goldenKeyGlowTex.magFilter = THREE.LinearFilter;
+    } catch (e) {
+        _goldenKeyGlowTex = null;
+    }
+    return _goldenKeyGlowTex;
+}
+function goldenKeyLabelSprite() {
+    if (typeof document === 'undefined') return null;
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        const rr = (x, y, w, h, r) => {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r);
+            ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r);
+            ctx.closePath();
+        };
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(24,15,0,0.78)';
+        rr(8, 10, 496, 108, 26);
+        ctx.fill();
+        ctx.strokeStyle = '#FFD24A';
+        ctx.lineWidth = 6;
+        ctx.stroke();
+        ctx.font = 'bold 52px "Trebuchet MS", Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = '#FFB000';
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = '#FFE9A0';
+        ctx.fillText('LLAVE DORADA', 256, 66);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: tex,
+            transparent: true,
+            depthWrite: false,
+            depthTest: true,
+            fog: false
+        }));
+        sp.name = 'GoldenKeyLabel';
+        sp.scale.set(4.6, 1.15, 1);
+        sp.raycast = function () {};
+        return sp;
+    } catch (e) {
+        return null;
+    }
+}
+function decorateGoldenKey(group) {
+    if (!group) return group;
+    if (!group.userData) group.userData = {};
+    if (group.userData.objectiveFx) return group;
+    const fx = {};
+    const glowTex = goldenKeyGlowTexture();
+    if (glowTex) {
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: glowTex,
+            transparent: true,
+            opacity: 0.8,
+            depthWrite: false,
+            depthTest: true,
+            blending: THREE.AdditiveBlending,
+            toneMapped: false,
+            fog: false
+        }));
+        halo.name = 'GoldenKeyHalo';
+        halo.scale.set(2.8, 2.8, 1);
+        halo.position.set(0, 0.15, 0);
+        halo.raycast = function () {};
+        group.add(halo);
+        fx.halo = halo;
+    }
+    const beam = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.3, 0.8, 11, 18, 1, true),
+        new THREE.MeshBasicMaterial({
+            color: 0xFFD24A,
+            transparent: true,
+            opacity: 0.12,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            toneMapped: false,
+            fog: false
+        })
+    );
+    beam.name = 'GoldenKeyBeam';
+    beam.position.y = 3.4;
+    beam.raycast = function () {};
+    group.add(beam);
+    fx.beam = beam;
+
+    const core = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.11, 0.22, 11, 14, 1, true),
+        new THREE.MeshBasicMaterial({
+            color: 0xFFFFE0,
+            transparent: true,
+            opacity: 0.2,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            toneMapped: false,
+            fog: false
+        })
+    );
+    core.name = 'GoldenKeyBeamCore';
+    core.position.y = 3.4;
+    core.raycast = function () {};
+    group.add(core);
+    fx.core = core;
+
+    const ring = new THREE.Mesh(
+        new THREE.RingGeometry(1.55, 1.95, 40),
+        new THREE.MeshBasicMaterial({
+            color: 0xFFDD66,
+            transparent: true,
+            opacity: 0.3,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            side: THREE.DoubleSide,
+            toneMapped: false,
+            fog: false
+        })
+    );
+    ring.name = 'GoldenKeyRing';
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = -2.05;
+    ring.raycast = function () {};
+    group.add(ring);
+    fx.ring = ring;
+
+    const label = goldenKeyLabelSprite();
+    if (label) {
+        label.position.set(0, 3.0, 0);
+        group.add(label);
+    }
+
+    const light = new THREE.PointLight(0xFFC94A, 1.6, 9, 2);
+    light.position.y = 0.4;
+    group.add(light);
+    fx.light = light;
+
+    group.userData.objectiveFx = fx;
+    return group;
+}
 // Configuration Constants
 const PLAYER_CONFIG = {
     height: 1.6,
