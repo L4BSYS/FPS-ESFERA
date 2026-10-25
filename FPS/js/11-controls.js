@@ -55,7 +55,9 @@
           // Cerrar paneles abiertos aunque el juego esté en pausa (Q/E)
           if (typeof invOpen !== 'undefined' && invOpen && (e.key || '').toLowerCase() === KeyMap.inventory && !isTypingTarget(e)) { toggleInventory(); return; }
           if (typeof totemOpen !== 'undefined' && totemOpen && (e.key || '').toLowerCase() === KeyMap.interact && !isTypingTarget(e)) { toggleTotem(false); return; }
+          if (typeof cartelOpen !== 'undefined' && cartelOpen && (e.key || '').toLowerCase() === KeyMap.interact && !isTypingTarget(e)) { toggleCartel(false); return; }
           if (typeof benchOpen !== 'undefined' && benchOpen && (e.key || '').toLowerCase() === KeyMap.interact && !isTypingTarget(e)) { toggleBench(false); return; }
+          if (typeof containerOpen !== 'undefined' && containerOpen && (e.key || '').toLowerCase() === KeyMap.interact && !isTypingTarget(e)) { toggleContainer(false); return; }
           if (isGamePaused) return; // Ignore game keys if paused
 
           const key = e.key.toLowerCase();
@@ -66,6 +68,8 @@
               if (isTypingTarget(e)) return;
               if (player) {
                   if (typeof tryOpenWorkbench === 'function' && tryOpenWorkbench()) return;
+                  if (typeof tryOpenWorldContainer === 'function' && tryOpenWorldContainer()) return;
+                  if (typeof tryOpenCartel === 'function' && tryOpenCartel()) return;
                   if (typeof tryOpenTotem === 'function' && tryOpenTotem()) return;
                   player.interactOrPickup();
               }
@@ -73,6 +77,14 @@
           else if (key === KeyMap.inventory) { // Inventory modal
               if (isTypingTarget(e)) return;
               toggleInventory();
+          }
+          else if (key === (KeyMap.reload || 'r')) { // Recargar cargador desde reserva
+              if (isTypingTarget(e)) return;
+              try {
+                  if (player && player.inventory && typeof player.inventory.reloadWeapon === 'function') {
+                      player.inventory.reloadWeapon();
+                  }
+              } catch (err) {}
           }
           else if (key === 't' && !isTypingTarget(e)) { // Chat de sector
               if (typeof toggleNetChat === 'function') toggleNetChat();
@@ -122,32 +134,7 @@
                       player.interactOrPickup();
                       return;
                   }
-
-                  // Otherwise perform tool-specific action
-                  switch (player.currentTool) {
-                      case TOOLS.GUN:
-                          shoot();
-                          break;
-
-                      case TOOLS.HAMMER:
-                          if (typeof creatorMode !== 'undefined' && creatorMode) creatorPlace();
-                          else placeBlock();
-                          updateSpatialPartition();
-                          break;
-
-                      case TOOLS.HANDS:
-                      case TOOLS.TORCH:
-                          player.interactOrPickup();
-                          break;
-
-                      case TOOLS.AXE:
-                      case TOOLS.PICKAXE:
-                          player.handleAttack();
-                          break;
-
-                      default:
-                          console.warn("Unhandled tool type:", player.currentTool);
-                  }
+                  performToolPrimaryAction();
               } else if (e.button === 2) { // Right click
                   e.preventDefault();
                   if (typeof creatorMode !== 'undefined' && creatorMode) {
@@ -336,6 +323,61 @@
 
   }
 
+  // Click izquierdo según herramienta (melee Fase A + harvest/shoot/build).
+  function performToolPrimaryAction() {
+      if (typeof player === 'undefined' || !player) return;
+
+      const tool = player.currentTool;
+      const stats = (typeof player.getMeleeStatsForTool === 'function')
+          ? player.getMeleeStatsForTool(tool)
+          : { damage: 4, reach: 2.2 };
+
+      switch (tool) {
+          case TOOLS.GUN:
+              // Con balas en cargador dispara; vacío → culataza (dentro de shoot).
+              shoot();
+              break;
+
+          case TOOLS.AXE:
+          case TOOLS.PICKAXE: {
+              // Priorizar cosecha si mirás un nodo; si no, melee a NPC / swing.
+              const node = (typeof player.lookAtResourceNode === 'function')
+                  ? player.lookAtResourceNode(3)
+                  : null;
+              if (node) {
+                  player.handleAttack();
+              } else {
+                  player.meleeAttack(stats.damage, stats.reach);
+              }
+              break;
+          }
+
+          case TOOLS.HAMMER: {
+              const npc = (typeof player.lookAtHostileNpc === 'function')
+                  ? player.lookAtHostileNpc(stats.reach)
+                  : null;
+              if (npc) {
+                  player.meleeAttack(stats.damage, stats.reach);
+              } else if (typeof creatorMode !== 'undefined' && creatorMode) {
+                  creatorPlace();
+              } else {
+                  placeBlock();
+                  try { updateSpatialPartition(); } catch (e) {}
+              }
+              break;
+          }
+
+          case TOOLS.HANDS:
+          case TOOLS.TORCH:
+              player.meleeAttack(stats.damage, stats.reach);
+              break;
+
+          default:
+              player.meleeAttack(stats.damage, stats.reach);
+              break;
+      }
+  }
+
   // Acción principal (clic izquierdo / botón de acción táctil).
   // Incluye abrir mesa/tótem, recoger objetos y la acción de la herramienta.
   function primaryAction() {
@@ -344,19 +386,12 @@
       if (typeof pendingPlacement !== 'undefined' && pendingPlacement) { confirmPlacement(); return; }
       try {
           if (typeof tryOpenWorkbench === 'function' && tryOpenWorkbench()) return;
+          if (typeof tryOpenWorldContainer === 'function' && tryOpenWorldContainer()) return;
+          if (typeof tryOpenCartel === 'function' && tryOpenCartel()) return;
           if (typeof tryOpenTotem === 'function' && tryOpenTotem()) return;
       } catch (e) {}
       if (checkForPickupItems()) { player.interactOrPickup(); return; }
-      switch (player.currentTool) {
-          case TOOLS.GUN: shoot(); break;
-          case TOOLS.HAMMER:
-              if (typeof creatorMode !== 'undefined' && creatorMode) creatorPlace();
-              else placeBlock();
-              break;
-          case TOOLS.AXE:
-          case TOOLS.PICKAXE: player.handleAttack(); break;
-          default: player.interactOrPickup();
-      }
+      performToolPrimaryAction();
   }
 
   // Acción secundaria (clic derecho / botón táctil).

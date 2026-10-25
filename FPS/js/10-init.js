@@ -77,9 +77,9 @@
         player.updateToolModelVisibility();
         player.updateToolHUD();
 
-      // --- Levels: registra built-ins y carga el nivel tutorial ---
+      // --- Levels: registra built-ins y carga el playground bajo el menú ---
       try { if (typeof initLevels === 'function') initLevels(); } catch (e) { console.error('initLevels', e); }
-      try { if (typeof loadLevel === 'function') loadLevel('tutorial'); } catch (e) { console.error('loadLevel', e); }
+      try { if (typeof loadLevel === 'function') loadLevel('playground'); } catch (e) { console.error('loadLevel', e); }
       try { if (typeof showMainMenu === 'function') showMainMenu('start'); } catch (e) { console.error('showMainMenu', e); }
 
       console.log("Initial block count:", placedBlocks.length);

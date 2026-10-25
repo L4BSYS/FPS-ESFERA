@@ -1080,40 +1080,96 @@
           this.camera.rotation.x = Math.max(-this.config.maxPitch, Math.min(this.config.maxPitch, this.camera.rotation.x));
       }
 
-      // Golpe cuerpo a cuerpo (se usa el arma como objeto cuando no hay balas)
-      meleeAttack() {
-          if (isGamePaused || !this.camera) return false;
+      getMeleeStatsForTool(tool) {
+          const t = tool || this.currentTool || (typeof TOOLS !== 'undefined' ? TOOLS.HANDS : 'hands');
+          const table = (typeof MELEE_STATS !== 'undefined') ? MELEE_STATS : null;
+          if (table && table[t]) return table[t];
+          return { damage: 4, reach: 2.2 };
+      }
+
+      // ¿Hay un NPC enemigo bajo la mira dentro de reach?
+      lookAtHostileNpc(reach) {
+          if (!this.camera) return null;
+          const r = (typeof reach === 'number') ? reach : 2.6;
           const origin = this.camera.getWorldPosition(new THREE.Vector3());
           const dir = this.camera.getWorldDirection(new THREE.Vector3());
-          const ray = new THREE.Raycaster(origin, dir, 0, 2.6);
+          const ray = new THREE.Raycaster(origin, dir, 0, r);
           const targets = [];
           try { npcs.forEach(n => { if (n && n.health > 0 && n.mesh) targets.push(n.mesh); }); } catch (e) {}
-          try { if (Array.isArray(placedBlocks)) targets.push(...placedBlocks); } catch (e) {}
+          if (!targets.length) return null;
           const hits = ray.intersectObjects(targets, true);
-          for (const h of hits) {
-              let p = h.object, npc = null;
-              while (p) { if (p.userData && p.userData.parentCharacter instanceof NPC) { npc = p.userData.parentCharacter; break; } p = p.parent; }
+          for (let i = 0; i < hits.length; i++) {
+              let p = hits[i].object, npc = null;
+              while (p) {
+                  if (p.userData && p.userData.parentCharacter instanceof NPC) {
+                      npc = p.userData.parentCharacter;
+                      break;
+                  }
+                  p = p.parent;
+              }
+              if (npc && npc.health > 0) return npc;
+          }
+          return null;
+      }
+
+      // ¿Hay un nodo de recurso bajo la mira?
+      lookAtResourceNode(reach) {
+          if (!this.camera) return null;
+          const r = (typeof reach === 'number') ? reach : 3;
+          const origin = this.camera.getWorldPosition(new THREE.Vector3());
+          const dir = this.camera.getWorldDirection(new THREE.Vector3());
+          const ray = new THREE.Raycaster(origin, dir, 0, r);
+          const hits = ray.intersectObjects(collidableObjects, true);
+          for (let i = 0; i < hits.length; i++) {
+              let node = hits[i].object;
+              while (node && !node.isResourceNode) node = node.parent;
+              if (node && node.isResourceNode && typeof node.harvest === 'function') return node;
+          }
+          return null;
+      }
+
+      // Golpe cuerpo a cuerpo. damage/reach opcionales (default según herramienta).
+      meleeAttack(damage, reach) {
+          if (isGamePaused || !this.camera) return false;
+          if (typeof meleeCooldown !== 'undefined' && meleeCooldown > 0) return false;
+
+          const stats = this.getMeleeStatsForTool(this.currentTool);
+          const dmg = (typeof damage === 'number') ? damage : stats.damage;
+          const rng = (typeof reach === 'number') ? reach : stats.reach;
+
+          const origin = this.camera.getWorldPosition(new THREE.Vector3());
+          const dir = this.camera.getWorldDirection(new THREE.Vector3());
+          const ray = new THREE.Raycaster(origin, dir, 0, rng);
+          const targets = [];
+          try { npcs.forEach(n => { if (n && n.health > 0 && n.mesh) targets.push(n.mesh); }); } catch (e) {}
+          const hits = targets.length ? ray.intersectObjects(targets, true) : [];
+          let hitNpc = false;
+          for (let i = 0; i < hits.length; i++) {
+              let p = hits[i].object, npc = null;
+              while (p) {
+                  if (p.userData && p.userData.parentCharacter instanceof NPC) {
+                      npc = p.userData.parentCharacter;
+                      break;
+                  }
+                  p = p.parent;
+              }
               if (npc && npc.health > 0) {
-                  try { npc.takeDamage(5); } catch (e) {}
-                  try { createHarvestEffect(h.point); } catch (e) {}
+                  try { npc.takeDamage(dmg); } catch (e) {}
+                  try { createHarvestEffect(hits[i].point); } catch (e) {}
                   try { playSound('hit'); } catch (e) {}
-                  try { this.applyRecoil(); } catch (e) {}
-                  return true;
+                  hitNpc = true;
+                  break;
               }
-              /*
-              Solo enemigos que no rompa bloques o que requiera mas esfuerzo
-              if (Array.isArray(placedBlocks) && placedBlocks.includes(h.object) && h.object.userData) {
-                  h.object.userData.health = (h.object.userData.health ?? 3) - 5;
-                  try { updateBlockAppearance(h.object); } catch (e) {}
-                  if (h.object.userData.health <= 0) { try { destroyBlock(h.object); } catch (e) {} }
-                  try { this.applyRecoil(); } catch (e) {}
-                  return true;
-              }
-              */
-              break;
           }
           try { this.applyRecoil(); } catch (e) {}
-          return false;
+          try {
+              if (typeof meleeCooldown !== 'undefined') meleeCooldown = 0.42;
+              else if (typeof shootCooldown !== 'undefined') shootCooldown = Math.max(shootCooldown || 0, 0.35);
+          } catch (e) {}
+          if (!hitNpc) {
+              try { playSound('weapon_empty'); } catch (e) {}
+          }
+          return hitNpc;
       }
 
       handleMouseMove(event, sensitivity = this.config.sensitivity) {
@@ -1251,12 +1307,14 @@
                               "[E] Necesitás la llave para cruzar" :
                               `[E] Cruzar la puerta`;
                       } else {
-                          promptText = target.userData.locked ? 
-                              "[E] Unlock Door (Requires Key)" : 
-                              `[E] ${target.userData.open ? "Close" : "Open"} Door`;
+                          promptText = target.userData.locked ?
+                              "[E] Abrir puerta (llave)" :
+                              `[E] ${target.userData.open ? "Cerrar" : "Abrir"} puerta`;
                       }
                   } else if (target.isPickupable) {
-                      promptText = `[E] Pickup ${target.name || "Item"}`;
+                      promptText = target.userData && (target.userData.tutorialBag || target.userData.playgroundBag)
+                          ? '[E] Tomar mochila'
+                          : `[E] Agarrar ${target.name || 'objeto'}`;
                   } else if (target.isInteractable) {
                       promptText = `[E] ${target.userData.interactPrompt || "Interact"}`;
                   }
@@ -1266,6 +1324,24 @@
                       promptElement.style.opacity = '1';
                       return;
                   }
+              }
+          }
+
+          if (promptElement && typeof containerLookPrompt === 'function') {
+              const wp = containerLookPrompt();
+              if (wp) {
+                  promptElement.textContent = wp;
+                  promptElement.style.opacity = '1';
+                  return;
+              }
+          }
+
+          if (promptElement && typeof cartelLookPrompt === 'function') {
+              const cp = cartelLookPrompt();
+              if (cp) {
+                  promptElement.textContent = cp;
+                  promptElement.style.opacity = '1';
+                  return;
               }
           }
 
@@ -1305,6 +1381,18 @@
 
               // Priority 2: Pickup items (regardless of current tool)
               if (interactTarget.isPickupable && !interactTarget.userData.collected) {
+                  if (interactTarget.userData && interactTarget.userData.tutorialBag) {
+                      if (typeof directorPickupTutorialBag === 'function') {
+                          try { directorPickupTutorialBag(interactTarget); } catch (e) {}
+                      }
+                      return;
+                  }
+                  if (interactTarget.userData && interactTarget.userData.playgroundBag) {
+                      if (typeof pickupPlaygroundBag === 'function') {
+                          try { pickupPlaygroundBag(interactTarget); } catch (e) {}
+                      }
+                      return;
+                  }
                   if (!this.heldItem) {
                       this.pickupItem(interactTarget);
                   } else {
@@ -1331,15 +1419,23 @@
                   door.castShadow = false;
                   console.log("Door unlocked and opened!");
                   playSound('door_open');
-                  
+
+                  if (door.userData.consumeKey) {
+                      try { this.inventory.removeKey(door.userData.requiredKey); } catch (e) {}
+                  }
+
                   // Visual changes
                   door.material.color.setHex(0x00FF00); // Change to green
                   door.material.transparent = true;
                   door.material.opacity = 0.3;
-                  
+
                   // Remove from collidables
                   const index = collidableObjects.indexOf(door);
                   if (index > -1) collidableObjects.splice(index, 1);
+
+                  if (typeof door.userData.onOpened === 'function') {
+                      try { door.userData.onOpened(door); } catch (e) {}
+                  }
               } else {
                   console.log("This door is locked!");
                   playSound('door_locked');
@@ -1382,6 +1478,11 @@
                   this.scene.remove(item);
                   collidableObjects.splice(collidableObjects.indexOf(item), 1);
                   playSound('key-pickup');
+                  // Solo la llave de salida del tótem NE (no la del vestíbulo).
+                  if (item.userData && item.userData.tutorialExitKey &&
+                      typeof directorOnTutorialKeyPicked === 'function') {
+                      try { directorOnTutorialKeyPicked(); } catch (e) {}
+                  }
                   return;
               }
               return;
@@ -1425,6 +1526,10 @@
           };
 
           if (this.inventory.addItem(inventoryItem)) {
+              if ((def.id === 'food' || def.type === 'consumable' && def.healAmount > 0) &&
+                  typeof directorOnFoodLesson === 'function') {
+                  try { directorOnFoodLesson(); } catch (e) {}
+              }
               // Remove from world
               this.scene.remove(item);
               collidableObjects.splice(collidableObjects.indexOf(item), 1);
@@ -1560,6 +1665,13 @@
                   if (pollinated) {
                       try { showMessage('¡Polinizado! +1 ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[node.type]) || node.type)); } catch (e) {}
                   }
+                  if (node.type === 'wood' && typeof directorOnWoodHarvested === 'function') {
+                      try { directorOnWoodHarvested(); } catch (e) {}
+                  }
+                  if ((node.type === 'stone' || node.type === 'metal') &&
+                      typeof directorOnPickaxeResourceHarvested === 'function') {
+                      try { directorOnPickaxeResourceHarvested(); } catch (e) {}
+                  }
               }
 
               break;
@@ -1582,6 +1694,9 @@
                   this.health = Math.min(100, this.health + (collectible.userData.healAmount || 20));
                   playSound('health-regen');
                   this.foodCollected++;
+                  if (typeof directorOnFoodLesson === 'function') {
+                      try { directorOnFoodLesson(); } catch (e) {}
+                  }
                   break;
                   
               case 'toxin':
@@ -2257,6 +2372,9 @@
           if (this._deadCounted) return;
           this._deadCounted = true;
           try { enemiesKilled++; } catch (e) {}
+          if (this.tutorialCombat && typeof directorOnTutorialRobotKilled === 'function') {
+              try { directorOnTutorialRobotKilled(); } catch (e) {}
+          }
           this.state = 'dead';
           this.velocity.set(0, 0, 0);
           

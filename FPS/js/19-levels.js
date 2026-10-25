@@ -1,4 +1,4 @@
-// js/19-levels.js (part 19). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
+﻿// js/19-levels.js (part 19). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // ============================================================
 //  Gestor de niveles / escenas
 //  - Un nivel = "celda" cuadrada cerrada por 4 muros.
@@ -19,6 +19,10 @@ var LEVEL = {
   menuBusy: false,
   tutorialDone: false
 };
+
+
+// DIRECTOR + tutorial steps: js/26-tutorial-director.js
+
 
 var roomObjects = [];    // muros + puertas-portal de la celda actual
 var roomGround = null;   // GroundTerrain de la celda actual
@@ -196,49 +200,8 @@ function createLevelItem(itemDef, x, z, y) {
 // ------------------------------------------------------------
 //  Contenido de niveles built-in
 // ------------------------------------------------------------
-function buildTutorialLevel() {
-  try {
-    const topY = function (x, z) { try { return (typeof groundTopY === 'function') ? groundTopY(x, z) : 0; } catch (e) { return 0; } };
-    const wn = createResourceNode('wood', new THREE.Vector3(-4, topY(-4, 14), 14));
-    collidableObjects.push(wn); scene.add(wn);
-    const sn = createResourceNode('stone', new THREE.Vector3(4, topY(4, 14), 14));
-    collidableObjects.push(sn); scene.add(sn);
-    const mn = createResourceNode('metal', new THREE.Vector3(0, topY(0, 18), 18));
-    collidableObjects.push(mn); scene.add(mn);
-    [['wood', -22, 8, 5], ['wood', 26, -10, 4], ['stone', 22, 14, 5],
-     ['stone', -16, 28, 4], ['metal', 32, 8, 4], ['metal', -26, -8, 4]]
-      .forEach(function (c) { spawnResourceCluster(c[0], c[1], c[2], c[3]); });
-  } catch (e) { console.warn(e); }
-
-  [[-3, 11], [-2.2, 12], [3.5, 11]].forEach(function (c) { placeWorldItem('branch', new THREE.Vector3(c[0], 0.35, c[1])); });
-  [[3, 13], [3.7, 14]].forEach(function (c) { placeWorldItem('pebble', new THREE.Vector3(c[0], 0.35, c[1])); });
-  [[-3, 20], [-4, 21]].forEach(function (c) { placeWorldItem('scrap', new THREE.Vector3(c[0], 0.35, c[1])); });
-
-  placeTotem(['¡Bienvenido!', 'WASD para moverte', 'mouse para mirar'], 0, 4);
-  placeTotem(['E usa / agarra', 'Q mochila y craft', 'clic usa la herramienta'], 0, 9);
-  placeTotem(['Cosechá nodos:', 'hacha = madera', 'pico = piedra/metal'], 0, 13);
-  placeTotem(['Craft (Q):', 'martillo → mesa', 'construí tu base'], 0, 21);
-  placeTotem(['Buscá la LLAVE', 'dorada y abrí la', 'puerta del fondo →'], 0, 30);
-
-  createLevelItem(ITEM_DEFINITIONS.axe, -1.8, 9);
-  createLevelItem(ITEM_DEFINITIONS.pickaxe, -0.6, 9);
-  createLevelItem(ITEM_DEFINITIONS.hammer, 0.6, 9);
-  createLevelItem(ITEM_DEFINITIONS.pistol, 1.8, 9);
-  createLevelItem(ITEM_DEFINITIONS.pistolAmmo, 0, 12);
-  createLevelItem(ITEM_DEFINITIONS.toxin, 1.5, 22);
-  createLevelItem(ITEM_DEFINITIONS.food, -1.5, 22);
-  createLevelItem(ITEM_DEFINITIONS.key_golden, 1.5, 25);
-
-  try {
-    spawnRobot(new THREE.Vector3(20, 0, 30));
-    spawnRobot(new THREE.Vector3(25, 0, 25));
-    addEnemySpawn(20, 30, false);
-    addEnemySpawn(25, 25, false);
-  } catch (e) {}
-
-  [[-18, 6], [18, -6]].forEach(function (c) { createLevelItem(ITEM_DEFINITIONS.toxin, c[0], c[1], 1); });
-  [[16, 8], [-16, -4]].forEach(function (c) { createLevelItem(ITEM_DEFINITIONS.food, c[0], c[1], 1); });
-}
+// Tutorial (DIRECTOR + pasos): js/26-tutorial-director.js
+// Playground layout: js/25-playground.js
 
 function buildWorldLevel(def) {
   const s = def.size || 160;
@@ -267,6 +230,8 @@ function buildWorldLevel(def) {
 //  Limpieza / carga de niveles
 // ------------------------------------------------------------
 function teardownLevel() {
+  try { if (typeof clearWorldContainers === 'function') clearWorldContainers(); } catch (e) {}
+  try { if (typeof clearWorldZones === 'function') clearWorldZones(); } catch (e) {}
   try { if (typeof clearNeuralFauna === 'function') clearNeuralFauna(); } catch (e) {}
   try { if (typeof cancelPlacement === 'function') cancelPlacement(true); } catch (e) {}
   try { if (typeof decayingBlocks !== 'undefined' && decayingBlocks) decayingBlocks.length = 0; } catch (e) {}
@@ -374,6 +339,7 @@ function loadLevel(id, opts) {
   const def = resolveLevelDef(id);
   if (!def) { try { lvToast('No encontré el mundo: ' + id); } catch (e) {} return; }
   LEVEL.transitioning = false;
+  try { if (typeof resetDirector === 'function') resetDirector(); } catch (e) {}
   teardownLevel();
   buildRoom(def);
   if (typeof def.build === 'function') {
@@ -383,7 +349,10 @@ function loadLevel(id, opts) {
   }
   // Ambiente (cielo / luz / oscuridad) y fauna neuronal del mundo
   try { if (typeof applyLevelAmbience === 'function') applyLevelAmbience(def); } catch (e) {}
-  try { if (typeof spawnNeuralFauna === 'function') spawnNeuralFauna(def); } catch (e) {}
+  // Tutorial paso 0: patio apagado — sin fauna hasta que el director la prenda.
+  if (!(def.kind === 'tutorial' || DIRECTOR.active)) {
+    try { if (typeof spawnNeuralFauna === 'function') spawnNeuralFauna(def); } catch (e) {}
+  }
   placePlayerAt(opts.spawn || def.spawn);
   if (def.resetInventory !== false) resetPlayerInventory();
   LEVEL.current = def.id;
@@ -696,7 +665,8 @@ function renderHome(body) {
 
   const row = document.createElement('div');
   row.className = 'rg-menubtns';
-  row.appendChild(lvBtn('▶ Tutorial', 'rg-btn-primary', function () { playLevel('tutorial'); }));
+  row.appendChild(lvBtn('▶ Playground', 'rg-btn-primary', function () { playLevel('playground'); }));
+  row.appendChild(lvBtn('Tutorial', '', function () { playLevel('tutorial'); }));
   if (lastDef) row.appendChild(lvBtn('⏵ Continuar', '', function () { playLevel(lastDef.id); }));
   row.appendChild(lvBtn('🗺 Mis mundos', '', function () { LEVEL.menuView = 'mine'; renderMainMenu(); refreshMenuLevels(); }));
   row.appendChild(lvBtn('🌐 Comunidad', '', function () { LEVEL.menuView = 'community'; renderMainMenu(); refreshMenuLevels(); }));
@@ -805,7 +775,7 @@ function deleteWorld(def) {
     delete LEVEL.defs[def.id];
     if (LEVEL.working && LEVEL.working.id === def.id) LEVEL.working = null;
     try { lvToast('Mundo eliminado'); } catch (e) {}
-    if (LEVEL.current === def.id) { try { playLevel('tutorial'); return; } catch (e) {} }
+    if (LEVEL.current === def.id) { try { playLevel('playground'); return; } catch (e) {} }
     renderMainMenu();
   }).catch(function (e) { alert('No se pudo borrar: ' + e.message); });
 }
@@ -1090,9 +1060,10 @@ function renderDoorSelectors(body, doors) {
     const lab = document.createElement('span'); lab.className = 'rg-rownote'; lab.textContent = 'Puerta ' + s[1];
     const sel = document.createElement('select'); sel.className = 'rg-select';
     const none = document.createElement('option'); none.value = ''; none.textContent = '— sin puerta —'; sel.appendChild(none);
+    const pg = document.createElement('option'); pg.value = 'playground'; pg.textContent = 'Playground'; sel.appendChild(pg);
     const tut = document.createElement('option'); tut.value = 'tutorial'; tut.textContent = 'Tutorial'; sel.appendChild(tut);
     Object.keys(LEVEL.defs).forEach(function (id) {
-      if (id === 'tutorial' || id === 'mundo-1' || id === 'mundo-2') return;
+      if (id === 'playground' || id === 'tutorial' || id === 'mundo-1' || id === 'mundo-2') return;
       const o = document.createElement('option'); o.value = id; o.textContent = (LEVEL.defs[id].name || id); sel.appendChild(o);
     });
     const cur = doors[side];
@@ -1193,7 +1164,8 @@ function renderLevelsPanel() {
   const row = document.createElement('div');
   row.className = 'rg-menubtns';
   row.appendChild(lvBtn('🗺 Mis mundos', 'rg-btn-primary', function () { showMainMenu('mine'); }));
-  row.appendChild(lvBtn('▶ Tutorial', 'rg-btn-small', function () { playLevel('tutorial'); }));
+  row.appendChild(lvBtn('▶ Playground', 'rg-btn-small', function () { playLevel('playground'); }));
+  row.appendChild(lvBtn('Tutorial', 'rg-btn-small', function () { playLevel('tutorial'); }));
   if (tutorialDone()) row.appendChild(lvBtn('➕ Crear mundo', 'rg-btn-small', function () { showMainMenu('create'); }));
   box.appendChild(row);
 }
@@ -1224,7 +1196,14 @@ function saveWorkingFromPause(publish) {
 // ------------------------------------------------------------
 function initLevels() {
   registerLevel({
-    id: 'tutorial', name: 'El Despertar (Tutorial)', kind: 'tutorial', size: 100,
+    id: 'playground', name: 'Playground', kind: 'playground', size: 100,
+    spawn: { x: 0, z: 0, rot: Math.PI }, resetInventory: true, env: 'day',
+    doors: { south: { to: 'mundo-1', locked: true, key: 'golden_key' } },
+    build: buildPlaygroundLevel
+  });
+  // Mirando al sur (+Z) hacia el cartel del vestíbulo. Patio apagado hasta el director.
+  registerLevel({
+    id: 'tutorial', name: 'Tutorial', kind: 'tutorial', size: 100,
     spawn: { x: 0, z: 0, rot: Math.PI }, resetInventory: true, env: 'day',
     doors: { south: { to: 'mundo-1', locked: true, key: 'golden_key' } },
     build: buildTutorialLevel
@@ -1232,7 +1211,7 @@ function initLevels() {
   registerLevel({
     id: 'mundo-1', name: 'La Grieta', kind: 'campaign', size: 160,
     spawn: { x: 0, z: -77, rot: Math.PI }, resetInventory: true, env: 'cycle', resourceLevel: 'normal',
-    doors: { north: { to: 'tutorial' }, east: { to: 'mundo-2' } },
+    doors: { north: { to: 'playground' }, east: { to: 'mundo-2' } },
     build: buildWorldLevel
   });
   registerLevel({

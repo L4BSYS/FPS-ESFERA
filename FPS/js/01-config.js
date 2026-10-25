@@ -9,6 +9,7 @@ let player, clock, keys = {};
 let weapon, muzzleFlash; 
 
 let shootCooldown = 0;
+let meleeCooldown = 0;
 let groundMesh; // Keep a direct reference to the ground
 
 let collidableObjects = [];

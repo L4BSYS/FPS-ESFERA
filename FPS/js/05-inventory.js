@@ -139,17 +139,25 @@
           }
 
           this.equippedItem = item;
-          
+
           // Update player's current tool if this is a tool item
           if (item.toolType) {
               this.player.currentTool = item.toolType;
           }
-          
+
+          // Armas: asegurar cargador; si está vacío y hay reserva, recargar al equipar.
+          if (item.ammoType) {
+              this.ensureWeaponMagazine(item);
+              if ((item.magazine || 0) <= 0 && (this.ammo[item.ammoType] || 0) > 0) {
+                  this.reloadWeapon();
+              }
+          }
+
           this.updateInventoryUI();
           this.updateWeaponHUD();
           this.updateAmmoUI();
           updateActionButton(); // Update mobile button
-          
+
           return true;
       }
 
@@ -202,7 +210,7 @@
           return false;
       }
       
-      // Use ammo (with better error handling)
+      // Use ammo from reserve pool (reload draws from here)
       useAmmo(type, amount) {
           if (this.ammo[type] === undefined || this.ammo[type] < (amount || 1)) {
               playSound('weapon_empty');
@@ -213,8 +221,52 @@
           this.updateAmmoUI();
           return true;
       }
+
+      getMagazineSize(item) {
+          if (!item) return 0;
+          if (typeof item.magazineSize === 'number' && item.magazineSize > 0) return item.magazineSize;
+          const byType = { pistol: 12, rifle: 30, shotgun: 6, energy: 20 };
+          return byType[item.ammoType] || 12;
+      }
+
+      ensureWeaponMagazine(item) {
+          if (!item || !item.ammoType) return;
+          if (typeof item.magazineSize !== 'number' || item.magazineSize <= 0) {
+              item.magazineSize = this.getMagazineSize(item);
+          }
+          if (typeof item.magazine !== 'number' || item.magazine < 0) {
+              item.magazine = 0;
+          }
+          if (item.magazine > item.magazineSize) item.magazine = item.magazineSize;
+      }
+
+      // R: llenar cargador desde la reserva.
+      reloadWeapon() {
+          const item = this.equippedItem;
+          if (!item || !item.ammoType) return false;
+          this.ensureWeaponMagazine(item);
+          const magSize = item.magazineSize;
+          const cur = item.magazine || 0;
+          if (cur >= magSize) {
+              try { if (typeof lvToast === 'function') lvToast('Cargador lleno'); } catch (e) {}
+              return false;
+          }
+          const reserve = this.ammo[item.ammoType] || 0;
+          if (reserve <= 0) {
+              playSound('weapon_empty');
+              try { if (typeof lvToast === 'function') lvToast('Sin balas de reserva'); } catch (e) {}
+              return false;
+          }
+          const take = Math.min(magSize - cur, reserve);
+          this.ammo[item.ammoType] = reserve - take;
+          item.magazine = cur + take;
+          try { playSound('ammo-pickup'); } catch (e) {}
+          this.updateAmmoUI();
+          try { if (typeof shootCooldown !== 'undefined') shootCooldown = Math.max(shootCooldown || 0, 0.55); } catch (e) {}
+          return true;
+      }
       
-      // Get max ammo capacity
+      // Get max ammo capacity (reserva)
       getMaxAmmo(type) {
           const maxAmmo = {
               pistol: 60,
@@ -237,6 +289,14 @@
       
       hasKey(keyId) {
           return this.resources.keys.some(k => k.id === keyId);
+      }
+
+      removeKey(keyId) {
+          const i = this.resources.keys.findIndex(k => k.id === keyId);
+          if (i < 0) return false;
+          this.resources.keys.splice(i, 1);
+          this.updateInventoryUI();
+          return true;
       }
       
       // Improved inventory UI
@@ -283,16 +343,18 @@
           if (!ammoDiv || !ammoTypeDiv) return;
           
           if (this.equippedItem?.ammoType) {
-              const ammoType = this.equippedItem.ammoType;
-              const currentAmmo = this.ammo[ammoType] || 0;
-              const maxAmmo = this.getMaxAmmo(ammoType);
-              
-              ammoDiv.textContent = `${currentAmmo}/${maxAmmo}`;
-              ammoTypeDiv.textContent = 'BALAS ' + (ammoType === 'pistol' ? 'DE PISTOLA' : ammoType.toUpperCase());
-              
-              // Visual warning when low on ammo
-              if (currentAmmo/maxAmmo < 0.2) {
+              this.ensureWeaponMagazine(this.equippedItem);
+              const mag = this.equippedItem.magazine || 0;
+              const magSize = this.equippedItem.magazineSize || this.getMagazineSize(this.equippedItem);
+              const reserve = this.ammo[this.equippedItem.ammoType] || 0;
+              // Formato FPS: cargador | reserva
+              ammoDiv.textContent = `${mag}/${magSize} | ${reserve}`;
+              ammoTypeDiv.textContent = 'R RECARGAR · ' + (this.equippedItem.ammoType === 'pistol' ? 'PISTOLA' : String(this.equippedItem.ammoType).toUpperCase());
+
+              if (mag <= 0) {
                   ammoDiv.style.color = 'red';
+              } else if (mag / magSize < 0.35) {
+                  ammoDiv.style.color = '#ffcc66';
               } else {
                   ammoDiv.style.color = 'white';
               }

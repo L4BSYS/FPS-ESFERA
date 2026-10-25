@@ -45,6 +45,16 @@ const TOOLS = {
     PICKAXE: 'pickaxe',
     TORCH: 'torch'
 };
+
+// Melee Fase A: daño / alcance por herramienta (gun = culataza).
+const MELEE_STATS = {
+    hands:   { damage: 4, reach: 2.2 },
+    axe:     { damage: 10, reach: 2.8 },
+    pickaxe: { damage: 9, reach: 2.7 },
+    hammer:  { damage: 8, reach: 2.5 },
+    gun:     { damage: 6, reach: 2.4 },
+    torch:   { damage: 5, reach: 2.5 }
+};
 const ITEM_DEFINITIONS = {
     // Tools and Weapons
     pistol: {
@@ -53,6 +63,7 @@ const ITEM_DEFINITIONS = {
       type: 'weapon',
       toolType: TOOLS.GUN,
       ammoType: 'pistol',
+      magazineSize: 12,
       damage: 15,
       fireRate: 0.2,
       createModel: () => {

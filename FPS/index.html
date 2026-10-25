@@ -106,10 +106,22 @@
       <h2 class="rg-title">🗿 Tótem de info</h2>
       <div id="totemBody" style="font-size:22px; line-height:1.6;"></div>
       <div style="margin-top:12px;">
-        <button onclick="toggleTotem(false)" class="rg-btn rg-btn-small">Cerrar (E/ESC)</button>
+        <button onclick="(typeof cartelOpen!=='undefined'&&cartelOpen)?toggleCartel(false):toggleTotem(false)" class="rg-btn rg-btn-small">Cerrar (E/ESC)</button>
       </div>
     </div>
   </div>
+  <div id="containerModal" class="rg-overlay">
+    <div class="rg-panel rg-modalbox" style="border-color:var(--rg-amber); max-width:520px;">
+      <h2 class="rg-title" id="containerTitle">🧰 Contenedor</h2>
+      <div id="containerBody" style="font-size:18px; line-height:1.45;"></div>
+      <div id="containerMsg" class="rg-status"></div>
+      <div style="margin-top:10px;">
+        <button onclick="toggleContainer(false)" class="rg-btn rg-btn-small">Cerrar (E/ESC)</button>
+      </div>
+      <div class="rg-hint">Mismo asset: modo cofre (storage) o dispenser</div>
+    </div>
+  </div>
+
   <div id="benchModal" class="rg-overlay">
     <div class="rg-panel rg-modalbox" style="border-color:var(--rg-amber);">
       <h2 class="rg-title">🛠 Mesa de trabajo — tu base</h2>
@@ -181,6 +193,10 @@
   <script src="js/20-neuralnet.js"></script>
   <script src="js/21-ambience.js"></script>
   <script src="js/22-neural-fauna.js"></script>
+  <script src="js/23-world-container.js"></script>
+  <script src="js/24-world-zone.js"></script>
+  <script src="js/26-tutorial-director.js"></script>
+  <script src="js/25-playground.js"></script>
   <script src="js/16-boot.js"></script>
 </body>
 </html>

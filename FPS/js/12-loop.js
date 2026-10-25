@@ -4,15 +4,27 @@
       if (shootCooldown > 0 || isGamePaused || !player || !player.inventory.equippedItem || player.heldItem) return;
 
       const weapon = player.inventory.equippedItem;
-      if (weapon.ammoType && player.inventory.ammo[weapon.ammoType] <= 0) {
-          // Sin balas: usar el arma como objeto de golpe (melee)
-          const hit = (typeof player.meleeAttack === 'function') ? player.meleeAttack() : false;
-          if (!hit) playSound('weapon_empty');
-          shootCooldown = 0.4;
-          return;
+      if (weapon.ammoType) {
+          try { player.inventory.ensureWeaponMagazine(weapon); } catch (e) {}
+          const mag = weapon.magazine || 0;
+          const reserve = player.inventory.ammo[weapon.ammoType] || 0;
+          if (mag <= 0) {
+              // Cargador vacío → culataza (gun-butt). Si hay reserva, también avisá R.
+              const gunStats = (typeof MELEE_STATS !== 'undefined' && MELEE_STATS.gun) ? MELEE_STATS.gun : { damage: 6, reach: 2.4 };
+              const hit = (typeof player.meleeAttack === 'function')
+                  ? player.meleeAttack(gunStats.damage, gunStats.reach)
+                  : false;
+              if (reserve > 0) {
+                  try { if (typeof lvToast === 'function') lvToast('R — recargar'); } catch (e) {}
+              } else if (!hit) {
+                  playSound('weapon_empty');
+              }
+              shootCooldown = 0.4;
+              return;
+          }
+          weapon.magazine = mag - 1;
+          try { player.inventory.updateAmmoUI(); } catch (e) {}
       }
-
-      if (weapon.ammoType && !player.inventory.useAmmo(weapon.ammoType, 1)) return;
 
       const model = weapon.model;
       const muzzle = model.getObjectByName('muzzlePoint');
@@ -90,6 +102,7 @@
       // --- Updates only when NOT paused ---
       if (!isGamePaused) {
           shootCooldown = Math.max(0, shootCooldown - delta);
+          try { if (typeof meleeCooldown !== 'undefined') meleeCooldown = Math.max(0, meleeCooldown - delta); } catch (e) {}
 
           // Update Player
           if (player) {
@@ -106,6 +119,7 @@
 
 
           updateWaveManager();
+          try { if (typeof updateWorldZones === 'function') updateWorldZones(delta); } catch (e) {}
           try { if (typeof trialUpdate === 'function') trialUpdate(); } catch (e) {}
           try { if (typeof updateAmbience === 'function') updateAmbience(delta); } catch (e) {}
           try { if (typeof updateNeuralFauna === 'function') updateNeuralFauna(delta); } catch (e) {}

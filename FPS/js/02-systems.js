@@ -15,10 +15,270 @@ let worldItems = [];    // placed pickup/item models (creator + scene)
 let resourceNodes = []; // placed resource nodes (creator + scene)
 let creatorBaseReach = null;
 
-// --- Tótems de info (E para leer, reemplazan carteles gigantes) ---
+// --- Tótems de info (E para leer modal) ---
 let totems = [];
+// --- Carteles: texto visible en el mundo (CanvasTexture), sin modal ---
+let carteles = [];
 function escHtml(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function placeTotem(lines, x, z) {
+
+function makeCartelTexture(lines) {
+  const cols = Array.isArray(lines) ? lines.slice(0, 6).map(function (l) { return String(l == null ? '' : l); }) : [];
+  const w = 1024, h = 640;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#2a2218';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#c4a574';
+  ctx.lineWidth = 18;
+  ctx.strokeRect(16, 16, w - 32, h - 32);
+  ctx.strokeStyle = '#6b542e';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(36, 36, w - 72, h - 72);
+  ctx.fillStyle = '#f0e2c0';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  const fontSize = cols.length > 4 ? 58 : (cols.length > 3 ? 66 : 72);
+  ctx.font = 'bold ' + fontSize + 'px VT323, "Courier New", monospace';
+  const padX = 88;
+  const top = 110;
+  const bottom = h - 110;
+  const span = Math.max(1, cols.length - 1);
+  for (let i = 0; i < cols.length; i++) {
+    const y = cols.length === 1 ? h / 2 : top + (bottom - top) * (i / span);
+    ctx.fillText(cols[i], padX, y, w - padX * 2);
+  }
+  // Pie sutil: hay más info con E
+  ctx.fillStyle = '#a89070';
+  ctx.font = 'bold 36px VT323, "Courier New", monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText('E · más', w - 56, h - 48);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  if (typeof renderer !== 'undefined' && renderer && renderer.capabilities) {
+    try { tex.anisotropy = renderer.capabilities.getMaxAnisotropy(); } catch (e) {}
+  }
+  return tex;
+}
+
+// lines: cara breve; opts.detail: texto expandido del modal (E).
+// opts: { x, y, z, rotY, width, height, style: 'pared'|'poste', detail: string[] }
+function placeCartel(lines, opts) {
+  opts = opts || {};
+  const width = (typeof opts.width === 'number') ? opts.width : 2.2;
+  const height = (typeof opts.height === 'number') ? opts.height : 1.35;
+  const x = (typeof opts.x === 'number') ? opts.x : 0;
+  const z = (typeof opts.z === 'number') ? opts.z : 0;
+  const rotY = (typeof opts.rotY === 'number') ? opts.rotY : 0;
+  const style = opts.style || 'pared';
+  const y = (typeof opts.y === 'number') ? opts.y : (style === 'poste' ? 0 : 1.7);
+  const detail = Array.isArray(opts.detail) ? opts.detail.slice(0, 14).map(function (l) { return String(l == null ? '' : l); }) : null;
+
+  const g = new THREE.Group();
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x5c3d1e, roughness: 0.88, metalness: 0.05 });
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x6b4a2a, roughness: 0.9, metalness: 0.02 });
+
+  const tex = makeCartelTexture(lines);
+  const faceMat = new THREE.MeshStandardMaterial({
+    map: tex,
+    roughness: 0.75,
+    metalness: 0.0,
+    emissive: 0x1a1510,
+    emissiveIntensity: 0.25
+  });
+
+  // Poste detrás de la placa (local −Z): no atraviesa el texto.
+  let plateY = 0;
+  if (style === 'poste') {
+    plateY = 1.65;
+    const boardBottom = plateY - height / 2;
+    const poleBack = -0.14;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, boardBottom, 8), poleMat);
+    pole.position.set(0, boardBottom / 2, poleBack);
+    pole.castShadow = true;
+    g.add(pole);
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.12, 10), frameMat);
+    base.position.set(0, 0.06, poleBack);
+    base.castShadow = true;
+    g.add(base);
+    // Travesaño detrás, une poste con el borde inferior del cartel
+    const brace = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.1, 0.2), poleMat);
+    brace.position.set(0, boardBottom - 0.02, poleBack / 2);
+    brace.castShadow = true;
+    g.add(brace);
+  }
+
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(width + 0.12, height + 0.12, 0.08), frameMat);
+  frame.position.set(0, plateY, 0);
+  frame.castShadow = true;
+  frame.receiveShadow = true;
+  g.add(frame);
+
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(width, height), faceMat);
+  face.position.set(0, plateY, 0.045);
+  g.add(face);
+
+  g.position.set(x, y, z);
+  g.rotation.y = rotY;
+  g.name = 'Cartel';
+  g.isStatic = true;
+  g.userData.isCartel = true;
+  g.userData.solid = true;
+  try { g.updateMatrixWorld(true); g.userData.worldBoundingBox = new THREE.Box3().setFromObject(g, true); } catch (e) {}
+
+  const ref = {
+    lines: (lines || []).slice(0, 6),
+    detail: detail,
+    mesh: g,
+    texture: tex,
+    face: face,
+    faceMat: faceMat,
+    pos: new THREE.Vector3(x, y, z),
+    style: style
+  };
+  g.userData.cartelRef = ref;
+  g.userData.isCartel = true;
+  scene.add(g);
+  if (typeof collidableObjects !== 'undefined' && collidableObjects.indexOf(g) === -1) collidableObjects.push(g);
+  carteles.push(ref);
+  return ref;
+}
+
+// Cambia cara y, opcionalmente, el modal (detail).
+function updateCartelLines(ref, lines, detail) {
+  if (!ref || !ref.faceMat) return null;
+  const next = Array.isArray(lines) ? lines.slice(0, 6) : [];
+  const tex = makeCartelTexture(next);
+  try { if (ref.texture) ref.texture.dispose(); } catch (e) {}
+  try { if (ref.faceMat.map) ref.faceMat.map.dispose(); } catch (e) {}
+  ref.faceMat.map = tex;
+  ref.faceMat.needsUpdate = true;
+  ref.texture = tex;
+  ref.lines = next;
+  if (detail !== undefined) {
+    ref.detail = Array.isArray(detail) && detail.length
+      ? detail.slice(0, 14).map(function (l) { return String(l == null ? '' : l); })
+      : null;
+  }
+  return ref;
+}
+
+// Copy reutilizable: cartel de un paso aún no desbloqueado.
+function cartelLinesLater(currentHint) {
+  return [
+    'Volvé más tarde',
+    'Completá antes:',
+    currentHint || 'el paso actual'
+  ];
+}
+
+function cartelDetailLater(currentHint) {
+  return [
+    'Este sector todavía no está activo.',
+    'Completá antes: ' + (currentHint || 'el paso actual') + '.',
+    'Cuando lo hagas, este cartel se actualiza solo.',
+    'La cara muestra lo esencial; E abre más detalle.'
+  ];
+}
+
+var currentCartel = null;
+var cartelOpen = false;
+function toggleCartel(open, ref) {
+  const modal = document.getElementById('totemModal');
+  if (!modal) return;
+  if (open) {
+    currentCartel = ref || currentCartel;
+    if (!currentCartel) return;
+    if (typeof invOpen !== 'undefined' && invOpen) toggleInventory();
+    if (typeof benchOpen !== 'undefined' && benchOpen) toggleBench(false);
+    if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
+    isGamePaused = true;
+    try { document.exitPointerLock(); } catch (e) {}
+    const title = modal.querySelector('.rg-title');
+    if (title) title.textContent = '📋 Cartel';
+    const body = document.getElementById('totemBody');
+    const block = (currentCartel.detail && currentCartel.detail.length)
+      ? currentCartel.detail
+      : (currentCartel.lines || []);
+    if (body) {
+      body.innerHTML = block.map(function (l) { return '<div>' + escHtml(l) + '</div>'; }).join('');
+    }
+    modal.style.display = 'flex';
+    cartelOpen = true;
+    openModal = 'cartel';
+  } else {
+    modal.style.display = 'none';
+    cartelOpen = false;
+    currentCartel = null;
+    if (typeof openModal !== 'undefined' && openModal === 'cartel') openModal = null;
+    const title = modal.querySelector('.rg-title');
+    if (title) title.textContent = '🗿 Tótem de info';
+    if ((typeof invOpen === 'undefined' || !invOpen) && (typeof benchOpen === 'undefined' || !benchOpen)) {
+      isGamePaused = false;
+      lockPointer();
+    }
+  }
+}
+
+function tryOpenCartel() {
+  if (typeof player === 'undefined' || !player || !carteles.length) return false;
+  const o = new THREE.Vector3(); camera.getWorldPosition(o);
+  const d = camera.getWorldDirection(new THREE.Vector3());
+  const ray = new THREE.Raycaster(o, d, 0.1, 4.2);
+  const hits = ray.intersectObjects(carteles.map(function (c) { return c.mesh; }), true);
+  for (let i = 0; i < hits.length; i++) {
+    let p = hits[i].object, ref = null;
+    while (p) {
+      if (p.userData && p.userData.cartelRef) { ref = p.userData.cartelRef; break; }
+      p = p.parent;
+    }
+    if (ref) {
+      if (cartelOpen && currentCartel === ref) toggleCartel(false);
+      else toggleCartel(true, ref);
+      return true;
+    }
+  }
+  return false;
+}
+
+function cartelLookPrompt() {
+  if (typeof camera === 'undefined' || !camera || !carteles.length) return '';
+  const o = new THREE.Vector3(); camera.getWorldPosition(o);
+  const d = camera.getWorldDirection(new THREE.Vector3());
+  const ray = new THREE.Raycaster(o, d, 0.1, 4.2);
+  const hits = ray.intersectObjects(carteles.map(function (c) { return c.mesh; }), true);
+  if (!hits.length) return '';
+  let p = hits[0].object;
+  while (p) {
+    if (p.userData && p.userData.cartelRef) return '[E] Leer cartel';
+    p = p.parent;
+  }
+  return '';
+}
+
+function clearCarteles() {
+  [...carteles].forEach(function (c) {
+    try {
+      scene.remove(c.mesh);
+      const i = collidableObjects.indexOf(c.mesh);
+      if (i > -1) collidableObjects.splice(i, 1);
+      if (c.texture) c.texture.dispose();
+      c.mesh.traverse(function (o) {
+        if (o.material) {
+          if (o.material.map) o.material.map.dispose();
+          o.material.dispose();
+        }
+        if (o.geometry) o.geometry.dispose();
+      });
+    } catch (e) {}
+  });
+  carteles.length = 0;
+}
+// lines, x, z [, opts]
+// opts: { role, zoneId, onActivate, detail, label, waveSpawns:[{x,z}] }
+function placeTotem(lines, x, z, opts) {
+  opts = opts || {};
   const g = new THREE.Group();
   const stoneMat = new THREE.MeshStandardMaterial({ color: 0x6f6f73, roughness: 0.95 });
   const stoneDark = new THREE.MeshStandardMaterial({ color: 0x4a4a4e, roughness: 0.95 });
@@ -35,7 +295,6 @@ function placeTotem(lines, x, z) {
   rope1.rotation.x = Math.PI / 2; rope1.position.y = 1.05;
   const rope2 = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.035, 6, 12), ropeMat);
   rope2.rotation.x = Math.PI / 2; rope2.position.y = 1.3;
-  // Runa lateral
   const runeMat = new THREE.MeshStandardMaterial({ color: 0x4CAF50, emissive: 0x1a5c1a, emissiveIntensity: 0.7, roughness: 0.4 });
   const runeL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.05), runeMat);
   runeL.position.set(-0.5, 1.5, 0);
@@ -50,7 +309,24 @@ function placeTotem(lines, x, z) {
 
   [base, baseStep, pole, rope1, rope2, runeL, runeR, top, topRing].forEach(m => { m.castShadow = true; g.add(m); });
   g.position.set(x, 0, z);
-  const tb = { lines: lines.slice(0, 4), mesh: g, top, pos: new THREE.Vector3(x, 0, z) };
+  const role = opts.role || (opts.zoneId != null ? 'zone_switch' : (opts.onActivate ? 'key' : 'lore'));
+  const waveSpawns = Array.isArray(opts.waveSpawns)
+    ? opts.waveSpawns.filter(function (p) { return p && typeof p.x === 'number' && typeof p.z === 'number'; })
+        .map(function (p) { return { x: p.x, z: p.z }; })
+    : null;
+  const tb = {
+    lines: (lines || []).slice(0, 4),
+    detail: Array.isArray(opts.detail) ? opts.detail.slice(0, 12) : null,
+    mesh: g,
+    top: top,
+    pos: new THREE.Vector3(x, 0, z),
+    role: role,
+    zoneId: opts.zoneId != null ? opts.zoneId : null,
+    label: opts.label || null,
+    onActivate: typeof opts.onActivate === 'function' ? opts.onActivate : null,
+    waveSpawns: waveSpawns,
+    _waveSpawnsRegistered: false
+  };
   g.userData.isTotem = true;
   g.userData.totemRef = tb;
   g.userData.solid = true;
@@ -59,8 +335,68 @@ function placeTotem(lines, x, z) {
   scene.add(g);
   if (typeof collidableObjects !== 'undefined' && collidableObjects.indexOf(g) === -1) collidableObjects.push(g);
   totems.push(tb);
+  tintTotemByRole(tb);
   return tb;
 }
+
+function tintTotemByRole(tb) {
+  if (!tb || !tb.top || !tb.top.material) return;
+  try {
+    if (tb.role === 'zone_switch') {
+      const z = (typeof findWorldZoneById === 'function') ? findWorldZoneById(tb.zoneId) : null;
+      const mode = z ? z.mode : 'damage';
+      const on = z ? !!z.enabled : false;
+      if (mode === 'heal') {
+        tb.top.material.color.setHex(on ? 0x4caf50 : 0x3a4a3a);
+        tb.top.material.emissive.setHex(0x1b5e20);
+      } else if (mode === 'spawn') {
+        tb.top.material.color.setHex(on ? 0xff9800 : 0x5a4030);
+        tb.top.material.emissive.setHex(0xe65100);
+      } else {
+        tb.top.material.color.setHex(on ? 0xf44336 : 0x4a3030);
+        tb.top.material.emissive.setHex(0xb71c1c);
+      }
+      tb.top.material.emissiveIntensity = on ? 0.95 : 0.15;
+    } else if (tb.role === 'key') {
+      tb.top.material.color.setHex(0xffd54f);
+      tb.top.material.emissive.setHex(0xff8f00);
+      tb.top.material.emissiveIntensity = 0.9;
+    }
+  } catch (e) {}
+}
+
+// opts-style wrapper: placeTotemBeacon({ x, z, lines, role, zoneId, waveSpawns, ... })
+function placeTotemBeacon(opts) {
+  opts = opts || {};
+  const x = (typeof opts.x === 'number') ? opts.x : 0;
+  const z = (typeof opts.z === 'number') ? opts.z : 0;
+  const lines = opts.lines || ['Tótem', 'E — prender', ''];
+  return placeTotem(lines, x, z, opts);
+}
+
+// Registra enemySpawns del tótem la primera vez que se prende (arma oleadas sin flag global).
+function ensureTotemWaveSpawns(tb) {
+  if (!tb || tb._waveSpawnsRegistered) return false;
+  const pts = tb.waveSpawns;
+  if (!pts || !pts.length) return false;
+  for (let i = 0; i < pts.length; i++) {
+    addEnemySpawn(pts[i].x, pts[i].z, false);
+  }
+  tb._waveSpawnsRegistered = true;
+  try {
+    if (typeof showMessage === 'function') showMessage('Oleadas activadas');
+  } catch (e) {}
+  return true;
+}
+
+function fillTotemModalBody(tb) {
+  const body = document.getElementById('totemBody');
+  if (!body || !tb) return;
+  // Modal solo para lore / puzzle. zone_switch no abre modal: E = toggle.
+  const lines = (tb.detail && tb.detail.length) ? tb.detail : (tb.lines || []);
+  body.innerHTML = lines.map(function (l) { return '<div>' + escHtml(l) + '</div>'; }).join('');
+}
+
 var currentTotem = null;
 var totemOpen = false;
 function toggleTotem(open, tb) {
@@ -69,13 +405,18 @@ function toggleTotem(open, tb) {
   if (open) {
       currentTotem = tb || currentTotem;
       if (!currentTotem) return;
+      if (typeof cartelOpen !== 'undefined' && cartelOpen) toggleCartel(false);
       if (typeof invOpen !== 'undefined' && invOpen) toggleInventory();
       if (typeof benchOpen !== 'undefined' && benchOpen) toggleBench(false);
       if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
       isGamePaused = true;
       try { document.exitPointerLock(); } catch (e) {}
-      const body = document.getElementById('totemBody');
-      if (body) body.innerHTML = currentTotem.lines.map(l => '<div>' + escHtml(l) + '</div>').join('');
+      const title = modal.querySelector('.rg-title');
+      if (title) {
+        if (currentTotem.role === 'key') title.textContent = '🗿 Tótem puzzle';
+        else title.textContent = '🗿 Tótem';
+      }
+      fillTotemModalBody(currentTotem);
       modal.style.display = 'flex';
       totemOpen = true;
       openModal = 'totem';
@@ -100,6 +441,25 @@ function tryOpenTotem() {
           p = p.parent;
       }
       if (tb) {
+          // Zona: E = toggle. Si trae waveSpawns, al prender registra puntos de oleada.
+          if (tb.role === 'zone_switch') {
+              try {
+                  toggleWorldZoneEnabled(tb.zoneId);
+                  const z = findWorldZoneById(tb.zoneId);
+                  if (z && z.enabled) ensureTotemWaveSpawns(tb);
+                  tintTotemByRole(tb);
+                  if (z) {
+                      const tag = z.enabled ? 'ON' : 'OFF';
+                      const hint = z.enabled ? 'E — apagar' : 'E — prender';
+                      tb.lines = ['Tótem', tag, hint];
+                  }
+              } catch (e) {}
+              return true;
+          }
+          if (typeof tb.onActivate === 'function') {
+              try { tb.onActivate(tb); } catch (e) {}
+              return true;
+          }
           if (totemOpen && currentTotem === tb) toggleTotem(false);
           else toggleTotem(true, tb);
           return true;
@@ -134,6 +494,19 @@ function isInAnyClaim(pos) {
   return false;
 }
 function placeWorkbench(pos) {
+  // Tutorial paso 4: soft gate — solo cuenta / permite en el círculo marcado (SO).
+  try {
+    if (typeof DIRECTOR !== 'undefined' && DIRECTOR.active &&
+        DIRECTOR.step4Revealed && !DIRECTOR.step4Done && DIRECTOR.benchSpot) {
+      const dx = pos.x - DIRECTOR.benchSpot.x;
+      const dz = pos.z - DIRECTOR.benchSpot.z;
+      const lim = DIRECTOR.benchSpotRadius || 3.5;
+      if (Math.sqrt(dx * dx + dz * dz) > lim) {
+        try { showPlacementMessage('Colocala en el círculo azul (suroeste)'); } catch (e) {}
+        return null;
+      }
+    }
+  } catch (e) {}
   const g = new THREE.Group();
   const woodMat = new THREE.MeshStandardMaterial({ color: 0x9a6a38, roughness: 0.8 });
   const plankMat = new THREE.MeshStandardMaterial({ color: 0x7a4f24, roughness: 0.85 });
@@ -205,6 +578,7 @@ function placeWorkbench(pos) {
   if (!workbenches.includes(wb)) workbenches.push(wb);
   updateBenchBar(wb);
   try { cancelZoneDecay(g.position.x, g.position.z); } catch (e) {}
+  try { if (typeof directorOnWorkbenchPlaced === 'function') directorOnWorkbenchPlaced(wb); } catch (e) {}
   return wb;
 }
 function updateBenchBar(wb) {
@@ -502,20 +876,60 @@ function updateObjectiveHUD() {
   const el = document.getElementById('objectiveHud');
   if (!el) return;
   if (isGamePaused) { el.style.display = 'none'; return; }
-  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
-  const hasHammer = inv && inv.items.some(i => i.toolType === 'hammer');
-  const res = inv ? inv.resources : null;
-  const resTotal = res ? ((res.wood || 0) + (res.stone || 0)) : 0;
-  let txt;
-  if (!hasHammer) {
-      txt = resTotal < 6 ? '🪓 Cosechá madera y piedra (hacha y pico)' : '🔨 Crafteá un martillo (Q → Crafteo)';
-  } else if (pendingPlacement) {
-      txt = '📍 Apuntá y hacé clic para colocar tu base';
-  } else if (!workbenches.length) {
-      txt = '🛠 Crafteá y colocá tu mesa de trabajo (Q → Crafteo)';
+  let txt = '';
+
+  // Tutorial: prompteo alineado al director (cara de carteles / pasos).
+  if (typeof DIRECTOR !== 'undefined' && DIRECTOR.active) {
+    if (DIRECTOR.step < 1) {
+      txt = '🔑 Agarrá la llave y abrí la puerta norte';
+    } else if (!DIRECTOR.step1Done) {
+      txt = '🪓 Norte: agarrá el hacha y picá un árbol';
+    } else if (!DIRECTOR.step2Done) {
+      txt = DIRECTOR.step2Revealed
+        ? '⛏ Noroeste: agarrá el pico y picá piedra o metal'
+        : '⛏ Andá al noroeste — el cartel se actualizó';
+    } else if (!DIRECTOR.step3Done) {
+      if (!DIRECTOR.invUnlocked) {
+        txt = '🎒 Oeste: tomá la mochila del pedestal (E)';
+      } else {
+        txt = '🔨 Q → craft: martillo (4 madera + 2 piedra)';
+      }
+    } else if (!DIRECTOR.step4Done) {
+      if (typeof pendingPlacement !== 'undefined' && pendingPlacement) {
+        txt = '📍 Colocá la mesa dentro del círculo azul (suroeste)';
+      } else {
+        txt = '🛠 Suroeste: craft mesa (Q) y colocala en el círculo';
+      }
+    } else if (!DIRECTOR.step5Done) {
+      txt = '🔫 Sureste: pistola · R recarga · derribá al robot';
+    } else if (!DIRECTOR.step6Done) {
+      txt = '🍎 Este: comida te cura — ¡no comas la toxina!';
+    } else if (!DIRECTOR.step7Done) {
+      txt = DIRECTOR.step7KeySpawned
+        ? '🔑 Agarrá la llave del pedestal (noreste)'
+        : '🗿 Noreste: E en el tótem para liberar la llave';
+    } else {
+      txt = '🚪 Puerta sur: usá la llave y salí del tutorial';
+    }
   } else {
+    // Playground / campaign: guía genérica de base.
+    const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
+    const hasHammer = inv && inv.items.some(i => i.toolType === 'hammer');
+    const res = inv ? inv.resources : null;
+    const resTotal = res ? ((res.wood || 0) + (res.stone || 0)) : 0;
+    if (!hasHammer) {
+      txt = resTotal < 6
+        ? '🪓 Cosechá madera y piedra (hacha y pico)'
+        : '🔨 Crafteá un martillo (Q → Crafteo)';
+    } else if (typeof pendingPlacement !== 'undefined' && pendingPlacement) {
+      txt = '📍 Apuntá y hacé clic para colocar tu base';
+    } else if (!workbenches.length) {
+      txt = '🛠 Crafteá y colocá tu mesa de trabajo (Q → Crafteo)';
+    } else {
       txt = '🛡 Defendé tu base: construí alrededor y reparala con E';
+    }
   }
+
   if (el.textContent !== txt) el.textContent = txt;
   el.style.display = 'block';
 }
@@ -616,8 +1030,11 @@ function clearStructures() {
   placedDoors.length = 0;
   [...enemySpawns].forEach(sp => { try { if (sp.marker) scene.remove(sp.marker); } catch (e) {} });
   enemySpawns.length = 0;
+  waveNumber = 0;
+  waveRespawnAt = 0;
   [...totems].forEach(t => { try { scene.remove(t.mesh); const i = collidableObjects.indexOf(t.mesh); if (i > -1) collidableObjects.splice(i, 1); } catch (e) {} });
   totems.length = 0;
+  try { clearCarteles(); } catch (e) {}
 }
 function clearWorld() {
   try {
@@ -626,13 +1043,12 @@ function clearWorld() {
       clearBlocks();
       clearWorldProps();
       [...workbenches].forEach(w => destroyBench(w, true));
-      clearStructures();
+      clearStructures(); // también limpia totems, carteles, enemySpawns
       [...placedStatics].forEach(x => {
           try { scene.remove(x.mesh); const i = collidableObjects.indexOf(x.mesh); if (i > -1) collidableObjects.splice(i, 1); } catch (e) {}
       });
       placedStatics.length = 0;
-      [...totems].forEach(t => { try { scene.remove(t.mesh); } catch (e) {} });
-      totems.length = 0;
+      try { if (typeof clearWorldZones === 'function') clearWorldZones(); } catch (e) {}
       [...npcs].forEach(n => { try { n.die(); } catch (e) {} });
       updateSpatialPartition();
       try { if (typeof grantCreatorHammer === 'function') grantCreatorHammer(); } catch (e) {}
@@ -1155,7 +1571,35 @@ function snapshotScene() {
       rot: Math.round((d.rotation.y || 0) * 100) / 100
     })),
     spawns: enemySpawns.map(sp => ({ x: sp.x, z: sp.z })),
-    totems: totems.map(t => ({ x: Math.round(t.pos.x * 100) / 100, z: Math.round(t.pos.z * 100) / 100, lines: t.lines })),
+    zones: (typeof worldZones !== 'undefined' ? worldZones : []).map(function (z) {
+      return {
+        id: z.id,
+        mode: z.mode,
+        x: Math.round(z.x * 100) / 100,
+        z: Math.round(z.z * 100) / 100,
+        radius: z.radius,
+        label: z.label || null,
+        enabled: !!z.enabled,
+        dps: z.dps,
+        hps: z.hps,
+        interval: z.interval,
+        maxAlive: z.maxAlive,
+        activateRange: z.activateRange,
+        autoSpawn: z.autoSpawn !== false
+      };
+    }),
+    totems: totems.map(function (t) {
+      return {
+        x: Math.round(t.pos.x * 100) / 100,
+        z: Math.round(t.pos.z * 100) / 100,
+        lines: t.lines,
+        role: t.role || 'lore',
+        zoneId: t.zoneId != null ? t.zoneId : null,
+        label: t.label || null,
+        detail: t.detail || null,
+        waveSpawns: t.waveSpawns || null
+      };
+    }),
     statics: placedStatics.map(x => ({
       k: x.kind,
       x: Math.round(x.mesh.position.x * 100) / 100,
@@ -1188,9 +1632,35 @@ function deserializeProps(items, nodes, benches, extras) {
       if (typeof d.x !== 'number' || typeof d.z !== 'number') return;
       addEnemySpawn(d.x, d.z, true);
   });
+  try { if (typeof clearWorldZones === 'function') clearWorldZones(); } catch (e) {}
+  (Array.isArray(ex.zones) ? ex.zones : []).slice(0, 30).forEach(function (d) {
+      if (typeof d.x !== 'number' || typeof d.z !== 'number') return;
+      if (typeof placeWorldZone !== 'function') return;
+      placeWorldZone({
+        id: d.id,
+        mode: d.mode,
+        x: d.x,
+        z: d.z,
+        radius: d.radius,
+        label: d.label,
+        enabled: !!d.enabled,
+        dps: d.dps,
+        hps: d.hps,
+        interval: d.interval,
+        maxAlive: d.maxAlive,
+        activateRange: d.activateRange,
+        autoSpawn: d.autoSpawn !== false
+      });
+  });
   (Array.isArray(ex.totems) ? ex.totems : []).slice(0, 30).forEach(t => {
       if (typeof t.x !== 'number' || typeof t.z !== 'number' || !Array.isArray(t.lines)) return;
-      placeTotem(t.lines.slice(0, 4), t.x, t.z);
+      placeTotem(t.lines.slice(0, 4), t.x, t.z, {
+        role: t.role || 'lore',
+        zoneId: t.zoneId != null ? t.zoneId : null,
+        label: t.label || null,
+        detail: t.detail || null,
+        waveSpawns: t.waveSpawns || null
+      });
   });
   (Array.isArray(ex.statics) ? ex.statics : []).slice(0, 30).forEach(x => {
       if (!x.k || typeof x.x !== 'number') return;
@@ -1226,7 +1696,7 @@ const CRAFT_RECIPES = [
     cost: { wood: 2, stone: 6 } },
   { id: 'torch', label: 'Antorcha (alumbra)', name: 'Antorcha', station: 'hand', kind: 'tool', defKey: 'torch', requires: null,
     cost: { wood: 2 } },
-  { id: 'bench', label: 'Mesa de trabajo (tu base)', name: 'Mesa de trabajo', station: 'hand', kind: 'prop', requires: null,
+  { id: 'bench', label: 'Mesa de trabajo (tu base)', name: 'Mesa de trabajo', station: 'hand', kind: 'prop', requires: 'hammer',
     cost: { wood: 6, stone: 4 },
     run: (inv) => {
         startPlacement({
@@ -1258,6 +1728,15 @@ function craftRecipeText(r) {
 function craftItem(idx) {
   const r = CRAFT_RECIPES[idx];
   if (!r || typeof player === 'undefined' || !player || !player.inventory) return;
+  // Tutorial: craft a mano solo con mochila desbloqueada (kit del paso 3).
+  if (r.station === 'hand' && typeof canOpenInventory === 'function' && !canOpenInventory()) {
+      const msg = (typeof inventoryLockedMessage === 'function')
+          ? inventoryLockedMessage()
+          : 'Mochila bloqueada';
+      try { setCraftStatus(msg); } catch (e) {}
+      try { if (typeof lvToast === 'function') lvToast(msg); } catch (e) {}
+      return;
+  }
   const inv = player.inventory;
   if (r.requires && !inv.items.some(i => i.toolType === r.requires)) {
       setCraftStatus('Primero crafteá: ' + (TOOL_REQUIRE_NAMES[r.requires] || r.requires));
@@ -1281,7 +1760,17 @@ function craftItem(idx) {
       const entry = { ...def, quantity: 1 };
       try { if (def.createModel) entry.model = def.createModel(); } catch (e) {}
       if (inv.addItem(entry)) {
-          attachToolModel(inv.items.find(i => i.toolType === def.toolType) || entry, def);
+          const added = inv.items.find(i => i.toolType === def.toolType) || entry;
+          attachToolModel(added, def);
+          // Igual que al agarrar del piso: herramientas van al cinturón (1–5).
+          try {
+              if (added.type === 'weapon' || added.type === 'tool') {
+                  const emptySlot = inv.quickSlots.findIndex(slot => !slot);
+                  if (emptySlot >= 0) inv.assignToQuickSlot(added, emptySlot);
+                  if (typeof player.autoAssignQuickSlots === 'function') player.autoAssignQuickSlots();
+                  else inv.updateQuickSlotUI();
+              }
+          } catch (e) {}
           try { player.setTool(def.toolType); } catch (e) {}
           if (r.ammoBonus) for (const a in r.ammoBonus) {
               inv.ammo[a] = (inv.ammo[a] || 0) + r.ammoBonus[a];
@@ -1289,6 +1778,9 @@ function craftItem(idx) {
           }
           setCraftStatus('Crafteada y equipada: ' + def.name);
           try { playSound('pickup'); } catch (e) {}
+          if ((r.id === 'hammer' || def.id === 'hammer') && typeof directorOnHammerCrafted === 'function') {
+              try { directorOnHammerCrafted(); } catch (e) {}
+          }
       } else {
           for (const k in r.cost) inv.resources[k] += r.cost[k]; // refund: inventory full
           setCraftStatus('Mochila llena — te devuelvo los materiales');
@@ -1422,14 +1914,17 @@ function updateWaveManager() {
   try {
     if (typeof player !== 'undefined' && player && player.health <= 0) return; // no respawn after game over
   } catch (e) {}
-  // Sin puntos de spawn de enemigos en este mundo, no hay oleadas
-  // (evita que aparezcan enemigos "heredados" de otro nivel).
+  // Sin puntos de spawn, no hay oleadas (Playground arma puntos al prender el tótem).
   if (typeof enemySpawns === 'undefined' || !enemySpawns.length) { waveRespawnAt = 0; return; }
   const alive = npcs.filter((n) => n && n.health > 0).length;
   if (alive > 0) { waveRespawnAt = 0; return; }
   if (!waveRespawnAt) {
       waveRespawnAt = performance.now() + 5000;
-      if (typeof showMessage === 'function') showMessage('¡Oleada superada! La próxima en 5s...');
+      if (typeof showMessage === 'function') {
+          showMessage(waveNumber === 0
+              ? 'Primera oleada en 5s...'
+              : '¡Oleada superada! La próxima en 5s...');
+      }
       return;
   }
   if (performance.now() >= waveRespawnAt) {

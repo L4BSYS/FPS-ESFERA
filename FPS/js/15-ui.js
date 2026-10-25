@@ -94,7 +94,9 @@ var openModal = null;
 function closeTopModal() {
   if (openModal === 'inv') { toggleInventory(); return true; }
   if (openModal === 'totem') { toggleTotem(false); return true; }
+  if (openModal === 'cartel' && typeof toggleCartel === 'function') { toggleCartel(false); return true; }
   if (openModal === 'bench' && typeof toggleBench === 'function') { toggleBench(false); return true; }
+  if (openModal === 'container' && typeof toggleContainer === 'function') { toggleContainer(false); return true; }
   return false;
 }
 function invShowTab(which) {
@@ -131,6 +133,16 @@ function toggleInventory() {
       isGamePaused = false;
       lockPointer();
   } else {
+      if (typeof canOpenInventory === 'function' && !canOpenInventory()) {
+          try {
+              const msg = (typeof inventoryLockedMessage === 'function')
+                  ? inventoryLockedMessage()
+                  : 'Mochila bloqueada';
+              if (typeof lvToast === 'function') lvToast(msg);
+              else if (typeof showMessage === 'function') showMessage(msg);
+          } catch (e) {}
+          return;
+      }
       if (benchOpen) toggleBench(false);
       if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
       isGamePaused = true;
@@ -288,6 +300,7 @@ function invUseItem(idx) {
       player.health = Math.min(player.maxHealth || 100, player.health + (item.healAmount || 30));
       inv.removeItem(item, 1);
       try { player.updateStatsHUD(); playSound('health-regen'); } catch (e) {}
+      try { if (typeof directorOnFoodLesson === 'function') directorOnFoodLesson(); } catch (e) {}
       refreshInvModal();
       return;
   }
@@ -321,11 +334,11 @@ function invDropItem(idx) {
   refreshInvModal();
 }
 // --- Teclas configurables (estilo RUST, humilde: solo acciones, WASD fijo) ---
-var KeyMap = { interact: 'e', inventory: 'q', palette: 'b', creator: 'g' };
+var KeyMap = { interact: 'e', inventory: 'q', palette: 'b', creator: 'g', reload: 'r' };
 const KEY_RESERVED = ['w', 'a', 's', 'd', ' ', 'shift', 'escape', 'tab', '1', '2', '3', '4', '5'];
 try {
   const saved = JSON.parse(localStorage.getItem('lagrieta_keys') || 'null');
-  if (saved) for (const k of ['interact', 'inventory', 'palette', 'creator']) {
+  if (saved) for (const k of ['interact', 'inventory', 'palette', 'creator', 'reload']) {
       if (typeof saved[k] === 'string' && saved[k].length === 1) {
           const v = saved[k].toLowerCase();
           if (!KEY_RESERVED.includes(v)) KeyMap[k] = v;
@@ -339,7 +352,7 @@ function renderKeyRows() {
   const box = document.getElementById('keyRows');
   if (!box) return;
   box.innerHTML = '';
-  [['interact', 'Usar / interactuar'], ['inventory', 'Mochila'], ['palette', 'Barra creador'], ['creator', 'Modo creador']].forEach(([k, label]) => {
+  [['interact', 'Usar / interactuar'], ['inventory', 'Mochila'], ['reload', 'Recargar arma'], ['palette', 'Barra creador'], ['creator', 'Modo creador']].forEach(([k, label]) => {
       const row = document.createElement('div');
       row.className = 'rg-keys-row';
       const lab = document.createElement('span');
@@ -385,6 +398,16 @@ function renderKeyRows() {
 }
 function showPauseTab(name) {
   if (typeof pauseUI === 'undefined' || !pauseUI.panels) return;
+  if (name === 'craft' && typeof canOpenInventory === 'function' && !canOpenInventory()) {
+      try {
+          const msg = (typeof inventoryLockedMessage === 'function')
+              ? inventoryLockedMessage()
+              : 'Mochila bloqueada';
+          if (typeof setPauseStatus === 'function') setPauseStatus(msg);
+          else if (typeof lvToast === 'function') lvToast(msg);
+      } catch (e) {}
+      name = 'play';
+  }
   pauseUI.activeTab = name;
   applyPausePanels();
   if (name === 'build') refreshCreatorHint();
@@ -504,7 +527,8 @@ async function saveSceneToFirestore() {
   const name = (pauseUI.sceneName && pauseUI.sceneName.value.trim()) || 'default';
   const snap = snapshotScene();
   const total = snap.blocks.length + snap.items.length + snap.nodes.length + snap.benches.length +
-      (snap.stairs || []).length + (snap.doors || []).length + (snap.spawns || []).length + (snap.statics || []).length + (snap.totems || []).length;
+      (snap.stairs || []).length + (snap.doors || []).length + (snap.spawns || []).length +
+      (snap.statics || []).length + (snap.totems || []).length + (snap.zones || []).length;
   if (total > 2000) { setPauseStatus('Escena muy grande (máx. 2000 objetos)'); return; }
   try {
     setPauseStatus('Guardando "' + name + '"...');
@@ -518,6 +542,7 @@ async function saveSceneToFirestore() {
       spawns: snap.spawns,
       statics: snap.statics,
       totems: snap.totems,
+      zones: snap.zones || [],
       blockCount: snap.blocks.length,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
       owner: user.uid
@@ -552,7 +577,9 @@ async function loadSceneFromFirestore() {
 function applySceneData(d) {
   try { if (typeof trialStop === 'function') trialStop(true); } catch (e) {}
   const n = deserializeBlocks(d.blocks || []);
-  const m = deserializeProps(d.items || [], d.nodes || [], d.benches || [], { stairs: d.stairs, doors: d.doors, spawns: d.spawns, statics: d.statics, totems: d.totems });
+  const m = deserializeProps(d.items || [], d.nodes || [], d.benches || [], {
+    stairs: d.stairs, doors: d.doors, spawns: d.spawns, statics: d.statics, totems: d.totems, zones: d.zones
+  });
   return { n, m };
 }
 function sharedSceneDoc() {
