@@ -554,7 +554,10 @@ function placeWorkbench(pos) {
 
   g.position.copy(pos);
   g.position.y = Math.max(0.05, pos.y);
-  const wb = { isWorkbench: true, name: 'Mesa de trabajo', mesh: g, pos: g.position.clone(), hp: 300, maxHp: 300, height: 1.6, bar: null, solids: [], ring: null, claimRadius: CLAIM_RADIUS };
+  const wb = { isWorkbench: true, name: 'Mesa de trabajo', mesh: g, pos: g.position.clone(), hp: 300, maxHp: 300, height: 1.6, bar: null, solids: [], ring: null, claimRadius: CLAIM_RADIUS,
+      // Mejoras de base: cofre de mesa + dispenser de munición.
+      upgrades: { chest: false, dispenser: false },
+      storage: null, storageCapacity: 12, dispenserStock: 0, dispenserCap: 240 };
   g.userData.isWorkbench = true;
   g.userData.benchRef = wb;
 
@@ -638,11 +641,10 @@ function repairBench() {
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (!inv) return;
   if (wb.hp >= wb.maxHp) { setCraftStatus('La mesa ya está entera'); return; }
-  if ((inv.resources.wood || 0) < 3 || (inv.resources.stone || 0) < 2) {
+  if (!inv.spendResources({ wood: 3, stone: 2 })) {
       setCraftStatus('Te faltan materiales (3 madera + 2 piedra)');
       return;
   }
-  inv.resources.wood -= 3; inv.resources.stone -= 2;
   wb.hp = Math.min(wb.maxHp, wb.hp + 100);
   updateBenchBar(wb);
   refreshBenchModal();
@@ -662,6 +664,7 @@ function toggleBench(open, wb) {
       renderCraftButtons(document.getElementById('benchCraft'), 'bench');
       try { renderMaterialChips(document.getElementById('benchFoot')); } catch (e) {}
       refreshBenchModal();
+      try { if (typeof renderBenchBaseUI === 'function') renderBenchBaseUI(currentBench); } catch (e) {}
       try { refreshCraftUI(); } catch (e) {}
       modal.style.display = 'flex';
       benchOpen = true;
@@ -799,7 +802,11 @@ function refundPlacementCost(cost) {
   try {
       const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
       if (!inv) return;
-      for (const k in cost) inv.resources[k] = (inv.resources[k] || 0) + cost[k];
+      if (typeof inv.addResource === 'function') {
+          for (const k in cost) inv.addResource(k, cost[k]);
+      } else {
+          for (const k in cost) inv.resources[k] = (inv.resources[k] || 0) + cost[k];
+      }
       try { updateResourceHUD(); } catch (e) {}
       showPlacementMessage('Te devolví los materiales');
   } catch (e) {}
@@ -1551,13 +1558,25 @@ function snapshotScene() {
     x: Math.round(w.pos.x * 100) / 100,
     y: Math.round(w.pos.y * 100) / 100,
     z: Math.round(w.pos.z * 100) / 100,
-    hp: Math.round(w.hp)
+    hp: Math.round(w.hp),
+    bench: (typeof serializedBenchUpgrades === 'function') ? serializedBenchUpgrades(w) : null
   }));
   return {
     blocks: serializeBlocks(),
     items: serializeProps(worldItems, false),
     nodes: serializeProps(resourceNodes, true),
     benches: benchData,
+    containers: (typeof worldContainers !== 'undefined' ? worldContainers : []).map(ref => ({
+      mode: ref.mode,
+      label: ref.label,
+      x: Math.round(ref.pos.x * 100) / 100,
+      y: Math.round(ref.pos.y * 100) / 100,
+      z: Math.round(ref.pos.z * 100) / 100,
+      rot: Math.round((ref.mesh.rotation.y || 0) * 100) / 100,
+      cooldown: ref.cooldown,
+      stock: ref.stock || null,
+      slots: Array.isArray(ref.slots) ? ref.slots.map(s => s ? Object.assign({}, s) : null) : null
+    })),
     stairs: placedStairs.map(gr => ({
       x: Math.round(gr.position.x * 100) / 100,
       y: Math.round(gr.position.y * 100) / 100,
@@ -1617,9 +1636,24 @@ function deserializeProps(items, nodes, benches, extras) {
       if (typeof d.x !== 'number' || typeof d.y !== 'number' || typeof d.z !== 'number') return;
       const wb = placeWorkbench(new THREE.Vector3(d.x, d.y, d.z));
       if (wb && typeof d.hp === 'number') { wb.hp = Math.max(1, Math.min(wb.maxHp, d.hp)); updateBenchBar(wb); }
+      if (wb && d.bench && typeof applyBenchUpgradeData === 'function') applyBenchUpgradeData(wb, d.bench);
+  });
+  const ex = extras || {};
+  try { if (typeof clearWorldContainers === 'function') clearWorldContainers(); } catch (e) {}
+  (Array.isArray(ex.containers) ? ex.containers : []).slice(0, 40).forEach(function (d) {
+      if (!d || typeof d.x !== 'number' || typeof d.z !== 'number') return;
+      if (typeof placeWorldContainer !== 'function') return;
+      placeWorldContainer({
+          mode: d.mode === 'dispenser' ? 'dispenser' : 'storage',
+          x: d.x, z: d.z, y: (typeof d.y === 'number' ? d.y : 0), rotY: d.rot || 0,
+          label: d.label || undefined,
+          cooldown: d.cooldown,
+          slots: Array.isArray(d.slots) ? d.slots.length : 12,
+          seed: Array.isArray(d.slots) ? d.slots : null,
+          stock: d.stock || null
+      });
   });
   clearStructures();
-  const ex = extras || {};
   (Array.isArray(ex.stairs) ? ex.stairs : []).slice(0, 30).forEach(d => {
       if (typeof d.x !== 'number') return;
       placeStairs(new THREE.Vector3(d.x, (typeof d.y === 'number' ? d.y : 0.5), d.z), d.rot || 0);
@@ -1687,6 +1721,9 @@ function deserializeProps(items, nodes, benches, extras) {
   return n;
 }
 // --- Crafting: progression hands -> hammer -> axe -> pickaxe -> pistol (+ ammo/heals) ---
+// --- Crafteo: progresión + estructura de árbol de tecnología ---
+// kind: tool | item | ammo | upgrade | prop
+// station: hand (mochila) | bench (mesa de trabajo)
 const CRAFT_RECIPES = [
   { id: 'hammer', label: 'Martillo de piedra', name: 'Martillo', station: 'hand', kind: 'tool', defKey: 'hammer', requires: null,
     cost: { wood: 4, stone: 2 } },
@@ -1699,151 +1736,296 @@ const CRAFT_RECIPES = [
   { id: 'bench', label: 'Mesa de trabajo (tu base)', name: 'Mesa de trabajo', station: 'hand', kind: 'prop', requires: 'hammer',
     cost: { wood: 6, stone: 4 },
     run: (inv) => {
+        closeCraftPanelsForPlacement();
         startPlacement({
             label: 'mesa de trabajo',
             cost: { wood: 6, stone: 4 },
             radius: 1.4,
             snapGround: true,
             buildGhost: buildWorkbenchGhost,
-            place: (pos) => { const wb = placeWorkbench(pos); return !!wb; }
+            place: (pos) => {
+                const wb = placeWorkbench(pos);
+                if (wb) { try { inv.craftedFlags.bench = true; } catch (e) {} }
+                return !!wb;
+            }
         });
+        return true;
     } },
+  { id: 'backpack1', label: 'Mochila de lona (+6 espacios)', name: 'Mochila de lona', station: 'hand', kind: 'upgrade', bagTier: 1, requires: 'hammer',
+    cost: { wood: 8, stone: 2 }, run: (inv) => inv.upgradeBackpack(1) },
   // --- Solo en la mesa de trabajo (items avanzados) ---
   { id: 'pistol', label: 'Pistola de chatarra (+6 balas)', name: 'Pistola', station: 'bench', kind: 'tool', defKey: 'pistol', requires: 'pickaxe',
     cost: { metal: 10, wood: 4 }, ammoBonus: { pistol: 6 } },
-  { id: 'ammo', label: 'Balas de pistola x12', name: 'Balas x12', station: 'bench', kind: 'ammo', requires: null,
+  { id: 'ammo', label: 'Balas de pistola x12', name: 'Balas x12', station: 'bench', kind: 'ammo', requires: null, repeatable: true,
     cost: { metal: 3, wood: 2 },
-    run: (inv) => { inv.ammo.pistol = (inv.ammo.pistol || 0) + 12; try { inv.updateAmmoUI(); } catch (e) {} } },
-  { id: 'dressing', label: 'Venda (+30 vida)', name: 'Venda', station: 'bench', kind: 'item', defKey: 'bandage', requires: null,
+    run: (inv) => {
+        const n = inv.addAmmoAmount('pistol', 12);
+        if (n < 12) { if (n > 0) inv.removeAmmo('pistol', n); return false; }
+        return true;
+    } },
+  { id: 'dressing', label: 'Venda (+30 vida)', name: 'Venda', station: 'bench', kind: 'item', defKey: 'bandage', requires: null, repeatable: true,
     cost: { wood: 3, stone: 1 } },
+  { id: 'backpack2', label: 'Mochila reforzada (+6 espacios)', name: 'Mochila reforzada', station: 'bench', kind: 'upgrade', bagTier: 2, requires: 'pickaxe',
+    cost: { wood: 12, metal: 4 }, run: (inv) => inv.upgradeBackpack(2) },
+  { id: 'chest', label: 'Cofre (colocar en tu base)', name: 'Cofre', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
+    cost: { wood: 10, stone: 6 },
+    run: (inv) => { beginContainerPlacement('chest', { wood: 10, stone: 6 }); return true; } },
+  { id: 'backpack3', label: 'Mochila de explorador (+6 espacios)', name: 'Mochila de explorador', station: 'bench', kind: 'upgrade', bagTier: 3, requires: 'pickaxe',
+    cost: { wood: 16, metal: 10 }, run: (inv) => inv.upgradeBackpack(3) },
+  { id: 'dispenser', label: 'Dispenser de munición (colocar)', name: 'Dispenser', station: 'bench', kind: 'prop', requires: 'pickaxe', requiresBenchUpgrade: 'dispenser', repeatable: true,
+    cost: { metal: 10, stone: 6, wood: 4 },
+    run: (inv) => { beginContainerPlacement('dispenser', { metal: 10, stone: 6, wood: 4 }); return true; } }
 ];
 const CRAFT_STATION_LABEL = { hand: 'a mano', bench: 'en la mesa de trabajo' };
 const TOOL_REQUIRE_NAMES = { hammer: 'Martillo', axe: 'Hacha', pickaxe: 'Pico', gun: 'Pistola' };
 const RESOURCE_ES = { wood: 'madera', stone: 'piedra', metal: 'metal' };
+
+function getPlayerInv() {
+  return (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
+}
+function recipeIndexById(id) {
+  for (let i = 0; i < CRAFT_RECIPES.length; i++) if (CRAFT_RECIPES[i].id === id) return i;
+  return -1;
+}
+function recipeById(id) {
+  const i = recipeIndexById(id);
+  return i >= 0 ? CRAFT_RECIPES[i] : null;
+}
+function recipeOwned(r, inv) {
+  inv = inv || getPlayerInv();
+  if (!r || !inv) return false;
+  if (r.kind === 'tool') {
+      const def = ITEM_DEFINITIONS[r.defKey];
+      return !!def && inv.items.some(i => i.toolType === def.toolType);
+  }
+  if (r.kind === 'upgrade' && r.bagTier) return (inv.bagTier || 0) >= r.bagTier;
+  if (r.id === 'bench') return (typeof workbenches !== 'undefined' && workbenches.some(w => w && w.hp > 0)) || !!inv.craftedFlags.bench;
+  if (r.repeatable) return !!inv.craftedFlags[r.id];
+  return !!inv.craftedFlags[r.id];
+}
+function recipeRequiresMet(r, inv) {
+  inv = inv || getPlayerInv();
+  if (!inv) return false;
+  if (r.requires && !inv.items.some(i => i.toolType === r.requires)) return false;
+  if (r.kind === 'upgrade' && r.bagTier) {
+      // Para la tier N hace falta tener la mochila anterior.
+      if ((inv.bagTier || 0) < r.bagTier - 1) return false;
+  }
+  if (r.requiresBenchUpgrade) {
+      const ok = (typeof workbenches !== 'undefined') && workbenches.some(w => w && w.hp > 0 && w.upgrades && w.upgrades[r.requiresBenchUpgrade]);
+      if (!ok) return false;
+  }
+  return true;
+}
+function recipeStatus(r) {
+  const inv = getPlayerInv();
+  const hasReq = recipeRequiresMet(r, inv);
+  const owned = recipeOwned(r, inv);
+  const missing = inv ? Object.keys(r.cost).filter(k => inv.countResource(k) < r.cost[k]) : Object.keys(r.cost);
+  const ok = !!inv && hasReq && (!owned || !!r.repeatable) && missing.length === 0;
+  return { inv, hasReq, owned, missing, ok };
+}
 function craftRecipeText(r) {
   let t = (r.name || r.label) + ' — ' + Object.keys(r.cost).map(k => r.cost[k] + ' ' + (RESOURCE_ES[k] || k)).join(' + ');
   if (r.requires) t += ' · requiere ' + (TOOL_REQUIRE_NAMES[r.requires] || r.requires);
+  if (r.station === 'bench') t += ' · en la mesa';
   return t;
 }
+function craftRefund(inv, cost) {
+  try { for (const k in cost) inv.addResource(k, cost[k]); } catch (e) {}
+}
+function closeCraftPanelsForPlacement() {
+  try {
+      if (typeof benchOpen !== 'undefined' && benchOpen && typeof toggleBench === 'function') { toggleBench(false); return; }
+      if (typeof invOpen !== 'undefined' && invOpen && typeof toggleInventory === 'function') { toggleInventory(); return; }
+  } catch (e) {}
+  try {
+      if (typeof pauseMenu !== 'undefined' && pauseMenu && pauseMenu.style.display !== 'none') {
+          pauseMenu.style.display = 'none';
+          isGamePaused = false;
+          if (typeof lockPointer === 'function') lockPointer();
+      }
+  } catch (e) {}
+}
+function buildContainerGhost(kind) {
+  let g;
+  try { g = buildWorldContainerMesh(kind === 'dispenser' ? 'dispenser' : 'storage'); }
+  catch (e) { g = new THREE.Group(); }
+  const mat = new THREE.MeshBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.4, depthWrite: false });
+  g.traverse(o => {
+      if (o.isMesh) { o.material = mat; o.raycast = function () {}; }
+  });
+  return g;
+}
+function beginContainerPlacement(kind, cost) {
+  const isDisp = kind === 'dispenser';
+  closeCraftPanelsForPlacement();
+  startPlacement({
+      label: isDisp ? 'dispenser de munición' : 'cofre',
+      cost: cost,
+      radius: 1.2,
+      snapGround: true,
+      buildGhost: () => buildContainerGhost(kind),
+      place: (pos) => {
+          if (typeof isInAnyClaim === 'function' && !isInAnyClaim(pos)) {
+              try { showPlacementMessage('Colocalo dentro del área de tu mesa de trabajo'); } catch (e) {}
+              return false;
+          }
+          let rotY = 0;
+          try { rotY = player ? player.container.rotation.y + Math.PI : 0; } catch (e) {}
+          const ref = placeWorldContainer({
+              mode: isDisp ? 'dispenser' : 'storage',
+              x: pos.x, z: pos.z, y: Math.max(0, pos.y - 0.05), rotY: rotY,
+              slots: 12,
+              label: isDisp ? 'Dispenser de munición' : 'Cofre',
+              stock: isDisp ? { id: 'pistol_ammo', name: 'Balas de pistola', amount: 0 } : null
+          });
+          if (ref) {
+              try { player.inventory.craftedFlags[kind] = true; } catch (e) {}
+              try { if (typeof lvToast === 'function') lvToast(isDisp ? 'Dispenser colocado — usa E para producir balas' : 'Cofre colocado — E para guardar recursos'); } catch (e) {}
+          }
+          return !!ref;
+      }
+  });
+}
+
 function craftItem(idx) {
   const r = CRAFT_RECIPES[idx];
-  if (!r || typeof player === 'undefined' || !player || !player.inventory) return;
+  const inv = getPlayerInv();
+  if (!r || !inv) return false;
   // Tutorial: craft a mano solo con mochila desbloqueada (kit del paso 3).
   if (r.station === 'hand' && typeof canOpenInventory === 'function' && !canOpenInventory()) {
-      const msg = (typeof inventoryLockedMessage === 'function')
-          ? inventoryLockedMessage()
-          : 'Mochila bloqueada';
+      const msg = (typeof inventoryLockedMessage === 'function') ? inventoryLockedMessage() : 'Mochila bloqueada';
       try { setCraftStatus(msg); } catch (e) {}
       try { if (typeof lvToast === 'function') lvToast(msg); } catch (e) {}
-      return;
+      return false;
   }
-  const inv = player.inventory;
-  if (r.requires && !inv.items.some(i => i.toolType === r.requires)) {
+  const st = recipeStatus(r);
+  if (r.requires && !st.hasReq) {
       setCraftStatus('Primero crafteá: ' + (TOOL_REQUIRE_NAMES[r.requires] || r.requires));
-      return;
+      return false;
   }
+  if (r.kind === 'upgrade' && r.bagTier && (inv.bagTier || 0) < r.bagTier - 1) {
+      const prev = CRAFT_RECIPES.find(x => x.kind === 'upgrade' && x.bagTier === r.bagTier - 1);
+      setCraftStatus('Primero: ' + ((prev && (prev.name || prev.label)) || 'la mochila anterior'));
+      return false;
+  }
+  if (r.requiresBenchUpgrade) {
+      const has = (typeof workbenches !== 'undefined') && workbenches.some(w => w && w.hp > 0 && w.upgrades && w.upgrades[r.requiresBenchUpgrade]);
+      if (!has) { setCraftStatus('Primero instalá el dispenser en la mesa de trabajo'); return false; }
+  }
+  if (st.owned && !r.repeatable) {
+      setCraftStatus('Ya lo tenés: ' + (r.name || r.label));
+      return false;
+  }
+  if (st.missing.length) {
+      const k = st.missing[0];
+      setCraftStatus('Te falta ' + (RESOURCE_ES[k] || k) + ' (necesitás ' + r.cost[k] + ')');
+      try { showPlacementMessage('Te falta ' + (RESOURCE_ES[k] || k)); } catch (e) {}
+      return false;
+  }
+  if (!inv.spendResources(r.cost)) {
+      setCraftStatus('No alcanzan los materiales');
+      return false;
+  }
+
+  let ok = false;
   if (r.kind === 'tool') {
       const def = ITEM_DEFINITIONS[r.defKey];
-      if (!def) return;
-      if (inv.items.some(i => i.toolType === def.toolType)) { setCraftStatus('Ya la tenés: ' + def.name); return; }
-  }
-  for (const k in r.cost) {
-      if ((inv.resources[k] || 0) < r.cost[k]) {
-          setCraftStatus('Te falta ' + (RESOURCE_ES[k] || k) + ' (necesitás ' + r.cost[k] + ')');
-          showPlacementMessage('Te falta ' + k);
-          return;
-      }
-  }
-  for (const k in r.cost) inv.resources[k] -= r.cost[k];
-  if (r.kind === 'tool') {
-      const def = ITEM_DEFINITIONS[r.defKey];
-      const entry = { ...def, quantity: 1 };
-      try { if (def.createModel) entry.model = def.createModel(); } catch (e) {}
-      if (inv.addItem(entry)) {
-          const added = inv.items.find(i => i.toolType === def.toolType) || entry;
-          attachToolModel(added, def);
-          // Igual que al agarrar del piso: herramientas van al cinturón (1–5).
-          try {
-              if (added.type === 'weapon' || added.type === 'tool') {
-                  const emptySlot = inv.quickSlots.findIndex(slot => !slot);
-                  if (emptySlot >= 0) inv.assignToQuickSlot(added, emptySlot);
-                  if (typeof player.autoAssignQuickSlots === 'function') player.autoAssignQuickSlots();
-                  else inv.updateQuickSlotUI();
+      if (def) {
+          const entry = { ...def, quantity: 1 };
+          try { if (def.createModel) entry.model = def.createModel(); } catch (e) {}
+          if (inv.addItem(entry)) {
+              const added = inv.items.find(i => i.toolType === def.toolType) || entry;
+              attachToolModel(added, def);
+              try {
+                  if (added.type === 'weapon' || added.type === 'tool') {
+                      const emptySlot = inv.quickSlots.findIndex(slot => !slot);
+                      if (emptySlot >= 0) inv.assignToQuickSlot(added, emptySlot);
+                      if (typeof player.autoAssignQuickSlots === 'function') player.autoAssignQuickSlots();
+                      else inv.updateQuickSlotUI();
+                  }
+              } catch (e) {}
+              try { player.setTool(def.toolType); } catch (e) {}
+              if (r.ammoBonus) for (const a in r.ammoBonus) {
+                  inv.addAmmoAmount(a, r.ammoBonus[a]);
               }
-          } catch (e) {}
-          try { player.setTool(def.toolType); } catch (e) {}
-          if (r.ammoBonus) for (const a in r.ammoBonus) {
-              inv.ammo[a] = (inv.ammo[a] || 0) + r.ammoBonus[a];
-              try { inv.updateAmmoUI(); } catch (e) {}
+              ok = true;
+              setCraftStatus('Crafteada y equipada: ' + def.name);
+              try { playSound('pickup'); } catch (e) {}
+              if ((r.id === 'hammer' || def.id === 'hammer') && typeof directorOnHammerCrafted === 'function') {
+                  try { directorOnHammerCrafted(); } catch (e) {}
+              }
+          } else {
+              setCraftStatus('Mochila llena — te devuelvo los materiales');
           }
-          setCraftStatus('Crafteada y equipada: ' + def.name);
-          try { playSound('pickup'); } catch (e) {}
-          if ((r.id === 'hammer' || def.id === 'hammer') && typeof directorOnHammerCrafted === 'function') {
-              try { directorOnHammerCrafted(); } catch (e) {}
-          }
-      } else {
-          for (const k in r.cost) inv.resources[k] += r.cost[k]; // refund: inventory full
-          setCraftStatus('Mochila llena — te devuelvo los materiales');
       }
   } else if (r.kind === 'item') {
       const def = ITEM_DEFINITIONS[r.defKey];
-      if (!def) {
-          for (const k in r.cost) inv.resources[k] += r.cost[k];
-          setCraftStatus('No se pudo craftear');
-          refreshCraftUI();
-          return;
-      }
-      const entry = { ...def, quantity: 1 };
-      try { if (def.createModel) entry.model = def.createModel(); } catch (e) {}
-      if (inv.addItem(entry)) {
-          setCraftStatus('Crafteado: ' + def.name);
-          try { playSound('pickup'); } catch (e) {}
-      } else {
-          for (const k in r.cost) inv.resources[k] += r.cost[k];
-          setCraftStatus('Mochila llena — te devuelvo los materiales');
+      if (def) {
+          const entry = { ...def, quantity: 1 };
+          try { if (def.createModel) entry.model = def.createModel(); } catch (e) {}
+          if (inv.addItem(entry)) {
+              ok = true;
+              setCraftStatus('Crafteado: ' + def.name);
+              try { playSound('pickup'); } catch (e) {}
+          } else {
+              setCraftStatus('Mochila llena — te devuelvo los materiales');
+          }
       }
   } else {
-      try { r.run(inv); } catch (e) { console.error(e); }
-      setCraftStatus('Crafteado: ' + (r.name || r.label));
-      try { playSound('health-regen'); } catch (e) {}
+      try { ok = r.run(inv) !== false; } catch (e) { console.error(e); ok = false; }
+      if (ok) {
+          try { playSound('health-regen'); } catch (e) {}
+          if (r.kind === 'ammo') setCraftStatus('Crafteado: ' + (r.name || r.label));
+          else if (r.kind === 'upgrade') setCraftStatus('Mejora lista: ' + (r.name || r.label));
+          else setCraftStatus('Crafteado: ' + (r.name || r.label));
+      } else {
+          setCraftStatus('No hay espacio / no se pudo craftear: ' + (r.name || r.label));
+      }
   }
+  if (!ok) craftRefund(inv, r.cost);
+  else inv.craftedFlags[r.id] = true;
+
   try { updateResourceHUD(); } catch (e) {}
+  try { inv._changed(); } catch (e) {}
   refreshCraftUI();
   try { refreshInvModal(); } catch (e) {}
+  return ok;
 }
+
 function refreshCraftUI() {
-  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
-  const btns = document.querySelectorAll('.rg-craft');
-  btns.forEach(btn => {
+  const inv = getPlayerInv();
+  document.querySelectorAll('.rg-craft').forEach(btn => {
       const i = parseInt(btn.dataset.idx, 10);
       const r = CRAFT_RECIPES[i];
       if (!r) return;
-      const ownedTool = (r.kind === 'tool' && ITEM_DEFINITIONS[r.defKey])
-          ? inv && inv.items.some(it => it.toolType === ITEM_DEFINITIONS[r.defKey].toolType) : false;
-      const hasReq = !r.requires || (inv && inv.items.some(it => it.toolType === r.requires));
-      const missing = inv ? Object.keys(r.cost).filter(k => (inv.resources[k] || 0) < r.cost[k]) : Object.keys(r.cost);
-      const ok = !!inv && hasReq && !ownedTool && missing.length === 0;
-
-      btn.disabled = !ok;
-      btn.style.opacity = ok ? '1' : '0.55';
-
+      const st = recipeStatus(r);
+      btn.disabled = !st.ok;
+      btn.style.opacity = st.ok ? '1' : '0.55';
       const costEl = btn.querySelector('.rg-craft-cost');
       if (costEl) {
           costEl.innerHTML = Object.keys(r.cost).map(k => {
-              const lack = !inv || (inv.resources[k] || 0) < r.cost[k];
+              const lack = !inv || inv.countResource(k) < r.cost[k];
               return '<span class="rg-cost ' + (lack ? 'bad' : 'ok') + '">' + resIcon(k) + r.cost[k] + '</span>';
           }).join('');
       }
       const lockEl = btn.querySelector('.rg-craft-lock');
       if (lockEl) {
-          if (r.requires && !hasReq) { lockEl.textContent = '🔒 ' + (TOOL_REQUIRE_NAMES[r.requires] || r.requires); lockEl.style.display = ''; }
-          else lockEl.style.display = 'none';
+          let lock = '';
+          if (r.requires && !st.hasReq) lock = '🔒 ' + (TOOL_REQUIRE_NAMES[r.requires] || r.requires);
+          else if (r.kind === 'upgrade' && r.bagTier && inv && (inv.bagTier || 0) < r.bagTier - 1) lock = '🔒 mochila previa';
+          else if (r.requiresBenchUpgrade && !(typeof workbenches !== 'undefined' && workbenches.some(w => w.upgrades && w.upgrades[r.requiresBenchUpgrade]))) lock = '🔒 mesa';
+          else if (st.owned && !r.repeatable) lock = '✓ listo';
+          lockEl.textContent = lock;
+          lockEl.style.display = lock ? '' : 'none';
       }
       const nameEl = btn.querySelector('.rg-craft-name');
-      if (nameEl) nameEl.textContent = (r.name || r.label) + (ownedTool ? ' ✓' : '');
+      if (nameEl) nameEl.textContent = (r.name || r.label) + ((st.owned && !r.repeatable) ? ' ✓' : '');
       btn.title = craftRecipeText(r);
   });
   try { renderMaterialChips(document.getElementById('invFoot')); renderMaterialChips(document.getElementById('benchFoot')); } catch (e) {}
+  try { refreshTechTreeState(); } catch (e) {}
 }
 function setCreatorMode(on) {
   creatorMode = !!on;

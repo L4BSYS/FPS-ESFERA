@@ -168,16 +168,31 @@ function refreshContainerModal() {
     const left = s.amount || 0;
     const now = performance.now() / 1000;
     const wait = Math.max(0, (ref.lastTakeAt + ref.cooldown) - now);
-    body.innerHTML =
+    const linked = (typeof containerLinkedBench === 'function') ? containerLinkedBench(ref) : null;
+    let html =
       '<div class="rg-hint" style="margin-bottom:8px;">Saca de a 1 · stock limitado</div>' +
       '<div style="font-size:22px;margin-bottom:8px;">' + escHtml(s.name || s.id) + '</div>' +
-      '<div style="font-size:20px;margin-bottom:12px;">Stock: <b>' + left + '</b></div>' +
-      '<button class="rg-btn rg-btn-primary" id="containerTakeBtn"' +
+      '<div style="font-size:20px;margin-bottom:12px;">Stock: <b>' + left + '</b></div>';
+    if (linked && typeof benchStorageTotals === 'function') {
+      const totals = benchStorageTotals(linked);
+      const cost = (typeof BENCH_AMMO_COST !== 'undefined') ? BENCH_AMMO_COST : { metal: 2, wood: 1 };
+      const batch = (typeof BENCH_AMMO_BATCH !== 'undefined') ? BENCH_AMMO_BATCH : 12;
+      const can = Object.keys(cost).every(k => (totals[k] || 0) >= cost[k]);
+      html +=
+        '<div class="rg-hint" style="margin:8px 0 6px;">Asociado a mesa de trabajo · almacén: ' +
+        '🪵 ' + (totals.wood || 0) + ' · 🪨 ' + (totals.stone || 0) + ' · ⚙️ ' + (totals.metal || 0) + '</div>' +
+        '<button class="rg-btn rg-btn-small rg-btn-primary" id="containerProduceBtn"' + (can ? '' : ' disabled') + '>' +
+        'Producir ' + batch + ' balas (' + cost.metal + ' metal + ' + cost.wood + ' madera)</button>';
+    }
+    html += '<button class="rg-btn rg-btn-primary" id="containerTakeBtn"' +
       (left <= 0 || wait > 0.05 ? ' disabled' : '') + '>' +
       (left <= 0 ? 'Vacío' : (wait > 0.05 ? ('Esperá ' + wait.toFixed(1) + 's') : 'Tomar 1')) +
       '</button>';
+    body.innerHTML = html;
     const btn = document.getElementById('containerTakeBtn');
     if (btn) btn.onclick = function () { containerDispenseOne(); };
+    const prod = document.getElementById('containerProduceBtn');
+    if (prod) prod.onclick = function () { containerProduceAmmo(); };
     return;
   }
 
@@ -193,11 +208,17 @@ function refreshContainerModal() {
   html += '<div style="font-size:18px;margin:12px 0 6px;">Tu mochila</div><div class="rg-matbar" style="flex-wrap:wrap;gap:6px;">';
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (inv) {
-    inv.items.forEach(function (it, idx) {
-      if (!it) return;
-      html += '<button class="rg-btn rg-btn-small" data-inv="' + idx + '">' +
-        escHtml(containerItemLabel(it)) + '</button>';
+    inv.quickSlots.forEach(function (it, idx) {
+      if (!it || it.type === 'resource' || it.type === 'ammo') return;
+      html += '<button class="rg-btn rg-btn-small" data-inv-area="belt" data-inv-idx="' + idx + '">' +
+        '① ' + escHtml(containerItemLabel(it)) + '</button>';
     });
+    for (let i = 0; i < inv.capacity; i++) {
+      const it = inv.slots[i];
+      if (!it || it.type === 'resource' || it.type === 'ammo') continue;
+      html += '<button class="rg-btn rg-btn-small" data-inv-area="bag" data-inv-idx="' + i + '">' +
+        escHtml(containerItemLabel(it)) + '</button>';
+    }
     if (!inv.items.length) html += '<span class="rg-hint">Mochila vacía de objetos</span>';
   }
   html += '</div>';
@@ -227,8 +248,10 @@ function refreshContainerModal() {
   body.querySelectorAll('[data-cslot]').forEach(function (b) {
     b.onclick = function () { containerWithdrawSlot(parseInt(b.getAttribute('data-cslot'), 10)); };
   });
-  body.querySelectorAll('[data-inv]').forEach(function (b) {
-    b.onclick = function () { containerDepositInv(parseInt(b.getAttribute('data-inv'), 10)); };
+  body.querySelectorAll('[data-inv-area]').forEach(function (b) {
+    b.onclick = function () {
+      containerDepositInv(b.getAttribute('data-inv-area'), parseInt(b.getAttribute('data-inv-idx'), 10));
+    };
   });
   body.querySelectorAll('[data-res]').forEach(function (b) {
     b.onclick = function () { containerDepositResource(b.getAttribute('data-res')); };
@@ -253,11 +276,11 @@ function findFreeOrStackSlot(ref, entry) {
   return -1;
 }
 
-function containerDepositInv(idx) {
+function containerDepositInv(area, idx) {
   const ref = currentContainer;
   const inv = player && player.inventory;
   if (!ref || ref.mode !== 'storage' || !inv) return;
-  const item = inv.items[idx];
+  const item = (typeof inv.itemAt === 'function') ? inv.itemAt(area, idx) : inv.items[idx];
   if (!item) return;
   if (inv.equippedItem === item) {
     setContainerStatus('Desequipá el ítem antes de guardarlo');
@@ -294,7 +317,7 @@ function containerDepositResource(resId) {
   const ref = currentContainer;
   const inv = player && player.inventory;
   if (!ref || ref.mode !== 'storage' || !inv) return;
-  if ((inv.resources[resId] || 0) < 1) return;
+  if ((inv.countResource ? inv.countResource(resId) : (inv.resources[resId] || 0)) < 1) return;
   const entry = {
     id: resId,
     name: (typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[resId]) || resId,
@@ -304,7 +327,7 @@ function containerDepositResource(resId) {
   };
   const slot = findFreeOrStackSlot(ref, entry);
   if (slot < 0) { setContainerStatus('Cofre lleno'); return; }
-  inv.resources[resId] -= 1;
+  inv.removeResource(resId, 1);
   if (ref.slots[slot] && ref.slots[slot].id === resId) {
     ref.slots[slot].quantity = (ref.slots[slot].quantity || 1) + 1;
   } else {
@@ -319,21 +342,22 @@ function containerDepositAmmo(ammoType) {
   const ref = currentContainer;
   const inv = player && player.inventory;
   if (!ref || ref.mode !== 'storage' || !inv) return;
-  const have = inv.ammo[ammoType] || 0;
+  const have = (inv.countAmmo ? inv.countAmmo(ammoType) : (inv.ammo[ammoType] || 0));
   if (have <= 0) return;
-  const take = Math.min(5, have);
+  const want = Math.min(5, have);
   const entry = {
     id: ammoType + '_ammo',
     name: 'Balas ' + ammoType,
     type: 'ammo',
     ammoType: ammoType,
-    quantity: take,
-    amount: take,
+    quantity: want,
+    amount: want,
     stackable: true
   };
   const slot = findFreeOrStackSlot(ref, entry);
   if (slot < 0) { setContainerStatus('Cofre lleno'); return; }
-  inv.ammo[ammoType] = have - take;
+  const take = inv.removeAmmo(ammoType, want);
+  if (take <= 0) return;
   if (ref.slots[slot] && ref.slots[slot].ammoType === ammoType && ref.slots[slot].type === 'ammo') {
     ref.slots[slot].quantity = (ref.slots[slot].quantity || 0) + take;
     ref.slots[slot].amount = ref.slots[slot].quantity;
@@ -353,19 +377,24 @@ function containerWithdrawSlot(idx) {
   if (!slot) return;
 
   if (slot.type === 'resource') {
-    inv.resources[slot.id] = (inv.resources[slot.id] || 0) + (slot.quantity || 1);
-    ref.slots[idx] = null;
+    const moved = inv.addResource(slot.id, slot.quantity || 1);
+    if (moved <= 0) { setContainerStatus('Mochila llena'); return; }
+    slot.quantity = (slot.quantity || 1) - moved;
+    if (slot.quantity <= 0) ref.slots[idx] = null;
     try { updateResourceHUD(); playSound('pickup'); } catch (e) {}
-    setContainerStatus('Sacaste ' + slot.name);
+    setContainerStatus('Sacaste ' + moved + ' ' + slot.name);
     refreshContainerModal();
     return;
   }
 
   if (slot.type === 'ammo') {
     const amt = slot.quantity || slot.amount || 1;
-    inv.addAmmo(slot.ammoType || 'pistol', amt);
-    ref.slots[idx] = null;
-    setContainerStatus('Sacaste munición ×' + amt);
+    const moved = inv.addAmmoAmount ? inv.addAmmoAmount(slot.ammoType || 'pistol', amt) : (inv.addAmmo(slot.ammoType || 'pistol', amt) ? amt : 0);
+    if (moved <= 0) { setContainerStatus('Mochila llena'); return; }
+    slot.quantity = amt - moved;
+    slot.amount = slot.quantity;
+    if (slot.quantity <= 0) ref.slots[idx] = null;
+    setContainerStatus('Sacaste munición ×' + moved);
     refreshContainerModal();
     return;
   }
@@ -427,8 +456,7 @@ function containerDispenseOne() {
     try { if (def.createModel) entry.model = def.createModel(); } catch (e) {}
     ok = inv.addItem(entry);
   } else if (s.type === 'resource') {
-    inv.resources[s.id] = (inv.resources[s.id] || 0) + 1;
-    ok = true;
+    ok = inv.addResource(s.id, 1) > 0;
     try { updateResourceHUD(); } catch (e) {}
   } else {
     const def = resolveContainerDef(s.id);
@@ -451,6 +479,24 @@ function containerDispenseOne() {
       if (containerOpen && currentContainer === ref) refreshContainerModal();
     }, Math.ceil(ref.cooldown * 1000) + 30);
   } catch (e) {}
+}
+
+// Produce munición usando el almacén de la mesa asociada (mesa o cofres).
+function containerProduceAmmo() {
+  const ref = currentContainer;
+  if (!ref || ref.mode !== 'dispenser' || !ref.stock) return;
+  const linked = (typeof containerLinkedBench === 'function') ? containerLinkedBench(ref) : null;
+  if (!linked) { setContainerStatus('Este dispenser no está en el área de una mesa'); return; }
+  const cost = (typeof BENCH_AMMO_COST !== 'undefined') ? BENCH_AMMO_COST : { metal: 2, wood: 1 };
+  const batch = (typeof BENCH_AMMO_BATCH !== 'undefined') ? BENCH_AMMO_BATCH : 12;
+  if (!benchConsumeBase(linked, cost)) {
+    setContainerStatus('Faltan recursos en la mesa o en los cofres asociados');
+    return;
+  }
+  ref.stock.amount = (ref.stock.amount || 0) + batch;
+  setContainerStatus('Dispenser cargado: +' + batch + ' balas');
+  try { playSound('ammo-pickup'); } catch (e) {}
+  refreshContainerModal();
 }
 
 function toggleContainer(open, ref) {

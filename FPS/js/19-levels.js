@@ -1,4 +1,4 @@
-﻿// js/19-levels.js (part 19). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
+// js/19-levels.js (part 19). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // ============================================================
 //  Gestor de niveles / escenas
 //  - Un nivel = "celda" cuadrada cerrada por 4 muros.
@@ -284,12 +284,16 @@ function placePlayerAt(sp) {
 function resetPlayerInventory() {
   if (typeof player === 'undefined' || !player || !player.inventory) return;
   const inv = player.inventory;
-  inv.items = [];
-  inv.equippedItem = null;
-  inv.selectedSlot = 0;
-  inv.quickSlots = [null, null, null, null, null];
-  inv.ammo = { pistol: 0, rifle: 0, shotgun: 0, energy: 0 };
-  inv.resources = { wood: 0, stone: 0, metal: 0, keys: [] };
+  if (typeof inv.resetAll === 'function') inv.resetAll();
+  else {
+    inv.slots = new Array(INV_MAX_BAG_SLOTS).fill(null);
+    inv.quickSlots = [null, null, null, null, null];
+    inv.bagTier = 0;
+    inv.equippedItem = null;
+    inv.selectedSlot = 0;
+    inv.craftedFlags = {};
+    inv._keys = [];
+  }
   try { player.heldItem = null; } catch (e) {}
   try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
   try { player.currentTool = TOOLS.HANDS; } catch (e) {}
@@ -745,6 +749,15 @@ function renderCommunity(body) {
     body.appendChild(h);
     return;
   }
+  if (!currentUser()) {
+    const h = document.createElement('div');
+    h.className = 'rg-hint';
+    h.textContent = 'Ingresá con Google para ver y jugar mundos de la Comunidad.';
+    body.appendChild(h);
+    body.appendChild(lvBtn('Ingresar con Google', 'rg-btn-primary', function () { lvLogin(); }));
+    body.appendChild(lvBtn('Volver', '', function () { LEVEL.menuView = 'home'; renderMainMenu(); }));
+    return;
+  }
   const tools = document.createElement('div');
   tools.className = 'rg-menubtns';
   tools.appendChild(lvBtn('🔄 Actualizar', 'rg-btn-small', function () { refreshMenuLevels(true); }));
@@ -768,8 +781,10 @@ function deleteWorld(def) {
     // Si nunca se publicó, el doc no existe y la regla puede negarlo: lo ignoramos.
     fpsSharedLevelsCol().doc(def.id).delete().catch(function () {})
   ]).then(function () {
-    // Limpiar presencia/chat del mundo en Realtime Database (evita datos acumulados)
-    try { if (window.firebase && firebase.database) firebase.database().ref('levels/' + def.id).remove(); } catch (e) {}
+    // Only the owner's own player node can be removed (RTDB no longer allows wiping the level tree).
+    try {
+      if (typeof netPlayerRef !== 'undefined' && netPlayerRef && LEVEL.current === def.id) netPlayerRef.remove();
+    } catch (e) {}
     LEVEL.userLevels = LEVEL.userLevels.filter(function (l) { return l.id !== def.id; });
     LEVEL.sharedLevels = LEVEL.sharedLevels.filter(function (l) { return l.id !== def.id; });
     delete LEVEL.defs[def.id];
@@ -1116,8 +1131,8 @@ async function refreshMenuLevels(force) {
   LEVEL.menuBusy = true;
   if (LEVEL.menuView === 'mine' || LEVEL.menuView === 'community') renderMainMenu();
   try {
-    if (fbReady()) {
-      if (currentUser()) LEVEL.userLevels = await fsListUserLevels();
+    if (fbReady() && currentUser()) {
+      LEVEL.userLevels = await fsListUserLevels();
       if (LEVEL.menuView === 'community' || force) LEVEL.sharedLevels = await fsListSharedLevels();
     }
   } catch (e) { console.warn('No pude listar niveles', e); }

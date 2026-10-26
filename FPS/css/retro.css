@@ -1121,3 +1121,292 @@ input[type="range"] {
   .rg-menu-wrap { min-width: 94vw; max-height: 88vh; }
   .rg-card .rg-card-name { font-size: 16px; }
 }
+
+/* ============================================================
+   MOCHILA DINÁMICA: cinturón + grilla de slots + crafteo
+   ============================================================ */
+.rg-inv-panel {
+  width: min(980px, 96vw);
+  max-height: 90vh;
+}
+.rg-inv-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.rg-inv-head .rg-title { margin: 0; flex: 1; }
+.rg-inv-capwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 18px;
+  color: var(--rg-amber);
+  min-width: 110px;
+  text-align: right;
+}
+.rg-capbar {
+  height: 8px;
+  border: 1px solid var(--rg-line);
+  background: #0a0d0a;
+  border-radius: 4px;
+  overflow: hidden;
+  min-width: 120px;
+}
+.rg-capbar > div {
+  height: 100%;
+  width: 0%;
+  background: var(--rg-green);
+  transition: width 0.18s ease;
+}
+.rg-capbar > div.warn { background: var(--rg-amber); }
+.rg-capbar > div.bad { background: var(--rg-red); }
+.rg-inv-tier {
+  font-size: 17px;
+  color: var(--rg-dim);
+  margin: 4px 0 8px;
+}
+.rg-inv-main {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.15fr) minmax(280px, 0.85fr);
+  gap: 16px;
+  text-align: left;
+}
+.rg-inv-left, .rg-inv-right { min-width: 0; }
+.rg-inv-label {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--rg-amber);
+  margin: 8px 0 4px;
+}
+.rg-inv-label span {
+  font-family: 'VT323', monospace;
+  font-size: 15px;
+  letter-spacing: 0;
+  color: var(--rg-dim);
+  margin-left: 6px;
+}
+.rg-inv-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+.inv-slot {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  min-height: 42px;
+  background: #0a0d0a;
+  border: 2px solid #2c3a2c;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  transition: border-color 0.12s, background 0.12s, transform 0.12s;
+}
+.inv-slot:hover { border-color: var(--rg-green-dim); background: #101810; }
+.inv-slot.sel {
+  border-color: var(--rg-amber);
+  box-shadow: 0 0 10px rgba(255, 179, 0, 0.35);
+}
+.inv-slot.equipped {
+  border-color: var(--rg-green);
+  background: rgba(51, 255, 102, 0.10);
+}
+.inv-slot.empty { cursor: default; opacity: 0.65; }
+.inv-slot.empty .inv-slot-ico { color: #385038; }
+.inv-slot-ico {
+  font-size: 24px;
+  line-height: 1;
+  pointer-events: none;
+}
+.inv-slot-qty {
+  position: absolute;
+  right: 3px;
+  bottom: 1px;
+  font-family: 'VT323', monospace;
+  font-size: 15px;
+  color: #eaffea;
+  text-shadow: 1px 1px 0 #000;
+  pointer-events: none;
+}
+.inv-slot-key {
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  color: var(--rg-dim);
+  pointer-events: none;
+}
+.inv-upgrade-tile {
+  border-style: dashed;
+  border-color: #4a5e4a;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.inv-upgrade-tile:hover { opacity: 1; border-color: var(--rg-amber); }
+#invBelt.rg-belt { justify-content: flex-start; flex-wrap: wrap; margin: 2px 0 6px; }
+#invBelt.rg-belt .inv-slot { width: 52px; height: 52px; aspect-ratio: auto; }
+.rg-inv-detail {
+  border: 2px solid var(--rg-line);
+  border-radius: 6px;
+  background: #0d110d;
+  padding: 10px 12px;
+  min-height: 128px;
+  margin-bottom: 8px;
+}
+.rg-inv-detail-empty { font-size: 18px; color: var(--rg-dim); line-height: 1.35; }
+.inv-detail-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  color: var(--rg-green);
+  line-height: 1.5;
+  margin-bottom: 5px;
+}
+.inv-detail-meta { font-size: 16px; color: var(--rg-amber); margin-bottom: 5px; }
+.inv-detail-desc { font-size: 18px; color: var(--rg-ink); white-space: pre-line; line-height: 1.3; }
+.inv-detail-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+.rg-inv-craft {
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.rg-craft-note {
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  color: var(--rg-dim);
+}
+.rg-mat-bag { border-color: #2f7a4a; }
+.quick-slot-qty {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  color: #eaffea;
+  text-shadow: 1px 1px 0 #000;
+  pointer-events: none;
+}
+
+/* ============================================================
+   ÁRBOL DE TECNOLOGÍA
+   ============================================================ */
+.rg-tech-section { padding-bottom: 4px; }
+.rg-tech-wrap {
+  position: relative;
+  display: flex;
+  gap: 26px;
+  align-items: flex-start;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 18px 6px 14px;
+  min-height: 300px;
+  border: 2px solid var(--rg-line);
+  border-radius: 6px;
+  background:
+    linear-gradient(rgba(51,255,102,0.035) 1px, transparent 1px) 0 0 / 100% 24px,
+    linear-gradient(90deg, rgba(51,255,102,0.035) 1px, transparent 1px) 0 0 / 24px 100%,
+    #0a0d0a;
+}
+.rg-tech-lines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.tech-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+.tech-line.done { stroke: #33ff66; }
+.tech-line.ready { stroke: #ffb300; }
+.tech-line.locked { stroke: #334a33; stroke-dasharray: 5 5; }
+.rg-tech-col {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 178px;
+  z-index: 1;
+}
+.rg-tech-col-h {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  color: var(--rg-amber);
+  text-align: center;
+  letter-spacing: 1px;
+  padding: 2px 0 6px;
+  border-bottom: 1px dashed var(--rg-line);
+}
+.tech-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 8px;
+  background: #101510;
+  border: 2px solid #334a33;
+  border-radius: 6px;
+  color: var(--rg-ink);
+  cursor: pointer;
+  font-family: 'VT323', monospace;
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.tech-node:hover { transform: translateY(-1px); border-color: var(--rg-green-dim); }
+.tech-node .tech-ico { font-size: 22px; flex: 0 0 auto; line-height: 1; }
+.tech-node .tech-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.tech-node .tech-name { font-size: 17px; line-height: 1.1; color: #eaffea; }
+.tech-node .tech-sub { font-size: 14px; color: var(--rg-dim); line-height: 1.15; }
+.tech-node .tech-mark { font-size: 16px; flex: 0 0 auto; }
+.tech-node.done { border-color: var(--rg-green); background: rgba(51,255,102,0.08); }
+.tech-node.done .tech-mark { color: var(--rg-green); }
+.tech-node.ready { border-color: var(--rg-amber); box-shadow: 0 0 10px rgba(255,179,0,0.18); }
+.tech-node.locked { opacity: 0.55; filter: grayscale(0.5); }
+.tech-node.open { opacity: 0.9; }
+
+/* ============================================================
+   MESA DE TRABAJO: mejoras + almacén + dispenser
+   ============================================================ */
+.bench-upgrades, .bench-store, .bench-disp { margin-bottom: 6px; }
+.bench-upg-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0;
+}
+.bench-cost { font-size: 16px; color: var(--rg-dim); }
+.bench-ok { font-size: 17px; color: #7dff9b; }
+.bench-store-grid { display: flex; flex-direction: column; gap: 5px; }
+.bench-store-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid var(--rg-line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #0d110d;
+}
+.bench-store-name { min-width: 100px; font-size: 18px; }
+.bench-store-qty { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--rg-green); min-width: 38px; }
+.bench-store-mine { font-size: 15px; color: var(--rg-dim); flex: 1; }
+.bench-store-btns { display: flex; gap: 3px; flex-wrap: wrap; }
+.bench-store-btns .rg-btn { margin: 0; padding: 4px 6px; font-size: 7px; }
+.bench-disp-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.bench-disp-row span { font-size: 19px; }
+
+@media (max-width: 820px) {
+  .rg-inv-main { grid-template-columns: 1fr; }
+  .rg-inv-grid { grid-template-columns: repeat(6, 1fr); }
+  .rg-inv-panel { width: 96vw; }
+  .rg-tech-wrap { gap: 18px; }
+  .rg-tech-col { min-width: 156px; }
+}

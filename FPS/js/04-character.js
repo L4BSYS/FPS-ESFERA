@@ -1490,7 +1490,8 @@
 
           // Handle ammo separately - add to ammo count
           if (def.type === 'ammo') {
-              if (this.inventory.addAmmo(def.ammoType, def.amount)) {
+              const amt = (item.userData && typeof item.userData.amount === 'number') ? item.userData.amount : def.amount;
+              if (this.inventory.addAmmo(def.ammoType, amt)) {
                   // Remove from world
                   this.scene.remove(item);
                   collidableObjects.splice(collidableObjects.indexOf(item), 1);
@@ -1501,10 +1502,15 @@
               return;
           }
 
-          // Handle loose resources separately - add to resource counts
+          // Handle loose resources separately - ocupan un slot de la mochila
           if (def.type === 'resource') {
               const key = def.resourceKey || def.id;
-              this.inventory.resources[key] = (this.inventory.resources[key] || 0) + (def.amount || 1);
+              const amt = (item.userData && typeof item.userData.amount === 'number') ? item.userData.amount : (def.amount || 1);
+              const added = this.inventory.addResource(key, amt);
+              if (added <= 0) {
+                  try { showMessage('Mochila llena — no entra ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
+                  return;
+              }
               this.scene.remove(item);
               const ri = collidableObjects.indexOf(item);
               if (ri > -1) collidableObjects.splice(ri, 1);
@@ -1514,7 +1520,7 @@
               }
               playSound('pickup');
               try { updateResourceHUD(); } catch (e) {}
-              try { showMessage('+' + (def.amount || 1) + ' ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
+              try { showMessage('+' + added + ' ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
               return;
           }
 
@@ -1658,7 +1664,11 @@
                   const pollinated = !!(node.userData && node.userData.pollinatedUntil &&
                       performance.now() < node.userData.pollinatedUntil);
                   const amount = gained + (pollinated ? 1 : 0);
-                  this.inventory.resources[node.type] = (this.inventory.resources[node.type] || 0) + amount;
+                  const added = this.inventory.addResource(node.type, amount);
+                  if (added <= 0) {
+                      try { showMessage('Mochila llena — no entra más ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[node.type]) || node.type)); } catch (e) {}
+                      break;
+                  }
                   updateResourceHUD();
                   createHarvestEffect(hit.point);
                   playSoundAt('harvest', hit.point, { surface: node.type, gain: 0.9, maxDist: 30 });

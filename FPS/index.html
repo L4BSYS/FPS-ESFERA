@@ -82,22 +82,35 @@
   </div>
 
   <div id="invModal" class="rg-overlay">
-    <div class="rg-panel rg-modalbox">
-      <h2 class="rg-title">🎒 Mochila</h2>
-      <div style="margin-bottom:8px;">
-        <button onclick="invShowTab('items')" class="rg-btn rg-btn-small">Cosas</button>
-        <button onclick="invShowTab('craft')" class="rg-btn rg-btn-small">Crafteo</button>
-        <button onclick="toggleInventory()" class="rg-btn rg-btn-small" style="float:right;">Cerrar (Q)</button>
+    <div class="rg-panel rg-modalbox rg-inv-panel">
+      <div class="rg-inv-head">
+        <h2 class="rg-title">🎒 Mochila</h2>
+        <div class="rg-inv-capwrap" title="Espacios ocupados de la mochila">
+          <span id="invCapTxt">0/8</span>
+          <div class="rg-hpbar rg-capbar"><div id="invCapBar"></div></div>
+        </div>
+        <button onclick="toggleInventory()" class="rg-btn rg-btn-small">Cerrar (Q)</button>
       </div>
-      <div id="invBelt" class="rg-belt"></div>
-      <div class="rg-hint" style="margin:2px 0 8px;">Cinturón: arrastrá una cosa de la mochila a un casillero para darle atajo (1-5) · arrastrá afuera o clic derecho para quitarla</div>
-      <div id="invItems"></div>
-      <div id="invCraft" style="display:none;">
-        <div class="rg-hint" style="margin-bottom:6px;">🧰 Básicos a mano · las armas, balas y vendas se hacen en la mesa de trabajo</div>
+      <div id="invBagTierTxt" class="rg-inv-tier"></div>
+
+      <div class="rg-inv-main">
+        <section class="rg-inv-left">
+          <div class="rg-inv-label">CINTURÓN <span>teclas 1-5 · almacenamiento rápido</span></div>
+          <div id="invBelt" class="rg-belt"></div>
+          <div class="rg-inv-label">MOCHILA <span>arrastrá para distribuir</span></div>
+          <div id="invItems" class="rg-inv-grid"></div>
+        </section>
+
+        <section class="rg-inv-right">
+          <div id="invDetail" class="rg-inv-detail"></div>
+          <div class="rg-inv-label">CRAFTEO A MANO <span>sin mesa</span></div>
+          <div id="invCraft" class="rg-inv-craft"></div>
+          <div id="invFoot" class="rg-matbar"></div>
+        </section>
       </div>
-      <div id="invFoot" class="rg-matbar"></div>
+
       <div id="invMsg" class="rg-status"></div>
-      <div class="rg-hint">Q o ESC para cerrar · Equipar/Comer con el botón · Soltar deja el objeto en el suelo</div>
+      <div class="rg-hint">Arrastrá recursos, munición y herramientas entre cinturón y mochila · doble clic usa/equipa · clic derecho suelta · Q/ESC cierra</div>
     </div>
   </div>
 
@@ -130,12 +143,20 @@
       <div class="rg-hint" style="margin-bottom:6px;">Armas · munición · vendas — lo avanzado se hace acá</div>
       <div id="benchCraft"></div>
       <div id="benchFoot" class="rg-matbar"></div>
+
+      <div class="rg-h">Mejoras de la mesa</div>
+      <div id="benchUpgrades" class="bench-upgrades"></div>
+      <div class="rg-h">Almacén de la base</div>
+      <div id="benchStorage" class="bench-store"></div>
+      <div class="rg-h">Dispenser de munición</div>
+      <div id="benchDispenser" class="bench-disp"></div>
+
       <div style="margin-top:8px;">
         <button onclick="repairBench()" class="rg-btn rg-btn-small rg-btn-warn">Reparar +100 (3 madera + 2 piedra)</button>
         <button onclick="toggleBench(false)" class="rg-btn rg-btn-small" style="float:right;">Cerrar (E/ESC)</button>
       </div>
       <div id="benchMsg" class="rg-status"></div>
-      <div class="rg-hint">Reclama 14 bloques a la redonda: solo podés construir ahí. Si la rompen, tus bloques decaen y se libera la zona.</div>
+      <div class="rg-hint">Reclama 14 bloques a la redonda: solo construís y colocás cofres/dispensers ahí. Si la rompen, tus bloques decaen y se libera la zona.</div>
     </div>
   </div>
 
@@ -196,6 +217,7 @@
   <script src="js/23-world-container.js"></script>
   <script src="js/24-world-zone.js"></script>
   <script src="js/26-tutorial-director.js"></script>
+  <script src="js/27-tech.js"></script>
   <script src="js/25-playground.js"></script>
   <script src="js/16-boot.js"></script>
 </body>

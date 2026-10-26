@@ -468,6 +468,55 @@ const ITEM_DEFINITIONS = {
             return g;
         }
     },
+
+    // --- Progresión de mochila: cada mejora suma espacios reales ---
+    backpack1: {
+        id: 'backpack_lona',
+        name: 'Mochila de lona',
+        type: 'gear',
+        icon: '🎒',
+        bagTier: 1,
+        stackable: false,
+        desc: 'Mochila básica: +6 espacios para recursos, herramientas y munición.'
+    },
+    backpack2: {
+        id: 'backpack_reforzada',
+        name: 'Mochila reforzada',
+        type: 'gear',
+        icon: '🎒',
+        bagTier: 2,
+        stackable: false,
+        desc: 'Costuras reforzadas: +6 espacios más.'
+    },
+    backpack3: {
+        id: 'backpack_explorador',
+        name: 'Mochila de explorador',
+        type: 'gear',
+        icon: '🎒',
+        bagTier: 3,
+        stackable: false,
+        desc: 'Equipo de expedición: +6 espacios más.'
+    },
+
+    // --- Estructuras colocables (se fabrican en la mesa de trabajo) ---
+    chest: {
+        id: 'chest',
+        name: 'Cofre',
+        type: 'prop',
+        icon: '🧰',
+        stackable: false,
+        placeable: true,
+        desc: 'Cofre de 12 espacios. Se coloca dentro del área de tu mesa y alimenta al dispenser.'
+    },
+    dispenser: {
+        id: 'dispenser',
+        name: 'Dispenser de munición',
+        type: 'prop',
+        icon: '📦',
+        stackable: false,
+        placeable: true,
+        desc: 'Produce balas consumiendo metal y madera del cofre de la mesa o de los cofres asociados.'
+    }
 };
 let _goldenKeyGlowTex = null;
 function goldenKeyGlowTexture() {

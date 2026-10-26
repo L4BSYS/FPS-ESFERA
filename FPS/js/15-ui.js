@@ -3,19 +3,23 @@
 // --- Mochila: icono compartido HUD/lista ---
 function itemIcon(item) {
   if (!item) return '-';
-  if (item.type === 'weapon') return '🔫 ';
+  if (item.icon) return item.icon;
+  if (item.type === 'resource') return resIcon(item.resourceKey || item.id);
+  if (item.type === 'weapon') return '🔫';
   if (item.type === 'tool' || item.toolType) {
-      if (item.id === 'hammer') return '🔨 ';
-      if (item.id === 'axe') return '🪓 ';
-      if (item.id === 'pickaxe') return '⛏️ ';
-      if (item.id === 'torch') return '🔥 ';
-      return '🔧 ';
+      if (item.id === 'hammer') return '🔨';
+      if (item.id === 'axe') return '🪓';
+      if (item.id === 'pickaxe') return '⛏️';
+      if (item.id === 'torch') return '🔥';
+      return '🔧';
   }
-  if (item.id === 'bandage') return '🩹 ';
-  if (item.type === 'consumable' || item.id === 'food') return '🍎 ';
-  if (item.id === 'toxin') return '☠️ ';
-  if (item.type === 'ammo') return '📦 ';
-  if (item.type === 'key') return '🔑 ';
+  if (item.id === 'bandage') return '🩹';
+  if (item.type === 'consumable' || item.id === 'food') return '🍎';
+  if (item.id === 'toxin') return '☠️';
+  if (item.type === 'ammo') return '📦';
+  if (item.type === 'key') return '🔑';
+  if (item.type === 'prop') return item.id === 'chest' ? '🧰' : '📦';
+  if (item.type === 'gear') return '🎒';
   return '-';
 }
 function defKeyById(id) {
@@ -44,16 +48,19 @@ function recipeIcon(r) {
 function renderCraftButtons(container, station) {
   if (!container || container.dataset.rendered) return;
   container.dataset.rendered = '1';
+  container.innerHTML = '';
   CRAFT_RECIPES.forEach((r, i) => {
       if (station && r.station !== station) return;
       const b = document.createElement('button');
       b.className = 'rg-btn rg-btn-small rg-craft';
       b.dataset.idx = i;
+      b.dataset.station = r.station || 'hand';
       b.innerHTML =
           '<span class="rg-craft-ico">' + recipeIcon(r) + '</span>' +
           '<span class="rg-craft-body">' +
               '<span class="rg-craft-name">' + (r.name || r.label) + '</span>' +
               '<span class="rg-craft-cost"></span>' +
+              '<span class="rg-craft-note">' + (r.station === 'bench' ? '🛠 mesa' : '✋ a mano') + '</span>' +
           '</span>' +
           '<span class="rg-craft-lock" style="display:none;"></span>';
       b.addEventListener('click', () => craftItem(i));
@@ -69,9 +76,12 @@ function renderMaterialChips(el) {
   const names = (typeof RESOURCE_ES !== 'undefined') ? RESOURCE_ES : {};
   let html = ['wood', 'stone', 'metal'].map(k =>
       '<span class="rg-mat rg-mat-' + k + '" title="' + (names[k] || k) + '">' +
-      resIcon(k) + '<b>' + (inv.resources[k] || 0) + '</b></span>').join('');
-  const ammoTxt = Object.keys(inv.ammo || {}).map(a => a + ': ' + inv.ammo[a]).join(' · ');
+      resIcon(k) + '<b>' + (inv.countResource ? inv.countResource(k) : (inv.resources[k] || 0)) + '</b></span>').join('');
+  const ammoTxt = Object.keys(inv.ammo || {}).map(a => a + ': ' + inv.ammo[a]).filter(s => !s.endsWith(': 0')).join(' · ');
   if (ammoTxt) html += '<span class="rg-mat rg-mat-ammo">📦 ' + ammoTxt + '</span>';
+  if (typeof inv.capacity === 'number') {
+      html += '<span class="rg-mat rg-mat-bag" title="Espacios ocupados de la mochila">🎒 <b>' + inv.usedBagSlots + '/' + inv.capacity + '</b></span>';
+  }
   el.innerHTML = html;
 }
 function setCraftStatus(t) {
@@ -99,13 +109,17 @@ function closeTopModal() {
   if (openModal === 'container' && typeof toggleContainer === 'function') { toggleContainer(false); return true; }
   return false;
 }
+// La mochila ahora integra inventario + crafteo en un solo panel; se mantiene
+// la función por compatibilidad con llamadas viejas.
 function invShowTab(which) {
-  const items = document.getElementById('invItems');
-  const craft = document.getElementById('invCraft');
-  if (!items || !craft) return;
-  items.style.display = which === 'items' ? 'block' : 'none';
-  craft.style.display = which === 'craft' ? 'block' : 'none';
-  if (which === 'craft') { renderCraftButtons(craft, 'hand'); try { refreshCraftUI(); } catch (e) {} }
+  if (which === 'craft') {
+      const craft = document.getElementById('invCraft');
+      if (craft) {
+          renderCraftButtons(craft, 'hand');
+          try { craft.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
+          try { refreshCraftUI(); } catch (e) {}
+      }
+  }
 }
 function renderInvFab() {
   let fab = document.getElementById('invFab');
@@ -147,176 +161,345 @@ function toggleInventory() {
       if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
       isGamePaused = true;
       try { document.exitPointerLock(); } catch (e) {}
-      invShowTab('items');
+      invSelected = null;
       refreshInvModal();
       modal.style.display = 'flex';
       invOpen = true;
       openModal = 'inv';
   }
 }
+// --- Mochila: grilla de slots + panel de detalle integrado al crafteo ---
+var invSelected = null;
+
+function invStatusMsg(t) {
+  const m = document.getElementById('invMsg');
+  if (m) m.textContent = t || '';
+}
+
 function refreshInvModal() {
-  const grid = document.getElementById('invItems');
-  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
-  if (!grid || !inv) return;
-  grid.innerHTML = '';
-  if (!inv.items.length) grid.innerHTML = '<div style="color:#888;">Mochila vacía. ¡Salí a buscar cosas!</div>';
-  inv.items.forEach((item, idx) => {
-      const row = document.createElement('div');
-      row.className = 'rg-row';
-      const eq = inv.equippedItem === item;
-      const info = document.createElement('span');
-      info.style.flex = '1';
-      info.className = 'rg-drag-handle';
-      info.setAttribute('data-idx', idx);
-      info.innerHTML = '<span style="font-size:20px;">' + itemIcon(item) + '</span> ' + item.name +
-          ((item.stackable && item.quantity > 1) ? ' x' + item.quantity : '') +
-          (eq ? ' <b style="color:#4CAF50;">(equipada)</b>' : '');
-      row.appendChild(info);
-      const useBtn = document.createElement('button');
-      const usable = !!item.toolType || item.healAmount > 0;
-      useBtn.textContent = item.healAmount > 0 ? 'Usar' : (eq ? 'En uso' : 'Equipar');
-      useBtn.className = 'rg-btn rg-btn-small';
-      useBtn.disabled = !usable;
-      useBtn.addEventListener('click', () => invUseItem(idx));
-      row.appendChild(useBtn);
-      const dropBtn = document.createElement('button');
-      dropBtn.textContent = 'Soltar';
-      dropBtn.className = 'rg-btn rg-btn-small';
-      dropBtn.addEventListener('click', () => invDropItem(idx));
-      row.appendChild(dropBtn);
-      grid.appendChild(row);
-  });
+  const inv = getPlayerInv();
+  const modal = document.getElementById('invModal');
+  if (!inv || !modal) return;
+  if (invSelected && !inv.itemAt(invSelected.area, invSelected.idx)) invSelected = null;
+  renderInvCapacity();
   renderBelt();
+  renderInvBag();
+  renderInvDetail();
+  const craft = document.getElementById('invCraft');
+  if (craft) renderCraftButtons(craft, 'hand');
   const foot = document.getElementById('invFoot');
   if (foot) renderMaterialChips(foot);
+  try { refreshCraftUI(); } catch (e) {}
+  markInvSelection();
 }
 
-// --- Cinturón (atajos 1-5): se puede arrastrar y soltar ---
+function renderInvCapacity() {
+  const inv = getPlayerInv();
+  if (!inv) return;
+  const txt = document.getElementById('invCapTxt');
+  if (txt) txt.textContent = inv.usedBagSlots + '/' + inv.capacity;
+  const bar = document.getElementById('invCapBar');
+  if (bar) {
+      const pct = inv.capacity ? Math.round((inv.usedBagSlots / inv.capacity) * 100) : 0;
+      bar.style.width = pct + '%';
+      bar.className = pct >= 100 ? 'bad' : (pct > 75 ? 'warn' : '');
+  }
+  const tier = document.getElementById('invBagTierTxt');
+  if (tier) {
+      const next = inv.nextBagTier;
+      tier.textContent = inv.bagTierName + (next ? ' · próxima: ' + next.name + ' (+' + (next.slots - inv.capacity) + ')' : ' · al máximo');
+  }
+}
+
+function invSlotEl(area, idx, item) {
+  const inv = getPlayerInv();
+  const el = document.createElement('div');
+  el.className = 'inv-slot';
+  el.dataset.area = area;
+  el.dataset.idx = String(idx);
+  if (!item) el.classList.add('empty');
+  if (item && inv && inv.equippedItem === item) el.classList.add('equipped');
+  if (item) {
+      const ico = document.createElement('span');
+      ico.className = 'inv-slot-ico';
+      ico.textContent = itemIcon(item);
+      el.appendChild(ico);
+      if (item.stackable && (item.quantity || 1) > 1) {
+          const q = document.createElement('span');
+          q.className = 'inv-slot-qty';
+          q.textContent = item.quantity;
+          el.appendChild(q);
+      }
+      el.title = item.name +
+          (item.quantity > 1 ? ' ×' + item.quantity : '') +
+          (inv && inv.equippedItem === item ? ' · equipado' : '') +
+          '\nArrastrá para mover · doble clic para usar/equipar · clic derecho para soltar';
+  } else {
+      const ico = document.createElement('span');
+      ico.className = 'inv-slot-ico';
+      ico.textContent = '·';
+      el.appendChild(ico);
+      el.title = area === 'belt' ? 'Casillero del cinturón (tecla ' + (idx + 1) + ')' : 'Espacio libre de la mochila';
+  }
+  if (area === 'belt') {
+      const k = document.createElement('span');
+      k.className = 'inv-slot-key';
+      k.textContent = idx + 1;
+      el.appendChild(k);
+  }
+  return el;
+}
+
+// Cinturón (atajos 1-5): es almacenamiento real, no solo un atajo.
 function renderBelt() {
   const belt = document.getElementById('invBelt');
-  if (!belt || typeof player === 'undefined' || !player) return;
-  const inv = player.inventory;
+  const inv = getPlayerInv();
+  if (!belt || !inv) return;
   belt.innerHTML = '';
-  inv.quickSlots.forEach((_, index) => {
-      const slot = document.createElement('div');
-      slot.className = 'quick-slot';
-      slot.setAttribute('data-slot', index);
-      slot.addEventListener('click', () => { try { inv.quickSelect(index); renderBelt(); } catch (e) {} });
-      belt.appendChild(slot);
+  for (let i = 0; i < inv.quickSlots.length; i++) {
+      belt.appendChild(invSlotEl('belt', i, inv.quickSlots[i]));
+  }
+}
+
+function renderInvBag() {
+  const bag = document.getElementById('invItems');
+  const inv = getPlayerInv();
+  if (!bag || !inv) return;
+  bag.innerHTML = '';
+  for (let i = 0; i < inv.capacity; i++) {
+      bag.appendChild(invSlotEl('bag', i, inv.slots[i]));
+  }
+  if (inv.capacity < INV_MAX_BAG_SLOTS) {
+      const next = inv.nextBagTier;
+      const tile = document.createElement('div');
+      tile.className = 'inv-slot inv-upgrade-tile';
+      tile.title = next.name + ' — crafteala para sumar ' + (next.slots - inv.capacity) + ' espacios';
+      const ico = document.createElement('span');
+      ico.className = 'inv-slot-ico';
+      ico.textContent = '🔒';
+      const q = document.createElement('span');
+      q.className = 'inv-slot-qty';
+      q.textContent = '+' + (next.slots - inv.capacity);
+      tile.appendChild(ico);
+      tile.appendChild(q);
+      tile.addEventListener('click', () => {
+          invStatusMsg('Crafteá ' + next.name + ' para sumar ' + (next.slots - inv.capacity) + ' espacios');
+          const craft = document.getElementById('invCraft');
+          if (craft) try { craft.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {}
+      });
+      bag.appendChild(tile);
+  }
+}
+
+function markInvSelection() {
+  document.querySelectorAll('#invModal .inv-slot').forEach(el => {
+      const on = !!invSelected && el.dataset.area === invSelected.area &&
+          parseInt(el.dataset.idx, 10) === invSelected.idx;
+      el.classList.toggle('sel', on);
   });
-  inv.updateQuickSlotUI();
 }
 
-let _beltDrag = null;
-function _beltSlotUnder(x, y) {
-  const els = document.querySelectorAll('#invBelt .quick-slot');
-  for (const el of Array.from(els)) {
-      const r = el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return parseInt(el.getAttribute('data-slot'), 10);
-  }
-  return -1;
-}
-function _beltGhost(item, x, y) {
-  let g = document.getElementById('beltGhost');
-  if (!g) {
-      g = document.createElement('div');
-      g.id = 'beltGhost';
-      g.className = 'rg-drag-ghost';
-      document.body.appendChild(g);
-  }
-  g.textContent = itemIcon(item) + ' ' + item.name;
-  g.style.left = x + 'px';
-  g.style.top = y + 'px';
-  return g;
-}
-function startBeltDrag(item, fromSlot, x, y) {
-  if (!item) return;
-  _beltDrag = { item, fromSlot, moved: false, x, y };
-  _beltGhost(item, x, y);
-}
-function moveBeltDrag(x, y) {
-  if (!_beltDrag) return;
-  if (Math.abs(x - _beltDrag.x) + Math.abs(y - _beltDrag.y) > 6) _beltDrag.moved = true;
-  const g = document.getElementById('beltGhost');
-  if (g) { g.style.left = x + 'px'; g.style.top = y + 'px'; }
-}
-function endBeltDrag(x, y) {
-  if (!_beltDrag) return;
-  const drag = _beltDrag;
-  _beltDrag = null;
-  const g = document.getElementById('beltGhost');
-  if (g) g.remove();
-  if (!drag.moved) {
-      if (drag.fromSlot >= 0) { try { player.inventory.quickSelect(drag.fromSlot); } catch (e) {} }
-      return;
-  }
-  const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
+function selectInvSlot(area, idx) {
+  const inv = getPlayerInv();
   if (!inv) return;
-  const target = _beltSlotUnder(x, y);
-  if (target >= 0) {
-      const existing = inv.quickSlots.findIndex(s => s && drag.item && s.id === drag.item.id);
-      if (drag.fromSlot >= 0) {
-          const tmp = inv.quickSlots[target];
-          inv.quickSlots[target] = inv.quickSlots[drag.fromSlot];
-          inv.quickSlots[drag.fromSlot] = tmp;
-      } else {
-          if (existing >= 0 && existing !== target) inv.quickSlots[existing] = null;
-          inv.quickSlots[target] = drag.item;
-      }
-  } else if (drag.fromSlot >= 0) {
-      inv.clearQuickSlot(drag.fromSlot);
-      return;
-  } else {
-      return; // dropped nothing meaningful
-  }
-  inv.updateQuickSlotUI();
+  if (!inv.itemAt(area, idx)) invSelected = null;
+  else invSelected = { area: area, idx: idx };
+  renderInvDetail();
+  markInvSelection();
 }
 
-document.addEventListener('pointerdown', (e) => {
-  if (!invOpen) return;
-  if (e.target && e.target.closest && e.target.closest('button')) return;
-  const handle = e.target && e.target.closest ? e.target.closest('.rg-drag-handle') : null;
-  if (handle) {
-      const idx = parseInt(handle.getAttribute('data-idx'), 10);
-      const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
-      if (inv && inv.items[idx]) { e.preventDefault(); startBeltDrag(inv.items[idx], -1, e.clientX, e.clientY); }
-      return;
-  }
-  const slotEl = e.target && e.target.closest ? e.target.closest('#invBelt .quick-slot') : null;
-  if (slotEl) {
-      const idx = parseInt(slotEl.getAttribute('data-slot'), 10);
-      const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
-      if (inv && inv.quickSlots[idx]) { e.preventDefault(); startBeltDrag(inv.quickSlots[idx], idx, e.clientX, e.clientY); }
-  }
-});
-document.addEventListener('pointermove', (e) => { if (_beltDrag) moveBeltDrag(e.clientX, e.clientY); });
-document.addEventListener('pointerup', (e) => { if (_beltDrag) endBeltDrag(e.clientX, e.clientY); });
-document.addEventListener('pointercancel', (e) => { if (_beltDrag) endBeltDrag(e.clientX, e.clientY); });
-function invUseItem(idx) {
-  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
-  if (!inv || !inv.items[idx]) return;
-  const item = inv.items[idx];
-  if (item.healAmount > 0) {
-      player.health = Math.min(player.maxHealth || 100, player.health + (item.healAmount || 30));
-      inv.removeItem(item, 1);
-      try { player.updateStatsHUD(); playSound('health-regen'); } catch (e) {}
-      try { if (typeof directorOnFoodLesson === 'function') directorOnFoodLesson(); } catch (e) {}
-      refreshInvModal();
-      return;
-  }
-  if (item.toolType) {
-      try { player.setTool(item.toolType); } catch (e) {}
-      refreshInvModal();
-      return;
-  }
+function invSelectedItem() {
+  const inv = getPlayerInv();
+  if (!inv || !invSelected) return null;
+  return inv.itemAt(invSelected.area, invSelected.idx);
 }
-function invDropItem(idx) {
-  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
-  if (!inv || !inv.items[idx]) return;
-  const item = inv.items[idx];
+
+function invTypeLabel(item) {
+  if (!item) return '';
+  if (item.type === 'resource') return 'Recurso';
+  if (item.type === 'ammo') return 'Munición de reserva';
+  if (item.type === 'tool') return 'Herramienta';
+  if (item.type === 'weapon') return 'Arma';
+  if (item.type === 'consumable') return 'Consumible';
+  if (item.type === 'gear') return 'Equipamiento';
+  if (item.type === 'prop') return 'Estructura colocable';
+  if (item.type === 'key') return 'Llave';
+  return 'Objeto';
+}
+
+function invItemDesc(item, inv) {
+  if (!item) return '';
+  if (item.type === 'resource') {
+      return 'Se apila hasta ' + INV_RESOURCE_STACK + '. Lo usás para construir y craftear.';
+  }
+  if (item.type === 'ammo') {
+      const eq = inv && inv.equippedItem;
+      return 'Reserva de munición. Se carga con R' +
+          (eq && eq.ammoType === item.ammoType ? ' (arma equipada)' : ' teniendo el arma equipada') + '.';
+  }
+  if (item.type === 'tool' || item.type === 'weapon') {
+      let d = 'Se equipa y ocupa un casillero del cinturón o de la mochila.';
+      if (item.ammoType) {
+          inv.ensureWeaponMagazine(item);
+          d += '\nCargador: ' + (item.magazine || 0) + '/' + item.magazineSize +
+              ' · Reserva: ' + inv.countAmmo(item.ammoType);
+      }
+      return d;
+  }
+  if (item.type === 'consumable' && item.healAmount > 0) {
+      return 'Cura ' + item.healAmount + ' de vida al usarlo.';
+  }
+  if (item.type === 'gear') return item.desc || 'Mejora la capacidad de tu mochila.';
+  if (item.type === 'prop') return item.desc || 'Se coloca dentro del área de tu mesa de trabajo.';
+  return item.desc || '';
+}
+
+function invDetailBtn(label, cls, fn) {
+  const b = document.createElement('button');
+  b.className = 'rg-btn rg-btn-small ' + (cls || '');
+  b.textContent = label;
+  b.addEventListener('click', fn);
+  return b;
+}
+
+function renderInvDetail() {
+  const box = document.getElementById('invDetail');
+  const inv = getPlayerInv();
+  if (!box || !inv) return;
+  box.innerHTML = '';
+  const item = invSelectedItem();
+  if (!item) {
+      const h = document.createElement('div');
+      h.className = 'rg-inv-detail-empty';
+      h.innerHTML = '<b>Seleccioná un objeto</b><br>' +
+          'Arrastrá entre <b>cinturón</b> (1-5) y <b>mochila</b> para repartir lo que llevás.<br>' +
+          'Doble clic: usar / equipar. Clic derecho: soltar.';
+      box.appendChild(h);
+      return;
+  }
+  const title = document.createElement('div');
+  title.className = 'inv-detail-title';
+  title.textContent = itemIcon(item) + ' ' + item.name + (item.quantity > 1 ? ' ×' + item.quantity : '');
+  box.appendChild(title);
+  const meta = document.createElement('div');
+  meta.className = 'inv-detail-meta';
+  meta.textContent = invTypeLabel(item) +
+      (invSelected.area === 'belt' ? ' · cinturón ' + (invSelected.idx + 1) : ' · mochila') +
+      (inv.equippedItem === item ? ' · EN USO' : '');
+  box.appendChild(meta);
+  const desc = document.createElement('div');
+  desc.className = 'inv-detail-desc';
+  desc.textContent = invItemDesc(item, inv);
+  box.appendChild(desc);
+
+  const actions = document.createElement('div');
+  actions.className = 'inv-detail-actions';
+  if (item.toolType || item.type === 'weapon') {
+      if (inv.equippedItem === item) {
+          actions.appendChild(invDetailBtn('Desequipar', '', () => {
+              inv.unequipItem();
+              try { player.currentTool = TOOLS.HANDS; player.updateToolHUD(); } catch (e) {}
+              renderInvDetail();
+          }));
+      } else {
+          actions.appendChild(invDetailBtn('Equipar', 'rg-btn-primary', () => {
+              inv.equipItem(item);
+              try { player.updateToolHUD(); updateActionButton(); } catch (e) {}
+              renderInvDetail();
+          }));
+      }
+  } else if (item.type === 'consumable' && item.healAmount > 0) {
+      actions.appendChild(invDetailBtn('Usar', 'rg-btn-primary', () => {
+          inv.useItem(item);
+          try { if (typeof directorOnFoodLesson === 'function') directorOnFoodLesson(); } catch (e) {}
+          renderInvDetail();
+      }));
+  } else if (item.type === 'ammo') {
+      actions.appendChild(invDetailBtn('Recargar arma', 'rg-btn-primary', () => {
+          if (!inv.equippedItem || !inv.equippedItem.ammoType) invStatusMsg('Equipá un arma para recargar');
+          else inv.reloadWeapon();
+          renderInvDetail();
+      }));
+  }
+  if (invSelected.area === 'belt') {
+      actions.appendChild(invDetailBtn('A la mochila', '', () => invMoveSelected()));
+  } else {
+      actions.appendChild(invDetailBtn('Al cinturón', '', () => invMoveSelected()));
+  }
+  if (invCanDrop(item)) {
+      actions.appendChild(invDetailBtn('Soltar', 'rg-btn-warn', () => invDropSlot(invSelected.area, invSelected.idx)));
+  }
+  box.appendChild(actions);
+}
+
+function invCanDrop(item) {
+  if (!item) return false;
+  if (item.type === 'resource' || item.type === 'ammo') return true;
   const key = defKeyById(item.id);
-  if (!key || !ITEM_DEFINITIONS[key].createModel) {
-      setCraftStatus('Eso no se puede soltar');
+  return !!(key && ITEM_DEFINITIONS[key] && ITEM_DEFINITIONS[key].createModel && item.type !== 'prop');
+}
+
+function invPrimarySelected() {
+  const item = invSelectedItem();
+  const inv = getPlayerInv();
+  if (!item || !inv) return;
+  if (item.type === 'consumable' && item.healAmount > 0) {
+      inv.useItem(item);
+      try { if (typeof directorOnFoodLesson === 'function') directorOnFoodLesson(); } catch (e) {}
+  } else if (item.toolType || item.type === 'weapon') {
+      if (inv.equippedItem === item) {
+          inv.unequipItem();
+          try { player.currentTool = TOOLS.HANDS; player.updateToolHUD(); } catch (e) {}
+      } else {
+          inv.equipItem(item);
+          try { player.updateToolHUD(); updateActionButton(); } catch (e) {}
+      }
+  } else if (item.type === 'ammo') {
+      inv.reloadWeapon();
+  } else {
+      invStatusMsg(item.name + ' no se puede usar directamente');
+  }
+  renderInvDetail();
+}
+
+function invMoveSelected() {
+  const inv = getPlayerInv();
+  const sel = invSelected;
+  if (!inv || !sel) return;
+  const item = inv.itemAt(sel.area, sel.idx);
+  if (!item) return;
+  if (sel.area === 'belt') {
+      if (inv.clearQuickSlot(sel.idx)) {
+          const loc = inv.findSlot(item);
+          if (loc) invSelected = loc;
+          invStatusMsg('Movido a la mochila');
+      }
+  } else {
+      const free = inv.quickSlots.findIndex(s => !s);
+      if (free < 0) { invStatusMsg('Cinturón lleno (1-5)'); return; }
+      if (inv.moveItem('bag', sel.idx, 'belt', free)) {
+          invSelected = { area: 'belt', idx: free };
+          invStatusMsg('Movido al cinturón (' + (free + 1) + ')');
+      }
+  }
+  refreshInvModal();
+}
+
+function invDropSlot(area, idx) {
+  const inv = getPlayerInv();
+  if (!inv) return;
+  const item = inv.itemAt(area, idx);
+  if (!item) return;
+  let key = null;
+  if (item.type === 'resource') {
+      key = { wood: 'branch', stone: 'pebble', metal: 'scrap' }[item.resourceKey || item.id] || null;
+  } else if (item.type === 'ammo') {
+      key = item.ammoType === 'pistol' ? 'pistolAmmo' : null;
+  } else {
+      key = defKeyById(item.id);
+  }
+  if (!key || !ITEM_DEFINITIONS[key] || !ITEM_DEFINITIONS[key].createModel) {
+      invStatusMsg('Eso no se puede soltar');
       return;
   }
   const p = player.container.position.clone();
@@ -326,13 +509,114 @@ function invDropItem(idx) {
   fwd.normalize();
   p.add(fwd.multiplyScalar(1.2));
   p.y = Math.max(p.y, 0.6);
+  const wasEquipped = inv.equippedItem === item;
   if (inv.removeItem(item, 1)) {
-      try { if (item.model && item.model.parent) item.model.parent.remove(item.model); } catch (e) {}
-      placeWorldItem(key, p);
-      try { player.setTool(TOOLS.HANDS); player.updateToolHUD(); } catch (e) {}
+      try { if (wasEquipped && item.model && item.model.parent) item.model.parent.remove(item.model); } catch (e) {}
+      try {
+          const dropped = placeWorldItem(key, p);
+          // Al soltar 1 unidad de un stack, el objeto del mundo vale 1 (no el default de la definición).
+          if (dropped && dropped.userData && (item.type === 'resource' || item.type === 'ammo')) {
+              dropped.userData.amount = 1;
+              dropped.userData.ammoType = item.ammoType || dropped.userData.ammoType;
+          }
+      } catch (e) {}
+      if (wasEquipped) {
+          try { player.setTool(TOOLS.HANDS); player.updateToolHUD(); } catch (e) {}
+      }
+      invStatusMsg('Soltaste ' + item.name);
   }
   refreshInvModal();
 }
+
+// --- Drag & drop entre cinturón y mochila (mouse + touch) ---
+var _invDrag = null;
+
+function invSlotUnder(x, y) {
+  const els = document.querySelectorAll('#invModal .inv-slot[data-area]');
+  for (const el of els) {
+      const r = el.getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          return { area: el.dataset.area, idx: parseInt(el.dataset.idx, 10) };
+      }
+  }
+  return null;
+}
+
+function invDragGhost(item, x, y) {
+  let g = document.getElementById('invDragGhost');
+  if (!g) {
+      g = document.createElement('div');
+      g.id = 'invDragGhost';
+      g.className = 'rg-drag-ghost';
+      document.body.appendChild(g);
+  }
+  g.textContent = itemIcon(item) + ' ' + item.name + (item.quantity > 1 ? ' ×' + item.quantity : '');
+  g.style.left = x + 'px';
+  g.style.top = y + 'px';
+}
+
+function invDragEnd(x, y) {
+  if (!_invDrag) return;
+  const drag = _invDrag;
+  _invDrag = null;
+  const g = document.getElementById('invDragGhost');
+  if (g) g.remove();
+  const inv = getPlayerInv();
+  if (!inv) return;
+  if (!drag.moved) return;
+  const target = invSlotUnder(x, y);
+  if (target && target.area && target.idx >= 0) {
+      if (inv.moveItem(drag.area, drag.idx, target.area, target.idx)) {
+          invSelected = target;
+      }
+  } else if (drag.area === 'belt') {
+      // Soltar fuera de un casillero: vuelve a la mochila si hay lugar.
+      const free = inv.firstEmpty('bag');
+      if (free >= 0 && inv.moveItem('belt', drag.idx, 'bag', free)) invSelected = { area: 'bag', idx: free };
+  }
+  refreshInvModal();
+}
+
+document.addEventListener('pointerdown', (e) => {
+  if (!invOpen) return;
+  if (e.target && e.target.closest && e.target.closest('button')) return;
+  const el = e.target && e.target.closest ? e.target.closest('#invModal .inv-slot[data-area]') : null;
+  if (!el) return;
+  const area = el.dataset.area;
+  const idx = parseInt(el.dataset.idx, 10);
+  selectInvSlot(area, idx);
+  const inv = getPlayerInv();
+  const item = inv ? inv.itemAt(area, idx) : null;
+  if (!item) return;
+  e.preventDefault();
+  _invDrag = { area: area, idx: idx, item: item, x: e.clientX, y: e.clientY, moved: false };
+});
+document.addEventListener('pointermove', (e) => {
+  if (!_invDrag) return;
+  if (Math.abs(e.clientX - _invDrag.x) + Math.abs(e.clientY - _invDrag.y) > 6) {
+      _invDrag.moved = true;
+      invDragGhost(_invDrag.item, e.clientX, e.clientY);
+  }
+});
+document.addEventListener('pointerup', (e) => { if (_invDrag) invDragEnd(e.clientX, e.clientY); });
+document.addEventListener('pointercancel', (e) => { if (_invDrag) invDragEnd(e.clientX, e.clientY); });
+
+document.addEventListener('dblclick', (e) => {
+  if (!invOpen) return;
+  const el = e.target && e.target.closest ? e.target.closest('#invModal .inv-slot[data-area]') : null;
+  if (!el) return;
+  selectInvSlot(el.dataset.area, parseInt(el.dataset.idx, 10));
+  invPrimarySelected();
+});
+
+document.addEventListener('contextmenu', (e) => {
+  if (!invOpen) return;
+  const el = e.target && e.target.closest ? e.target.closest('#invModal .inv-slot[data-area]') : null;
+  if (!el) return;
+  e.preventDefault();
+  invDropSlot(el.dataset.area, parseInt(el.dataset.idx, 10));
+});
+
 // --- Teclas configurables (estilo RUST, humilde: solo acciones, WASD fijo) ---
 var KeyMap = { interact: 'e', inventory: 'q', palette: 'b', creator: 'g', reload: 'r' };
 const KEY_RESERVED = ['w', 'a', 's', 'd', ' ', 'shift', 'escape', 'tab', '1', '2', '3', '4', '5'];
@@ -398,18 +682,12 @@ function renderKeyRows() {
 }
 function showPauseTab(name) {
   if (typeof pauseUI === 'undefined' || !pauseUI.panels) return;
-  if (name === 'craft' && typeof canOpenInventory === 'function' && !canOpenInventory()) {
-      try {
-          const msg = (typeof inventoryLockedMessage === 'function')
-              ? inventoryLockedMessage()
-              : 'Mochila bloqueada';
-          if (typeof setPauseStatus === 'function') setPauseStatus(msg);
-          else if (typeof lvToast === 'function') lvToast(msg);
-      } catch (e) {}
-      name = 'play';
-  }
   pauseUI.activeTab = name;
   applyPausePanels();
+  if (name === 'craft') {
+      try { renderTechTree(); } catch (e) { console.warn('tech tree', e); }
+      try { renderMaterialChips(document.getElementById('techFoot')); } catch (e) {}
+  }
   if (name === 'build') refreshCreatorHint();
   if (name === 'play' && typeof renderLevelsPanel === 'function') { try { renderLevelsPanel(); } catch (e) {} }
   if (name === 'account' && typeof refreshOnlineTab === 'function') { try { refreshOnlineTab(); } catch (e) {} }
@@ -537,6 +815,7 @@ async function saveSceneToFirestore() {
       items: snap.items,
       nodes: snap.nodes,
       benches: snap.benches,
+      containers: snap.containers || [],
       stairs: snap.stairs,
       doors: snap.doors,
       spawns: snap.spawns,
@@ -578,7 +857,8 @@ function applySceneData(d) {
   try { if (typeof trialStop === 'function') trialStop(true); } catch (e) {}
   const n = deserializeBlocks(d.blocks || []);
   const m = deserializeProps(d.items || [], d.nodes || [], d.benches || [], {
-    stairs: d.stairs, doors: d.doors, spawns: d.spawns, statics: d.statics, totems: d.totems, zones: d.zones
+    stairs: d.stairs, doors: d.doors, spawns: d.spawns, statics: d.statics, totems: d.totems, zones: d.zones,
+    containers: d.containers
   });
   return { n, m };
 }

@@ -190,15 +190,27 @@
       creatorDiv.appendChild(clearBtn);
       pauseDiv.appendChild(creatorDiv);
 
-      // --- Crafting section (any mode, uses harvested resources) ---
+      // --- Árbol de tecnología (reemplaza la vieja solapa de crafteo) ---
       const craftDiv = document.createElement('div');
-      craftDiv.className = 'rg-section';
+      craftDiv.className = 'rg-section rg-tech-section';
 
       const craftTitle = document.createElement('h4');
       craftTitle.className = 'rg-h';
-      craftTitle.textContent = 'Craftear';
+      craftTitle.textContent = 'Árbol de tecnología';
       craftDiv.appendChild(craftTitle);
-      renderCraftButtons(craftDiv, 'hand');
+      const craftHint = document.createElement('div');
+      craftHint.className = 'rg-hint';
+      craftHint.style.marginBottom = '6px';
+      craftHint.textContent = 'Seguí los pasos: herramientas → base → combate → expedición. Los nodos en la mesa se fabrican/instalan con E en tu mesa de trabajo.';
+      craftDiv.appendChild(craftHint);
+      const techWrap = document.createElement('div');
+      techWrap.id = 'techTree';
+      techWrap.className = 'rg-tech-wrap';
+      craftDiv.appendChild(techWrap);
+      const techFoot = document.createElement('div');
+      techFoot.id = 'techFoot';
+      techFoot.className = 'rg-matbar';
+      craftDiv.appendChild(techFoot);
       pauseDiv.appendChild(craftDiv);
 
       // --- Online (multijugador: presencia + chat, por mundo) ---
