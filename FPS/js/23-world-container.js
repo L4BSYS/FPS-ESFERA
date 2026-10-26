@@ -70,6 +70,74 @@ function containerItemLabel(entry) {
 }
 
 // opts: { mode, x, z, y?, rotY?, slots?, stock?, cooldown?, label?, seed? }
+function closeCraftPanelsForPlacement() {
+  try {
+    if (typeof benchOpen !== 'undefined' && benchOpen && typeof toggleBench === 'function') { toggleBench(false); return; }
+    if (typeof invOpen !== 'undefined' && invOpen && typeof toggleInventory === 'function') { toggleInventory(); return; }
+  } catch (e) {}
+  try {
+    if (typeof pauseMenu !== 'undefined' && pauseMenu && pauseMenu.style.display !== 'none') {
+      pauseMenu.style.display = 'none';
+      isGamePaused = false;
+      if (typeof lockPointer === 'function') lockPointer();
+    }
+  } catch (e) {}
+}
+
+function buildContainerGhost(kind) {
+  let g;
+  try { g = buildWorldContainerMesh(kind === 'dispenser' ? 'dispenser' : 'storage'); }
+  catch (e) { g = new THREE.Group(); }
+  const mat = new THREE.MeshBasicMaterial({ color: 0x00ff66, transparent: true, opacity: 0.4, depthWrite: false });
+  g.traverse(function (o) {
+    if (o.isMesh) { o.material = mat; o.raycast = function () {}; }
+  });
+  return g;
+}
+
+/** Craft → colocar cofre/dispenser dentro del área de la mesa (Sebastian → ficha). */
+function beginContainerPlacement(kind, cost) {
+  const isDisp = kind === 'dispenser';
+  if (typeof startPlacement !== 'function') {
+    try { setCraftStatus('Colocación no disponible'); } catch (e) {}
+    return;
+  }
+  closeCraftPanelsForPlacement();
+  startPlacement({
+    label: isDisp ? 'dispenser de munición' : 'cofre',
+    cost: cost,
+    radius: 1.2,
+    snapGround: true,
+    buildGhost: function () { return buildContainerGhost(kind); },
+    place: function (pos) {
+      if (typeof isInAnyClaim === 'function' && !isInAnyClaim(pos)) {
+        try { showPlacementMessage('Colocalo dentro del área de tu mesa de trabajo'); } catch (e) {}
+        return false;
+      }
+      let rotY = 0;
+      try { rotY = player ? player.container.rotation.y + Math.PI : 0; } catch (e) {}
+      const ref = placeWorldContainer({
+        mode: isDisp ? 'dispenser' : 'storage',
+        x: pos.x, z: pos.z, y: Math.max(0, pos.y - 0.05), rotY: rotY,
+        slots: 12,
+        label: isDisp ? 'Dispenser de munición' : 'Cofre',
+        stock: isDisp ? { id: 'pistol_ammo', name: 'Balas de pistola', amount: 0 } : null,
+        stockMax: isDisp ? 240 : undefined,
+        takeAmount: isDisp ? 10 : undefined
+      });
+      if (ref) {
+        try { if (player && player.inventory) player.inventory.craftedFlags[kind] = true; } catch (e) {}
+        try {
+          if (typeof lvToast === 'function') {
+            lvToast(isDisp ? 'Dispenser colocado — E para tomar balas' : 'Cofre colocado — E para guardar');
+          }
+        } catch (e) {}
+      }
+      return !!ref;
+    }
+  });
+}
+
 function placeWorldContainer(opts) {
   opts = opts || {};
   const mode = opts.mode === 'dispenser' ? 'dispenser' : 'storage';

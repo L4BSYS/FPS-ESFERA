@@ -1,12 +1,24 @@
 // js/05-inventory.js (part 5/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
-// ==== Inventory System ====
+// ==== Inventory System (ficha + tiers de mochila de Sebastian) ====
+// Capacidad real = INV_BAG_TIERS[bagTier].slots. Items densos en this.items[].
+const INV_BAG_TIERS = [
+    { tier: 0, name: 'Bolsillos', slots: 8, desc: 'Lo que llevás encima desde el principio.' },
+    { tier: 1, name: 'Mochila de lona', slots: 14, desc: 'Primera mochila: +6 espacios.' },
+    { tier: 2, name: 'Mochila reforzada', slots: 20, desc: 'Costuras y remaches: +6 espacios.' },
+    { tier: 3, name: 'Mochila de explorador', slots: 26, desc: 'Equipo de expedición: +6 espacios.' }
+];
+const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
+
   class Inventory {
-      constructor(player, maxSlots = 20) {
+      constructor(player, maxSlots) {
           this.player = player;
-          this.maxSlots = maxSlots;
+          this.bagTier = 0;
+          const tier0 = INV_BAG_TIERS[0].slots;
+          this.maxSlots = (typeof maxSlots === 'number' && maxSlots > 0) ? maxSlots : tier0;
           this.items = [];
           this.equippedItem = null;
           this.selectedSlot = 0;
+          this.craftedFlags = {};
           this._resourceStacksReady = false;
           
           // Initialize ammo types from ITEM_DEFINITIONS
@@ -56,6 +68,34 @@
           return null;
       }
 
+      get capacity() {
+          const t = INV_BAG_TIERS[Math.max(0, Math.min(INV_BAG_TIERS.length - 1, this.bagTier | 0))];
+          return t ? t.slots : INV_BAG_TIERS[0].slots;
+      }
+      get bagTierName() {
+          const t = INV_BAG_TIERS[Math.max(0, Math.min(INV_BAG_TIERS.length - 1, this.bagTier | 0))];
+          return t ? t.name : INV_BAG_TIERS[0].name;
+      }
+      get nextBagTier() {
+          return this.bagTier < INV_BAG_TIERS.length - 1 ? INV_BAG_TIERS[this.bagTier + 1] : null;
+      }
+
+      /** Sube el tier de mochila (1..3). No baja. Devuelve true si cambió. */
+      upgradeBackpack(tier) {
+          const t = Math.max(0, Math.min(INV_BAG_TIERS.length - 1, tier | 0));
+          if (t <= (this.bagTier | 0)) return false;
+          this.bagTier = t;
+          this.maxSlots = INV_BAG_TIERS[t].slots;
+          try {
+              if (typeof lvToast === 'function') {
+                  lvToast('Mochila: ' + this.bagTierName + ' (' + this.capacity + ' espacios)');
+              }
+          } catch (e) {}
+          try { if (typeof refreshInvModal === 'function') refreshInvModal(); } catch (e) {}
+          try { if (typeof refreshTechTreeState === 'function') refreshTechTreeState(); } catch (e) {}
+          return true;
+      }
+
       backpackSlotCount() {
           return this.items.length;
       }
@@ -68,7 +108,7 @@
               );
               if (existing) return true;
           }
-          return this.items.length < this.maxSlots;
+          return this.items.length < this.capacity;
       }
 
       syncResourceCounters() {

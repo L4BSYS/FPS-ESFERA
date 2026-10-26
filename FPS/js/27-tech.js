@@ -55,8 +55,14 @@
         }
         if (inv.items && inv.items.some(function (it) { return it && it.id === r.defKey; })) return true;
       }
+      if (r.kind === 'upgrade' && r.bagTier != null && inv) {
+        return (inv.bagTier | 0) >= r.bagTier;
+      }
+      if (r.kind === 'prop' && r.repeatable) {
+        // Cofre/dispenser: no se marcan "done" (se pueden fabricar de nuevo)
+        return false;
+      }
       if (r.kind === 'ammo' && inv && inv.ammo) {
-        // "owned" = ya fabricaste al menos una vez (recetario) o tenés balas
         if (typeof isRecipeUnlocked === 'function' && isRecipeUnlocked(r.id)) return true;
         return (inv.ammo.pistol || 0) > 0;
       }
@@ -110,17 +116,17 @@
 
     { id: 'pickaxe', recipe: 'pickaxe', tier: 2, parents: ['axe'],       icon: '⛏️', title: 'Pico',            desc: 'Piedra + metal. Mina piedra y metal.' },
     { id: 'dressing',recipe: 'dressing',tier: 2, parents: ['bench'],     icon: '🩹', title: 'Venda',           desc: 'En la mesa: madera + piedra. Cura 30.' },
-    { id: 'backpack1', recipe: 'backpack1', tier: 2, parents: ['hammer'], icon: '🎒', title: 'Mochila de lona', desc: 'Ampliación de mochila.', status: 'soon' },
-    { id: 'chest',   recipe: 'chest',   tier: 2, parents: ['bench', 'pickaxe'], icon: '🧰', title: 'Cofre craft', desc: 'Cofre fabricable (hoy se coloca en el mundo).', status: 'soon' },
+    { id: 'backpack1', recipe: 'backpack1', tier: 2, parents: ['hammer'], icon: '🎒', title: 'Mochila de lona', desc: 'A mano: +6 espacios (8→14).' },
+    { id: 'chest',   recipe: 'chest',   tier: 2, parents: ['bench', 'pickaxe'], icon: '🧰', title: 'Cofre', desc: 'En la mesa: fabricá y colocá dentro del área.' },
 
     { id: 'pistol',  recipe: 'pistol',  tier: 3, parents: ['pickaxe'],   icon: '🔫', title: 'Pistola',         desc: 'En la mesa: metal + metal.' },
     { id: 'ammo',    recipe: 'ammo',    tier: 3, parents: ['pistol'],    icon: '📦', title: 'Balas x12',       desc: 'En la mesa: madera + metal.' },
-    { id: 'backpack2', recipe: 'backpack2', tier: 3, parents: ['backpack1', 'bench'], icon: '🎒', title: 'Mochila reforzada', desc: 'Más espacios.', status: 'soon' },
-    { id: 'bench_chest', kind: 'benchUpgrade', upgrade: 'chest', tier: 3, parents: ['bench'], icon: '🏗️', title: 'Cofre de mesa', desc: 'Mejora de mesa (pendiente de port).', status: 'soon' },
+    { id: 'backpack2', recipe: 'backpack2', tier: 3, parents: ['backpack1', 'bench'], icon: '🎒', title: 'Mochila reforzada', desc: 'En la mesa: +6 espacios (14→20).' },
+    { id: 'bench_chest', kind: 'benchUpgrade', upgrade: 'chest', tier: 3, parents: ['bench'], icon: '🏗️', title: 'Cofre de mesa', desc: 'Mejora instalada en la mesa (pendiente).', status: 'soon' },
 
-    { id: 'backpack3', recipe: 'backpack3', tier: 4, parents: ['backpack2', 'pistol'], icon: '🎒', title: 'Mochila explorador', desc: 'Capacidad máxima.', status: 'soon' },
-    { id: 'bench_dispenser', kind: 'benchUpgrade', upgrade: 'dispenser', tier: 4, parents: ['bench_chest', 'pistol'], icon: '📦', title: 'Dispenser de mesa', desc: 'Mejora de mesa (pendiente de port).', status: 'soon' },
-    { id: 'dispenser', recipe: 'dispenser', tier: 4, parents: ['bench_dispenser'], icon: '🏭', title: 'Dispenser craft', desc: 'Dispenser fabricable.', status: 'soon' }
+    { id: 'backpack3', recipe: 'backpack3', tier: 4, parents: ['backpack2', 'pistol'], icon: '🎒', title: 'Mochila explorador', desc: 'En la mesa: +6 espacios (20→26).' },
+    { id: 'bench_dispenser', kind: 'benchUpgrade', upgrade: 'dispenser', tier: 4, parents: ['bench_chest', 'pistol'], icon: '📦', title: 'Dispenser de mesa', desc: 'Mejora instalada en la mesa (pendiente).', status: 'soon' },
+    { id: 'dispenser', recipe: 'dispenser', tier: 4, parents: ['bench', 'pickaxe'], icon: '🏭', title: 'Dispenser', desc: 'En la mesa: fabricá y colocá dentro del área.' }
   ];
 
   var TECH_COLUMNS = ['Básicos', 'Herramientas', 'Base', 'Combate', 'Expedición'];
@@ -267,9 +273,10 @@
                 return (typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[k]) ? RESOURCE_ES[k] : k;
               }).join('+');
             }
-            if (st.owned && r.kind === 'tool') { sub = 'Completado'; mark = '✓'; }
+            if (st.owned && (r.kind === 'tool' || r.kind === 'upgrade')) { sub = 'Completado'; mark = '✓'; }
             else if (!st.ready) mark = '🔒';
-            else if (r.station === 'bench') mark = '🛠';
+            else if (r.kind === 'prop') mark = st.affordable ? '▶' : '·';
+            else if (r.station === 'bench' && r.pair) mark = '🛠';
             else mark = st.affordable ? '▶' : '·';
           }
         }
@@ -356,15 +363,17 @@
         setTechStatus('Receta no disponible');
         return;
       }
-      if (r.station === 'bench') {
+      // Bench con gesto → pista mesa. Upgrade/prop sin gesto → craftItem desde acá o mesa.
+      if (r.station === 'bench' && r.pair && r.pair.length && r.kind !== 'upgrade' && r.kind !== 'prop') {
         setTechStatus('Se fabrica en la mesa (E): gesto ' +
-          (r.pair ? r.pair.join(' + ') : 'bandeja') + ' · ' + (r.name || r.label));
+          r.pair.join(' + ') + ' · ' + (r.name || r.label));
         return;
       }
-      // Mano: craft directo desde pausa (paga del pool; mismo craftItem que la bandeja)
       var idx = recipeIndexById(r.id);
       if (idx < 0 || typeof craftItem !== 'function') {
-        setTechStatus('Abrí la mochila (Q) y usá la bandeja A+B');
+        setTechStatus(r.station === 'bench'
+          ? 'Abrí la mesa (E) para fabricarlo'
+          : 'Abrí la mochila (Q) y usá la bandeja A+B');
         return;
       }
       var st = recipeStatus(r);

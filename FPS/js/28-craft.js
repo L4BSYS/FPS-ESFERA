@@ -35,6 +35,23 @@ const CRAFT_RECIPES = [
     } },
   { id: 'dressing', label: 'Venda (+30 vida)', name: 'Venda', station: 'bench', kind: 'item', defKey: 'bandage', requires: null,
     pair: ['wood', 'stone'], cost: { wood: 3, stone: 1 } },
+  // --- Mochilas (Sebastian): sin gesto de bandeja — craft desde árbol / craftItem ---
+  { id: 'backpack1', label: 'Mochila de lona (+6 espacios)', name: 'Mochila de lona', station: 'hand', kind: 'upgrade', bagTier: 1, requires: 'hammer',
+    cost: { wood: 8, stone: 2 },
+    run: (inv) => { if (!inv.upgradeBackpack(1)) throw new Error('Ya tenés esa mochila'); } },
+  { id: 'backpack2', label: 'Mochila reforzada (+6 espacios)', name: 'Mochila reforzada', station: 'bench', kind: 'upgrade', bagTier: 2, requires: 'pickaxe',
+    cost: { wood: 12, metal: 4 },
+    run: (inv) => { if (!inv.upgradeBackpack(2)) throw new Error('Ya tenés esa mochila'); } },
+  { id: 'backpack3', label: 'Mochila de explorador (+6 espacios)', name: 'Mochila de explorador', station: 'bench', kind: 'upgrade', bagTier: 3, requires: 'pickaxe',
+    cost: { wood: 16, metal: 10 },
+    run: (inv) => { if (!inv.upgradeBackpack(3)) throw new Error('Ya tenés esa mochila'); } },
+  // --- Cofre / dispenser colocables (dentro del claim de la mesa) ---
+  { id: 'chest', label: 'Cofre (colocar en tu base)', name: 'Cofre', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
+    cost: { wood: 10, stone: 6 },
+    run: () => { beginContainerPlacement('chest', { wood: 10, stone: 6 }); } },
+  { id: 'dispenser', label: 'Dispenser de munición (colocar)', name: 'Dispenser', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
+    cost: { metal: 10, stone: 6, wood: 4 },
+    run: () => { beginContainerPlacement('dispenser', { metal: 10, stone: 6, wood: 4 }); } },
 ];
 const CRAFT_STATION_LABEL = { hand: 'a mano', bench: 'en la mesa de trabajo' };
 const TOOL_REQUIRE_NAMES = { hammer: 'Martillo', axe: 'Hacha', pickaxe: 'Pico', gun: 'Pistola' };
@@ -156,8 +173,44 @@ function craftItem(idx, opts) {
           refundCost();
           setCraftStatus('Mochila llena — te devuelvo los materiales');
       }
+  } else if (r.kind === 'upgrade') {
+      try {
+          if (typeof inv.upgradeBackpack !== 'function' || !r.bagTier) {
+              refundCost();
+              setCraftStatus('Mejora de mochila no disponible');
+              refreshCraftUI();
+              return;
+          }
+          if ((inv.bagTier | 0) >= r.bagTier) {
+              refundCost();
+              setCraftStatus('Ya tenés: ' + (inv.bagTierName || 'esa mochila'));
+              refreshCraftUI();
+              return;
+          }
+          if (typeof r.run === 'function') r.run(inv);
+          else if (!inv.upgradeBackpack(r.bagTier)) {
+              refundCost();
+              setCraftStatus('No se pudo mejorar la mochila');
+              refreshCraftUI();
+              return;
+          }
+          craftedOk = true;
+          setCraftStatus('Mejora: ' + (r.name || r.label) + ' · ' + inv.capacity + ' espacios');
+          try { playSound('health-regen'); } catch (e) {}
+      } catch (e) {
+          refundCost();
+          setCraftStatus((e && e.message) ? e.message : 'No se pudo mejorar la mochila');
+          refreshCraftUI();
+          return;
+      }
   } else {
-      try { r.run(inv); craftedOk = true; } catch (e) { console.error(e); }
+      try { r.run(inv); craftedOk = true; } catch (e) {
+          console.error(e);
+          refundCost();
+          setCraftStatus((e && e.message) ? e.message : 'No se pudo craftear');
+          refreshCraftUI();
+          return;
+      }
       setCraftStatus('Crafteado: ' + (r.name || r.label));
       try { playSound('health-regen'); } catch (e) {}
   }

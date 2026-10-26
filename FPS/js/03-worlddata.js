@@ -495,7 +495,7 @@ const ITEM_DEFINITIONS = {
         }
     },
 
-    // --- Progresión de mochila: cada mejora suma espacios reales ---
+    // --- Progresión de mochila (Sebastian → ficha): cada mejora suma espacios reales ---
     backpack1: {
         id: 'backpack_lona',
         name: 'Mochila de lona',
@@ -524,7 +524,7 @@ const ITEM_DEFINITIONS = {
         desc: 'Equipo de expedición: +6 espacios más.'
     },
 
-    // --- Estructuras colocables (se fabrican en la mesa de trabajo) ---
+    // --- Estructuras colocables (se fabrican en la mesa) ---
     chest: {
         id: 'chest',
         name: 'Cofre',
@@ -532,7 +532,7 @@ const ITEM_DEFINITIONS = {
         icon: '🧰',
         stackable: false,
         placeable: true,
-        desc: 'Cofre de 12 espacios. Se coloca dentro del área de tu mesa y alimenta al dispenser.'
+        desc: 'Cofre de 12 espacios. Se coloca dentro del área de tu mesa.'
     },
     dispenser: {
         id: 'dispenser',
@@ -541,7 +541,7 @@ const ITEM_DEFINITIONS = {
         icon: '📦',
         stackable: false,
         placeable: true,
-        desc: 'Produce balas consumiendo metal y madera del cofre de la mesa o de los cofres asociados.'
+        desc: 'Dispenser colocable en tu base. E para tomar balas.'
     }
 };
 let _goldenKeyGlowTex = null;

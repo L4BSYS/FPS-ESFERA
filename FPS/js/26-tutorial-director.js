@@ -1,4 +1,4 @@
-// js/26-tutorial-director.js — DIRECTOR del tutorial + pasos 0–7.
+﻿// js/26-tutorial-director.js — DIRECTOR del tutorial + pasos 0–7.
 // Depende de: 19-levels (createLevelItem, lvToast, roomObjects), carteles, totems, zones.
 // Cargar antes de 25-playground.js (pads / bag model reutilizados ahí).
 // Director del tutorial (clon playground + pasos). Paso 0 = vestíbulo; 1 = hacha+madera en N.
@@ -512,8 +512,8 @@ function directorPickupTutorialBag(mesh) {
     }
   } catch (e) {}
   DIRECTOR.step3Bag = null;
-  // La mochila física es una mejora real: suma espacios al inventario.
-  try { if (player && player.inventory) player.inventory.upgradeBackpack(1); } catch (e) {}
+  // La mochila física es una mejora real: suma espacios al inventario (Sebastian).
+  try { if (player && player.inventory && typeof player.inventory.upgradeBackpack === 'function') player.inventory.upgradeBackpack(1); } catch (e) {}
   try { playSound('pickup'); } catch (e) {}
   try { lvToast('Mochila de lona: +6 espacios · Q para craft'); } catch (e) {}
   try { showMessage('Mochila lista — Q para craft y distribuir cosas'); } catch (e) {}

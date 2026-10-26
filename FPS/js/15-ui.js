@@ -199,7 +199,7 @@ function renderPlayerItemsInto(grid, opts) {
   grid.innerHTML = '';
 
   if (asGrid) {
-      const max = inv.maxSlots || 20;
+      const max = (typeof inv.capacity === 'number' ? inv.capacity : null) || inv.maxSlots || 20;
       const disableUse = !!(opts && opts.disableUse);
       const titleSuffix = (opts && opts.titleSuffix) || '';
       grid.classList.add('rg-inv-grid');
