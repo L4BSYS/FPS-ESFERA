@@ -117,16 +117,16 @@
     { id: 'pickaxe', recipe: 'pickaxe', tier: 2, parents: ['axe'],       icon: '⛏️', title: 'Pico',            desc: 'Piedra + metal. Mina piedra y metal.' },
     { id: 'dressing',recipe: 'dressing',tier: 2, parents: ['bench'],     icon: '🩹', title: 'Venda',           desc: 'En la mesa: madera + piedra. Cura 30.' },
     { id: 'backpack1', recipe: 'backpack1', tier: 2, parents: ['hammer'], icon: '🎒', title: 'Mochila de lona', desc: 'A mano: +6 espacios (8→14).' },
-    { id: 'chest',   recipe: 'chest',   tier: 2, parents: ['bench', 'pickaxe'], icon: '🧰', title: 'Cofre', desc: 'En la mesa: fabricá y colocá dentro del área.' },
+    { id: 'chest',   recipe: 'chest',   tier: 2, parents: ['bench', 'pickaxe'], icon: '🧰', title: 'Cofre del mundo', desc: 'Fabricá y colocá un cofre suelto dentro del anillo.' },
 
     { id: 'pistol',  recipe: 'pistol',  tier: 3, parents: ['pickaxe'],   icon: '🔫', title: 'Pistola',         desc: 'En la mesa: metal + metal.' },
     { id: 'ammo',    recipe: 'ammo',    tier: 3, parents: ['pistol'],    icon: '📦', title: 'Balas x12',       desc: 'En la mesa: madera + metal.' },
     { id: 'backpack2', recipe: 'backpack2', tier: 3, parents: ['backpack1', 'bench'], icon: '🎒', title: 'Mochila reforzada', desc: 'En la mesa: +6 espacios (14→20).' },
-    { id: 'bench_chest', kind: 'benchUpgrade', upgrade: 'chest', tier: 3, parents: ['bench'], icon: '🏗️', title: 'Cofre de mesa', desc: 'Mejora instalada en la mesa (pendiente).', status: 'soon' },
+    { id: 'bench_chest', kind: 'benchUpgrade', upgrade: 'chest', tier: 3, parents: ['bench'], icon: '🏗️', title: 'Cofre de mesa', desc: 'Instalá en tu mesa (E): 12 espacios + depositar.' },
 
     { id: 'backpack3', recipe: 'backpack3', tier: 4, parents: ['backpack2', 'pistol'], icon: '🎒', title: 'Mochila explorador', desc: 'En la mesa: +6 espacios (20→26).' },
-    { id: 'bench_dispenser', kind: 'benchUpgrade', upgrade: 'dispenser', tier: 4, parents: ['bench_chest', 'pistol'], icon: '📦', title: 'Dispenser de mesa', desc: 'Mejora instalada en la mesa (pendiente).', status: 'soon' },
-    { id: 'dispenser', recipe: 'dispenser', tier: 4, parents: ['bench', 'pickaxe'], icon: '🏭', title: 'Dispenser', desc: 'En la mesa: fabricá y colocá dentro del área.' }
+    { id: 'bench_dispenser', kind: 'benchUpgrade', upgrade: 'dispenser', tier: 4, parents: ['bench_chest', 'pistol'], icon: '📦', title: 'Dispenser de mesa', desc: 'Instalá en tu mesa: produce balas del almacén.' },
+    { id: 'dispenser', recipe: 'dispenser', tier: 4, parents: ['bench', 'pickaxe'], icon: '🏭', title: 'Dispenser del mundo', desc: 'Fabricá y colocá un dispenser suelto (E · Tomar 10).' }
   ];
 
   var TECH_COLUMNS = ['Básicos', 'Herramientas', 'Base', 'Combate', 'Expedición'];
@@ -141,7 +141,7 @@
   function techNodeIsSoon(node) {
     if (!node) return true;
     if (node.status === 'soon') return true;
-    if (node.kind === 'benchUpgrade') return true; // upgrades aún no cableados a mesa ficha
+    if (node.kind === 'benchUpgrade') return false;
     if (node.recipe && !recipeById(node.recipe)) return true;
     return false;
   }
@@ -183,17 +183,35 @@
       }
       owned = techNodeOwned(node);
       ready = techNodeReady(node);
+      if (node.kind === 'benchUpgrade') {
+        var ucost = (typeof BENCH_UPGRADE_COSTS !== 'undefined' && BENCH_UPGRADE_COSTS[node.upgrade]) || {};
+        var bag = getPlayerInv();
+        affordable = !!bag && Object.keys(ucost).every(function (k) {
+          var have = (typeof bag.getResourceCount === 'function') ? bag.getResourceCount(k) : ((bag.resources && bag.resources[k]) || 0);
+          return have >= ucost[k];
+        });
+        if (owned) reason = 'Instalado';
+        else if (!ready) reason = 'Bloqueado';
+        else if (!affordable) reason = 'Faltan materiales';
+        else reason = 'Clic o E en mesa para instalar';
+        cls = owned ? 'done' : (!ready ? 'locked' : (affordable ? 'ready' : 'open'));
+        return { owned: owned, ready: ready, affordable: affordable, reason: reason, cls: cls };
+      }
       var r = recipeById(node.recipe);
       if (r) {
         var st = recipeStatus(r);
         affordable = st.ok;
+        var noPair = !r.pair || !r.pair.length;
         if (!ready) reason = 'Bloqueado';
-        else if (r.station === 'bench') reason = 'En la mesa (E)';
-        else if (owned && r.kind === 'tool') reason = 'Listo';
+        else if (owned && (r.kind === 'tool' || r.kind === 'upgrade')) reason = 'Listo';
         else if (!affordable) reason = 'Faltan materiales';
+        else if (noPair || r.kind === 'upgrade' || r.kind === 'prop') reason = 'Clic para fabricar';
+        else if (r.station === 'bench') reason = 'En la mesa (E) · gesto bandeja';
         else reason = 'Craftear (Q / pausa)';
+        cls = owned ? 'done' : (!ready ? 'locked' : (affordable || (r.station === 'bench' && !noPair) ? 'ready' : 'open'));
+      } else {
+        cls = owned ? 'done' : (!ready ? 'locked' : 'open');
       }
-      cls = owned ? 'done' : (!ready ? 'locked' : (affordable || r.station === 'bench' ? 'ready' : 'open'));
     } catch (e) {
       reason = 'Error';
       cls = 'locked';
@@ -262,22 +280,32 @@
           sub = 'Próximamente';
           mark = '…';
         } else {
-          var r = recipeById(node.recipe);
-          if (r) {
-            var costTxt = Object.keys(r.cost || {}).map(function (k) {
-              return ((typeof resIcon === 'function') ? resIcon(k) : k) + r.cost[k];
+          if (node.kind === 'benchUpgrade') {
+            var ucost = (typeof BENCH_UPGRADE_COSTS !== 'undefined' && BENCH_UPGRADE_COSTS[node.upgrade]) || {};
+            var costTxtU = Object.keys(ucost).map(function (k) {
+              return ((typeof resIcon === 'function') ? resIcon(k) : k) + ucost[k];
             }).join(' ');
-            sub = costTxt + (r.station === 'bench' ? ' · 🛠 mesa' : ' · ✋ mano');
-            if (r.pair && r.pair.length) {
-              sub += ' · gesto ' + r.pair.map(function (k) {
-                return (typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[k]) ? RESOURCE_ES[k] : k;
-              }).join('+');
+            if (st.owned) { sub = 'Instalado'; mark = '✓'; }
+            else if (!st.ready) { sub = 'Bloqueado'; mark = '🔒'; }
+            else { sub = (costTxtU || 'Mejora') + ' · E en mesa'; mark = '▶'; }
+          } else {
+            var r = recipeById(node.recipe);
+            if (r) {
+              var costTxt = Object.keys(r.cost || {}).map(function (k) {
+                return ((typeof resIcon === 'function') ? resIcon(k) : k) + r.cost[k];
+              }).join(' ');
+              sub = costTxt + (r.station === 'bench' ? ' · 🛠 mesa' : ' · ✋ mano');
+              if (r.pair && r.pair.length) {
+                sub += ' · gesto ' + r.pair.map(function (k) {
+                  return (typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[k]) ? RESOURCE_ES[k] : k;
+                }).join('+');
+              }
+              if (st.owned && (r.kind === 'tool' || r.kind === 'upgrade')) { sub = 'Completado'; mark = '✓'; }
+              else if (!st.ready) mark = '🔒';
+              else if (r.kind === 'prop') mark = st.affordable ? '▶' : '·';
+              else if (r.station === 'bench' && r.pair) mark = '🛠';
+              else mark = st.affordable ? '▶' : '·';
             }
-            if (st.owned && (r.kind === 'tool' || r.kind === 'upgrade')) { sub = 'Completado'; mark = '✓'; }
-            else if (!st.ready) mark = '🔒';
-            else if (r.kind === 'prop') mark = st.affordable ? '▶' : '·';
-            else if (r.station === 'bench' && r.pair) mark = '🛠';
-            else mark = st.affordable ? '▶' : '·';
           }
         }
         var subEl = btn.querySelector('.tech-sub');
@@ -355,7 +383,33 @@
         return;
       }
       if (node.kind === 'benchUpgrade') {
-        setTechStatus('Mejora de mesa aún no portada — usá cofre/dispenser del mundo');
+        var wb = (typeof currentBench !== 'undefined' && currentBench) ? currentBench : null;
+        if (!wb && typeof nearestWorkbench === 'function') {
+          try {
+            var near = nearestWorkbench();
+            wb = near && near.wb;
+          } catch (e) {}
+        }
+        if (!wb || wb.hp <= 0) {
+          setTechStatus('Acercate a tu mesa y abrila con E para instalar la mejora');
+          return;
+        }
+        if (typeof installBenchUpgrade !== 'function') {
+          setTechStatus('Mejoras de mesa no disponibles');
+          return;
+        }
+        var cost = (typeof BENCH_UPGRADE_COSTS !== 'undefined' && BENCH_UPGRADE_COSTS[node.upgrade]) || {};
+        var bag = getPlayerInv();
+        var missing = Object.keys(cost).filter(function (k) {
+          var have = bag && (typeof bag.getResourceCount === 'function' ? bag.getResourceCount(k) : (bag.resources[k] || 0));
+          return have < cost[k];
+        });
+        if (missing.length) {
+          setTechStatus('Te faltan materiales para ' + node.title);
+          return;
+        }
+        installBenchUpgrade(wb, node.upgrade);
+        refreshTechTreeState();
         return;
       }
       var r = recipeById(node.recipe);

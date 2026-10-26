@@ -19,7 +19,7 @@ function isInAnyClaim(pos) {
   for (const wb of workbenches) {
     if (!wb || wb.hp <= 0) continue;
     const dx = pos.x - wb.pos.x, dz = pos.z - wb.pos.z;
-    const r = wb.claimRadius || CLAIM_RADIUS;
+    const r = (wb.claimRadius || CLAIM_RADIUS) + 0.5; // misma tolerancia que linkedChestsFor
     if (dx * dx + dz * dz <= r * r) return true;
   }
   return false;
@@ -85,9 +85,16 @@ function placeWorkbench(pos) {
 
   g.position.copy(pos);
   g.position.y = Math.max(0.05, pos.y);
-  const wb = { isWorkbench: true, name: 'Mesa de trabajo', mesh: g, pos: g.position.clone(), hp: 300, maxHp: 300, height: 1.6, bar: null, solids: [], ring: null, claimRadius: CLAIM_RADIUS };
+  const wb = {
+    isWorkbench: true, name: 'Mesa de trabajo', mesh: g, pos: g.position.clone(),
+    hp: 300, maxHp: 300, height: 1.6, bar: null, solids: [], ring: null, claimRadius: CLAIM_RADIUS,
+    upgrades: { chest: false, dispenser: false },
+    storage: null, storageCapacity: 12, dispenserStock: 0, dispenserCap: 240,
+    chestMesh: null, dispenserMesh: null
+  };
   g.userData.isWorkbench = true;
   g.userData.benchRef = wb;
+  try { if (typeof ensureBenchUpgradeFields === 'function') ensureBenchUpgradeFields(wb); } catch (e) {}
 
   // Anillo que marca la zona de construcción reclamada
   const ring = buildClaimRing(CLAIM_RADIUS);
@@ -165,6 +172,7 @@ function refreshBenchModal() {
   try { if (typeof refreshBenchModalLists === 'function') refreshBenchModalLists(); } catch (e) {}
   try { if (typeof ensureBenchCraftUI === 'function') ensureBenchCraftUI(); } catch (e) {}
   try { if (typeof updateBenchTrayUI === 'function') updateBenchTrayUI(); } catch (e) {}
+  try { if (typeof renderBenchBaseUI === 'function') renderBenchBaseUI(wb); } catch (e) {}
 }
 function repairBench() {
   const wb = (typeof currentBench !== 'undefined') ? currentBench : null;
@@ -172,18 +180,26 @@ function repairBench() {
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (!inv) return;
   if (wb.hp >= wb.maxHp) { setCraftStatus('La mesa ya está entera'); return; }
-  if ((inv.getResourceCount ? inv.getResourceCount('wood') : (inv.resources.wood || 0)) < 3 ||
-      (inv.getResourceCount ? inv.getResourceCount('stone') : (inv.resources.stone || 0)) < 2) {
+  const needWood = 3, needStone = 2;
+  const haveWood = inv.getResourceCount ? inv.getResourceCount('wood') : (inv.resources.wood || 0);
+  const haveStone = inv.getResourceCount ? inv.getResourceCount('stone') : (inv.resources.stone || 0);
+  if (haveWood < needWood || haveStone < needStone) {
       setCraftStatus('Te faltan materiales (3 madera + 2 piedra)');
       return;
   }
   if (typeof inv.spendResource === 'function') {
-      if (!inv.spendResource('wood', 3) || !inv.spendResource('stone', 2)) {
+      if (!inv.spendResource('wood', needWood)) {
+          setCraftStatus('Te faltan materiales (3 madera + 2 piedra)');
+          return;
+      }
+      if (!inv.spendResource('stone', needStone)) {
+          if (typeof inv.addResource === 'function') inv.addResource('wood', needWood);
+          else inv.resources.wood = (inv.resources.wood || 0) + needWood;
           setCraftStatus('Te faltan materiales (3 madera + 2 piedra)');
           return;
       }
   } else {
-      inv.resources.wood -= 3; inv.resources.stone -= 2;
+      inv.resources.wood -= needWood; inv.resources.stone -= needStone;
   }
   wb.hp = Math.min(wb.maxHp, wb.hp + 100);
   updateBenchBar(wb);

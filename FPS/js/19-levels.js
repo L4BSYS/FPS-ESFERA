@@ -290,6 +290,13 @@ function resetPlayerInventory() {
   inv.quickSlots = [null, null, null, null, null];
   inv.ammo = { pistol: 0, rifle: 0, shotgun: 0, energy: 0 };
   inv.resources = { wood: 0, stone: 0, metal: 0, keys: [] };
+  inv.craftedFlags = {};
+  inv.bagTier = 0;
+  if (typeof INV_BAG_TIERS !== 'undefined' && INV_BAG_TIERS[0]) {
+      inv.maxSlots = INV_BAG_TIERS[0].slots;
+  } else {
+      inv.maxSlots = 8;
+  }
   inv._resourceStacksReady = true; // vacío ya sincronizado
   try { player.heldItem = null; } catch (e) {}
   try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
@@ -301,6 +308,7 @@ function resetPlayerInventory() {
   try { inv.updateWeaponHUD(); } catch (e) {}
   try { updateResourceHUD(); } catch (e) {}
   try { updateActionButton(); } catch (e) {}
+  try { if (typeof refreshTechTreeState === 'function') refreshTechTreeState(); } catch (e) {}
 }
 
 function updateLevelHUD(def) {

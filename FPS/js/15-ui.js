@@ -45,9 +45,17 @@ function recipeIcon(r) {
   if (r.id === 'bench') return '🛠️ ';
   if (r.id === 'ammo') return '📦 ';
   if (r.id === 'dressing') return '🩹 ';
+  if (r.id === 'backpack1' || r.id === 'backpack2' || r.id === 'backpack3') return '🎒 ';
+  if (r.id === 'chest') return '🧰 ';
+  if (r.id === 'dispenser') return '🏭 ';
+  if (r.kind === 'upgrade') return '🎒 ';
+  if (r.kind === 'prop') return '🏗️ ';
   return '🧰 ';
 }
-// station: 'hand' | 'bench'. Libro: craftOnClick false (solo highlight); craft = bandeja.
+function recipeHasGesturePair(r) {
+  return !!(r && Array.isArray(r.pair) && r.pair.length);
+}
+// station: 'hand' | 'bench'. Con gesto: libro solo highlight. Sin gesto (upgrade/prop): click craftéa.
 // opts: { onSelect(idx, recipe), craftOnClick=false, unlockedOnly=false }
 function renderCraftButtons(container, station, opts) {
   if (!container || container.dataset.rendered) return;
@@ -56,7 +64,11 @@ function renderCraftButtons(container, station, opts) {
   const unlockedOnly = !!(opts && opts.unlockedOnly);
   CRAFT_RECIPES.forEach((r, i) => {
       if (station && r.station !== station) return;
-      if (unlockedOnly && typeof isRecipeUnlocked === 'function' && !isRecipeUnlocked(r.id)) return;
+      const noPair = !recipeHasGesturePair(r);
+      if (unlockedOnly && typeof isRecipeUnlocked === 'function' && !isRecipeUnlocked(r.id)) {
+          // Sin gesto: visibles en el libro aunque aún no estén "aprendidas"
+          if (!noPair) return;
+      }
       const b = document.createElement('button');
       b.className = 'rg-btn rg-btn-small rg-craft';
       b.dataset.idx = i;
@@ -69,7 +81,9 @@ function renderCraftButtons(container, station, opts) {
           '<span class="rg-craft-lock" style="display:none;"></span>';
       b.addEventListener('click', () => {
           try { if (opts && typeof opts.onSelect === 'function') opts.onSelect(i, r); } catch (e) {}
-          if (craftOnClick) craftItem(i);
+          if (craftOnClick || noPair) {
+              try { craftItem(i); } catch (e) {}
+          }
       });
       container.appendChild(b);
   });
@@ -616,9 +630,11 @@ async function loadSceneFromFirestore() {
 }
 function applySceneData(d) {
   try { if (typeof trialStop === 'function') trialStop(true); } catch (e) {}
+  try { if (typeof clearWorldContainers === 'function') clearWorldContainers(); } catch (e) {}
   const n = deserializeBlocks(d.blocks || []);
   const m = deserializeProps(d.items || [], d.nodes || [], d.benches || [], {
-    stairs: d.stairs, doors: d.doors, spawns: d.spawns, statics: d.statics, totems: d.totems, zones: d.zones
+    stairs: d.stairs, doors: d.doors, spawns: d.spawns, statics: d.statics, totems: d.totems, zones: d.zones,
+    containers: d.containers
   });
   return { n, m };
 }

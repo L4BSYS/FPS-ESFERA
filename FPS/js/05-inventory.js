@@ -185,7 +185,7 @@ const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
               left -= take;
               added += take;
           }
-          while (left > 0 && this.items.length < this.maxSlots) {
+          while (left > 0 && this.items.length < this.capacity) {
               const take = Math.min(left, cap);
               this.items.push({
                   id: def.id || key,
@@ -230,7 +230,7 @@ const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
               }
           }
           overflow.forEach((stack) => {
-              if (this.items.length < this.maxSlots) this.items.push(stack);
+              if (this.items.length < this.capacity) this.items.push(stack);
               else this._addResourceStackOnly(stack.resourceKey, stack.quantity);
           });
           this.syncResourceCounters();
@@ -287,7 +287,7 @@ const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
               left -= take;
               added += take;
           }
-          while (left > 0 && this.items.length < this.maxSlots) {
+          while (left > 0 && this.items.length < this.capacity) {
               const take = Math.min(left, maxStack);
               this.items.push({
                   id: id,
@@ -343,7 +343,7 @@ const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
               return true;
           }
 
-          if (this.items.length >= this.maxSlots) {
+          if (this.items.length >= this.capacity) {
               console.log("¡Mochila llena!");
               return false;
           }
@@ -499,17 +499,18 @@ const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
           return this.removeItem(item, 1);
       }
       
-      // Balas: ficha en mochila alimenta el pool (ammo{} es mirror)
+      // Balas: ficha en mochila alimenta el pool (ammo{} es mirror).
+      // Devuelve cantidad agregada (0 si no entró nada).
       addAmmo(type, amount) {
-          if (this.ammo[type] === undefined) return false;
+          if (this.ammo[type] === undefined) return 0;
           this.ensureResourceStacksMigrated();
           const room = this.getMaxAmmo(type) - (this.ammo[type] || 0);
-          if (room <= 0) return false;
+          if (room <= 0) return 0;
           const take = Math.min(amount || 1, room);
           const added = this._addAmmoStackOnly(type, take);
           this.syncAmmoFromStacks();
           this.updateInventoryUI();
-          return added > 0;
+          return added;
       }
       
       useAmmo(type, amount) {

@@ -194,6 +194,7 @@ function clearWorld() {
       });
       placedStatics.length = 0;
       try { if (typeof clearWorldZones === 'function') clearWorldZones(); } catch (e) {}
+      try { if (typeof clearWorldContainers === 'function') clearWorldContainers(); } catch (e) {}
       [...npcs].forEach(n => { try { n.die(); } catch (e) {} });
       updateSpatialPartition();
       try { if (typeof grantCreatorHammer === 'function') grantCreatorHammer(); } catch (e) {}
@@ -696,13 +697,33 @@ function snapshotScene() {
     x: Math.round(w.pos.x * 100) / 100,
     y: Math.round(w.pos.y * 100) / 100,
     z: Math.round(w.pos.z * 100) / 100,
-    hp: Math.round(w.hp)
+    hp: Math.round(w.hp),
+    bench: (typeof serializedBenchUpgrades === 'function') ? serializedBenchUpgrades(w) : null
   }));
+  const containerData = (typeof worldContainers !== 'undefined' ? worldContainers : []).map(function (c) {
+    if (!c || !c.pos) return null;
+    return {
+      mode: c.mode === 'dispenser' ? 'dispenser' : 'storage',
+      x: Math.round(c.pos.x * 100) / 100,
+      y: Math.round(c.pos.y * 100) / 100,
+      z: Math.round(c.pos.z * 100) / 100,
+      rotY: c.mesh ? (Math.round((c.mesh.rotation.y || 0) * 100) / 100) : 0,
+      label: c.label || null,
+      slots: c.mode === 'storage' && Array.isArray(c.slots)
+        ? c.slots.map(function (s) { return s ? Object.assign({}, s) : null; })
+        : null,
+      stock: c.stock ? Object.assign({}, c.stock) : null,
+      stockMax: c.stockMax || 0,
+      takeAmount: c.takeAmount || 10,
+      cooldown: c.cooldown || 1.25
+    };
+  }).filter(Boolean);
   return {
     blocks: serializeBlocks(),
     items: serializeProps(worldItems, false),
     nodes: serializeProps(resourceNodes, true),
     benches: benchData,
+    containers: containerData,
     stairs: placedStairs.map(gr => ({
       x: Math.round(gr.position.x * 100) / 100,
       y: Math.round(gr.position.y * 100) / 100,
@@ -762,9 +783,33 @@ function deserializeProps(items, nodes, benches, extras) {
       if (typeof d.x !== 'number' || typeof d.y !== 'number' || typeof d.z !== 'number') return;
       const wb = placeWorkbench(new THREE.Vector3(d.x, d.y, d.z));
       if (wb && typeof d.hp === 'number') { wb.hp = Math.max(1, Math.min(wb.maxHp, d.hp)); updateBenchBar(wb); }
+      if (wb && d.bench && typeof applyBenchUpgradeData === 'function') {
+          try { applyBenchUpgradeData(wb, d.bench); } catch (e) {}
+      }
+  });
+  try { if (typeof clearWorldContainers === 'function') clearWorldContainers(); } catch (e) {}
+  const ex = extras || {};
+  (Array.isArray(ex.containers) ? ex.containers : []).slice(0, 40).forEach(function (d) {
+      if (!d || typeof d.x !== 'number' || typeof d.z !== 'number') return;
+      if (typeof placeWorldContainer !== 'function') return;
+      try {
+          placeWorldContainer({
+              mode: d.mode === 'dispenser' ? 'dispenser' : 'storage',
+              x: d.x,
+              y: (typeof d.y === 'number') ? d.y : 0,
+              z: d.z,
+              rotY: d.rotY || 0,
+              label: d.label || undefined,
+              slots: 12,
+              seed: Array.isArray(d.slots) ? d.slots : undefined,
+              stock: d.stock || undefined,
+              stockMax: d.stockMax,
+              takeAmount: d.takeAmount,
+              cooldown: d.cooldown
+          });
+      } catch (e) {}
   });
   clearStructures();
-  const ex = extras || {};
   (Array.isArray(ex.stairs) ? ex.stairs : []).slice(0, 30).forEach(d => {
       if (typeof d.x !== 'number') return;
       placeStairs(new THREE.Vector3(d.x, (typeof d.y === 'number' ? d.y : 0.5), d.z), d.rot || 0);

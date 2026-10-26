@@ -2132,3 +2132,41 @@ input[type="range"] {
   .rg-tech-wrap { gap: 18px; min-height: 240px; }
   .rg-tech-col { min-width: 156px; }
 }
+
+/* ============================================================
+   MESA: mejoras + almacén + dispenser
+   ============================================================ */
+.bench-upgrades, .bench-store, .bench-disp { margin: 6px 0 10px; }
+.bench-upg-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0;
+}
+.bench-cost { font-size: 16px; color: var(--rg-dim); }
+.bench-ok { font-size: 17px; color: #7dff9b; }
+.bench-store-grid { display: flex; flex-direction: column; gap: 5px; }
+.bench-store-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid var(--rg-line);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #0d110d;
+}
+.bench-store-name { min-width: 100px; font-size: 18px; }
+.bench-store-qty { font-family: 'Press Start 2P', monospace; font-size: 10px; color: var(--rg-green); min-width: 38px; }
+.bench-store-mine { font-size: 15px; color: var(--rg-dim); flex: 1; }
+.bench-store-btns { display: flex; gap: 3px; flex-wrap: wrap; }
+.bench-store-btns .rg-btn { margin: 0; padding: 4px 6px; font-size: 7px; width: auto; }
+.bench-disp-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.bench-disp-row span { font-size: 19px; }
+.rg-cinema-card--pause .bench-store-btns .rg-btn,
+.rg-bench-card .bench-store-btns .rg-btn,
+.rg-bench-card .bench-upg-row .rg-btn,
+.rg-bench-card .bench-disp-row .rg-btn {
+  width: auto;
+}

@@ -30,8 +30,18 @@ const CRAFT_RECIPES = [
   { id: 'ammo', label: 'Balas de pistola x12', name: 'Balas x12', station: 'bench', kind: 'ammo', requires: null,
     pair: ['wood', 'metal'], cost: { metal: 3, wood: 2 },
     run: (inv) => {
-      if (typeof inv.addAmmo === 'function') inv.addAmmo('pistol', 12);
-      else { inv.ammo.pistol = (inv.ammo.pistol || 0) + 12; try { inv.updateAmmoUI(); } catch (e) {} }
+      const want = 12;
+      let added = 0;
+      if (typeof inv.addAmmo === 'function') added = inv.addAmmo('pistol', want) || 0;
+      else {
+        inv.ammo.pistol = (inv.ammo.pistol || 0) + want;
+        added = want;
+        try { inv.updateAmmoUI(); } catch (e) {}
+      }
+      if (added <= 0) throw new Error('Mochila llena: no entra munición');
+      if (added < want) {
+        try { setCraftStatus('Solo entraron ' + added + ' de ' + want + ' balas (tope de reserva)'); } catch (e) {}
+      }
     } },
   { id: 'dressing', label: 'Venda (+30 vida)', name: 'Venda', station: 'bench', kind: 'item', defKey: 'bandage', requires: null,
     pair: ['wood', 'stone'], cost: { wood: 3, stone: 1 } },
@@ -46,10 +56,10 @@ const CRAFT_RECIPES = [
     cost: { wood: 16, metal: 10 },
     run: (inv) => { if (!inv.upgradeBackpack(3)) throw new Error('Ya tenés esa mochila'); } },
   // --- Cofre / dispenser colocables (dentro del claim de la mesa) ---
-  { id: 'chest', label: 'Cofre (colocar en tu base)', name: 'Cofre', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
+  { id: 'chest', label: 'Cofre (colocar en tu base)', name: 'Cofre del mundo', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
     cost: { wood: 10, stone: 6 },
     run: () => { beginContainerPlacement('chest', { wood: 10, stone: 6 }); } },
-  { id: 'dispenser', label: 'Dispenser de munición (colocar)', name: 'Dispenser', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
+  { id: 'dispenser', label: 'Dispenser suelto (colocar en base)', name: 'Dispenser del mundo', station: 'bench', kind: 'prop', requires: 'pickaxe', repeatable: true,
     cost: { metal: 10, stone: 6, wood: 4 },
     run: () => { beginContainerPlacement('dispenser', { metal: 10, stone: 6, wood: 4 }); } },
 ];
@@ -141,7 +151,17 @@ function craftItem(idx, opts) {
           } catch (e) {}
           try { player.setTool(def.toolType); } catch (e) {}
           if (r.ammoBonus) for (const a in r.ammoBonus) {
-              try { inv.addAmmo(a, r.ammoBonus[a]); } catch (e) {
+              try {
+                  const want = r.ammoBonus[a];
+                  const added = (typeof inv.addAmmo === 'function') ? (inv.addAmmo(a, want) || 0) : want;
+                  if (typeof inv.addAmmo !== 'function') {
+                      inv.ammo[a] = (inv.ammo[a] || 0) + want;
+                      try { inv.updateAmmoUI(); } catch (e2) {}
+                  }
+                  if (added < want) {
+                      try { setCraftStatus('Pistola lista · solo +' + added + ' balas (reserva casi llena)'); } catch (e2) {}
+                  }
+              } catch (e) {
                   inv.ammo[a] = (inv.ammo[a] || 0) + r.ammoBonus[a];
                   try { inv.updateAmmoUI(); } catch (e2) {}
               }
@@ -271,7 +291,10 @@ function refreshCraftUI() {
       const ownedTool = (r.kind === 'tool' && ITEM_DEFINITIONS[r.defKey])
           ? inv && (typeof inv.ownsToolType === 'function'
               ? inv.ownsToolType(ITEM_DEFINITIONS[r.defKey].toolType)
-              : inv.items.some(it => it.toolType === ITEM_DEFINITIONS[r.defKey].toolType)) : false;
+              : inv.items.some(it => it.toolType === ITEM_DEFINITIONS[r.defKey].toolType))
+          : (r.kind === 'upgrade' && r.bagTier != null && inv)
+              ? ((inv.bagTier | 0) >= r.bagTier)
+              : false;
       const hasReq = !r.requires || (inv && (typeof inv.ownsToolType === 'function'
           ? inv.ownsToolType(r.requires)
           : inv.items.some(it => it.toolType === r.requires)));

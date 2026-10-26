@@ -405,14 +405,14 @@ function refreshContainerModal() {
   const dispEl = document.getElementById('containerDispenser');
   const card = document.querySelector('#containerModal .rg-chest-card');
   if (!ref) return;
-  if (title) title.textContent = (ref.mode === 'dispenser' ? '📦 ' : '🧰 ') + (ref.label || (ref.mode === 'dispenser' ? 'Dispenser' : 'Cofre'));
+  if (title) title.textContent = (ref.mode === 'dispenser' ? '📦 ' : '🧰 ') + (ref.label || (ref.mode === 'dispenser' ? 'Dispenser del mundo' : 'Cofre'));
   if (card) card.classList.toggle('is-dispenser', ref.mode === 'dispenser');
 
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   try { if (inv && typeof inv.ensureResourceStacksMigrated === 'function') inv.ensureResourceStacksMigrated(); } catch (e) {}
 
   if (ref.mode === 'dispenser') {
-    if (hint) hint.textContent = 'Tomá de a ' + (ref.takeAmount || 10) + ' · mirá tu mochila a la izquierda · stock limitado';
+    if (hint) hint.textContent = 'Dispenser suelto del mundo · Tomar ' + (ref.takeAmount || 10) + ' · distinto del módulo de mesa (Producir/Tomar 12)';
     if (storageEl) storageEl.style.display = 'none';
     if (dispEl) dispEl.style.display = '';
     if (typeof renderPlayerItemsInto === 'function') {

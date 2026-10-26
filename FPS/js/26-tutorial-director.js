@@ -514,6 +514,8 @@ function directorPickupTutorialBag(mesh) {
   DIRECTOR.step3Bag = null;
   // La mochila física es una mejora real: suma espacios al inventario (Sebastian).
   try { if (player && player.inventory && typeof player.inventory.upgradeBackpack === 'function') player.inventory.upgradeBackpack(1); } catch (e) {}
+  try { if (typeof unlockRecipe === 'function') unlockRecipe('backpack1'); } catch (e) {}
+  try { if (typeof refreshTechTreeState === 'function') refreshTechTreeState(); } catch (e) {}
   try { playSound('pickup'); } catch (e) {}
   try { lvToast('Mochila de lona: +6 espacios · Q para craft'); } catch (e) {}
   try { showMessage('Mochila lista — Q para craft y distribuir cosas'); } catch (e) {}
