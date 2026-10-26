@@ -199,16 +199,29 @@
       creatorDiv.appendChild(clearBtn);
       pauseBody.appendChild(creatorDiv);
 
-      // --- Crafting section (any mode, uses harvested resources) ---
+      // --- Crafting / tech tree (ficha: mano Q · mesa E) ---
       const craftDiv = document.createElement('div');
-      craftDiv.className = 'rg-section';
+      craftDiv.className = 'rg-section rg-tech-section';
 
       const craftTitle = document.createElement('h4');
       craftTitle.className = 'rg-h';
       craftTitle.textContent = 'Craftear';
       craftDiv.appendChild(craftTitle);
-      renderCraftButtons(craftDiv, 'hand');
+      const craftHint = document.createElement('div');
+      craftHint.className = 'rg-hint';
+      craftHint.style.marginBottom = '6px';
+      craftHint.textContent = 'Árbol de progreso. Mano: Q (bandeja A+B) · Mesa: E. Clic en un nodo listo para craft a mano; lo de mesa se hace en la mesa.';
+      craftDiv.appendChild(craftHint);
+      const techWrap = document.createElement('div');
+      techWrap.id = 'techTree';
+      techWrap.className = 'rg-tech-wrap';
+      craftDiv.appendChild(techWrap);
+      const techFoot = document.createElement('div');
+      techFoot.id = 'techFoot';
+      techFoot.className = 'rg-status';
+      craftDiv.appendChild(techFoot);
       pauseBody.appendChild(craftDiv);
+      try { if (typeof renderTechTree === 'function') renderTechTree(); } catch (e) {}
 
       // --- Online (multijugador: presencia + chat, por mundo) ---
       const onlineDiv = document.createElement('div');

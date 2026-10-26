@@ -442,6 +442,15 @@ function showPauseTab(name) {
   if (name === 'build') refreshCreatorHint();
   if (name === 'play' && typeof renderLevelsPanel === 'function') { try { renderLevelsPanel(); } catch (e) {} }
   if (name === 'account' && typeof refreshOnlineTab === 'function') { try { refreshOnlineTab(); } catch (e) {} }
+  if (name === 'craft') {
+    try {
+      if (typeof renderTechTree === 'function') {
+        const wrap = document.getElementById('techTree');
+        if (wrap && !wrap.querySelector('.tech-node')) renderTechTree();
+        else if (typeof refreshTechTreeState === 'function') refreshTechTreeState();
+      }
+    } catch (e) {}
+  }
   if (pauseUI.tabs) for (const k in pauseUI.tabs) {
     if (pauseUI.tabs[k]) pauseUI.tabs[k].classList.toggle('on', k === name);
   }
