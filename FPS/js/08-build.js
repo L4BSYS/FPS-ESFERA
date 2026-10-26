@@ -192,7 +192,10 @@
         metal: 5
       }[currentBlockType];
 
-      if ((typeof creatorMode === 'undefined' || !creatorMode) && player.inventory.resources[currentBlockType] < cost) {
+      if ((typeof creatorMode === 'undefined' || !creatorMode) &&
+          ((typeof player.inventory.getResourceCount === 'function')
+              ? player.inventory.getResourceCount(currentBlockType)
+              : player.inventory.resources[currentBlockType]) < cost) {
         showPlacementMessage(`¡Te falta ${currentBlockType}! Necesitás ${cost}`);
         return;
       }
@@ -241,7 +244,10 @@
       blockGrid.set(getGridKey(blockPos.x, blockPos.y, blockPos.z), block);
       
       // Proceed block cost with placement
-      if (typeof creatorMode === 'undefined' || !creatorMode) player.inventory.resources[currentBlockType] -= cost;
+      if (typeof creatorMode === 'undefined' || !creatorMode) {
+          if (typeof player.inventory.spendResource === 'function') player.inventory.spendResource(currentBlockType, cost);
+          else player.inventory.resources[currentBlockType] -= cost;
+      }
       updateResourceHUD();
 
       showPlacementMessage(`Bloque puesto en ${blockPos.x.toFixed(1)}, ${blockPos.y.toFixed(1)}, ${blockPos.z.toFixed(1)}`);
@@ -797,7 +803,9 @@
       bar.innerHTML = Object.entries(BLOCK_MATERIALS).map(([type, data]) => {
           const isActive = currentBlockType === type;
           const color = '#' + data.material.color.getHexString();
-          const count = player.inventory.resources[type] || 0;
+          const count = (typeof player.inventory.getResourceCount === 'function')
+              ? player.inventory.getResourceCount(type)
+              : (player.inventory.resources[type] || 0);
           const empty = count <= 0;
           return `
               <button class="build-mat ${isActive ? 'active' : ''} ${empty ? 'empty' : ''}"

@@ -1,733 +1,789 @@
 // js/05-inventory.js (part 5/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
-// ==== Inventory System: mochila por slots + cinturón (1-5) ====
-//
-// La mochila y el cinturón son almacenamiento real: cada recurso, munición,
-// herramienta o consumible ocupa una posición. `resources` y `ammo` siguen
-// existiendo como "vistas" (getters/setters) sobre esos slots para que el resto
-// del juego siga funcionando igual (inv.resources.wood, inv.ammo.pistol, etc.).
-const INV_RESOURCE_KEYS = ['wood', 'stone', 'metal'];
-const INV_AMMO_TYPES = ['pistol', 'rifle', 'shotgun', 'energy'];
-const INV_RESOURCE_STACK = 60;
-const INV_AMMO_STACK = { pistol: 60, rifle: 120, shotgun: 30, energy: 60 };
-const INV_RESOURCE_NAMES = { wood: 'Madera', stone: 'Piedra', metal: 'Metal' };
-const INV_AMMO_NAMES = { pistol: 'Pistola', rifle: 'Rifle', shotgun: 'Escopeta', energy: 'Energía' };
-const INV_BELT_SLOTS = 5;
-// La mochila arranca con "bolsillos" y cada mejora suma espacios.
-const INV_BAG_TIERS = [
-    { tier: 0, name: 'Bolsillos', slots: 8, desc: 'Lo que llevás encima desde el principio.' },
-    { tier: 1, name: 'Mochila de lona', slots: 14, desc: 'Primera mochila: +6 espacios.' },
-    { tier: 2, name: 'Mochila reforzada', slots: 20, desc: 'Costuras y remaches: +6 espacios.' },
-    { tier: 3, name: 'Mochila de explorador', slots: 26, desc: 'Equipo de expedición: +6 espacios.' }
-];
-const INV_MAX_BAG_SLOTS = INV_BAG_TIERS[INV_BAG_TIERS.length - 1].slots;
+// ==== Inventory System ====
+  class Inventory {
+      constructor(player, maxSlots = 20) {
+          this.player = player;
+          this.maxSlots = maxSlots;
+          this.items = [];
+          this.equippedItem = null;
+          this.selectedSlot = 0;
+          this._resourceStacksReady = false;
+          
+          // Initialize ammo types from ITEM_DEFINITIONS
+          this.ammo = {
+              pistol: 30,    // Starting pistol ammo (se materializa en ficha al migrar)
+              rifle: 0,
+              shotgun: 0,
+              energy: 0
+          };
+          
+          // Mirror de stacks de recurso (legacy readers: HUD, build, craft)
+          this.resources = {
+            wood: 0,
+            stone: 0,
+            metal: 0,
+            keys: []
+          };
+          
+          // Cinturón 1-5: posee la herramienta (no es atajo a mochila)
+          this.quickSlots = [null, null, null, null, null];
+      }
 
-class Inventory {
-    constructor(player, maxSlots = INV_MAX_BAG_SLOTS) {
-        this.player = player;
-        this.bagTier = 0;
-        this.slots = new Array(maxSlots || INV_MAX_BAG_SLOTS).fill(null);
-        this.quickSlots = new Array(INV_BELT_SLOTS).fill(null);
-        this.equippedItem = null;
-        this.selectedSlot = 0;
-        this.craftedFlags = {};
-        this._keys = [];
-        this._installPools();
-        this.updateInventoryUI();
-    }
+      canPlaceOnBelt(item) {
+          if (!item) return false;
+          if (item.type === 'resource' || item.resourceKey) return false;
+          if (item.type === 'ammo') return false;
+          if (item.type === 'consumable' || item.healAmount > 0 || item.damageAmount > 0) return false;
+          if (item.id === 'bandage' || item.id === 'food' || item.id === 'toxin') return false;
+          return !!(item.toolType || item.type === 'weapon' || item.type === 'tool');
+      }
 
-    // ---------- Vistas compatibles: resources / ammo ----------
-    _installPools() {
-        const self = this;
-        this.resources = {
-            get keys() { return self._keys; },
-            set keys(v) { self._keys = Array.isArray(v) ? v : []; }
-        };
-        INV_RESOURCE_KEYS.forEach((k) => {
-            Object.defineProperty(this.resources, k, {
-                enumerable: true,
-                configurable: true,
-                get() { return self.countResource(k); },
-                set(v) { self.setResourceTotal(k, v); }
-            });
-        });
-        this.ammo = {};
-        INV_AMMO_TYPES.forEach((t) => {
-            Object.defineProperty(this.ammo, t, {
-                enumerable: true,
-                configurable: true,
-                get() { return self.countAmmo(t); },
-                set(v) { self.setAmmoTotal(t, v); }
-            });
-        });
-    }
+      ownsToolType(toolType) {
+          if (!toolType) return false;
+          if (this.items.some(i => i && i.toolType === toolType)) return true;
+          if (this.quickSlots.some(i => i && i.toolType === toolType)) return true;
+          return false;
+      }
 
-    // ---------- Helpers de slots ----------
-    _areaArr(area) {
-        return area === 'belt' ? this.quickSlots : this.slots;
-    }
-    _areaLimit(area) {
-        return area === 'belt' ? this.quickSlots.length : Math.min(this.capacity, this.slots.length);
-    }
-    _areaName(area) {
-        return area === 'belt' ? 'el cinturón' : 'la mochila';
-    }
-    get capacity() {
-        const t = INV_BAG_TIERS[Math.max(0, Math.min(INV_BAG_TIERS.length - 1, this.bagTier | 0))];
-        return t ? t.slots : INV_BAG_TIERS[0].slots;
-    }
-    get bagTierName() {
-        const t = INV_BAG_TIERS[Math.max(0, Math.min(INV_BAG_TIERS.length - 1, this.bagTier | 0))];
-        return t ? t.name : INV_BAG_TIERS[0].name;
-    }
-    get nextBagTier() {
-        return this.bagTier < INV_BAG_TIERS.length - 1 ? INV_BAG_TIERS[this.bagTier + 1] : null;
-    }
-    get usedBagSlots() {
-        let n = 0;
-        for (let i = 0; i < this.capacity; i++) if (this.slots[i]) n++;
-        return n;
-    }
-    get usedBeltSlots() {
-        let n = 0;
-        for (let i = 0; i < this.quickSlots.length; i++) if (this.quickSlots[i]) n++;
-        return n;
-    }
-    // Lista plana compatible con el código viejo (cinturón primero).
-    get items() {
-        const out = [];
-        for (let i = 0; i < this.quickSlots.length; i++) if (this.quickSlots[i]) out.push(this.quickSlots[i]);
-        for (let i = 0; i < this.capacity; i++) if (this.slots[i]) out.push(this.slots[i]);
-        return out;
-    }
-    findSlot(item) {
-        if (!item) return null;
-        for (let i = 0; i < this.quickSlots.length; i++) {
-            if (item === this.quickSlots[i]) return { area: 'belt', idx: i };
-        }
-        for (let i = 0; i < this.capacity; i++) {
-            if (item === this.slots[i]) return { area: 'bag', idx: i };
-        }
-        return null;
-    }
-    itemAt(area, idx) {
-        const arr = this._areaArr(area);
-        if (!arr || idx < 0 || idx >= this._areaLimit(area)) return null;
-        return arr[idx] || null;
-    }
-    firstEmpty(area) {
-        const arr = this._areaArr(area);
-        const lim = this._areaLimit(area);
-        for (let i = 0; i < lim; i++) if (!arr[i]) return i;
-        return -1;
-    }
-    _orderFor(proto) {
-        // Herramientas/armas al cinturón; recursos/municiones a la mochila.
-        const beltFirst = proto && (proto.type === 'tool' || proto.type === 'weapon');
-        return beltFirst ? ['belt', 'bag'] : ['bag', 'belt'];
-    }
-    _maxStack(item) {
-        if (!item) return 1;
-        if (typeof item.maxStack === 'number' && item.maxStack > 0) return item.maxStack;
-        if (item.type === 'ammo') return INV_AMMO_STACK[item.ammoType] || 60;
-        if (item.type === 'resource') return INV_RESOURCE_STACK;
-        return item.stackable ? 99 : 1;
-    }
-    _stackKey(item) {
-        if (!item) return '';
-        return [item.type || '', item.resourceKey || item.id || '', item.ammoType || ''].join('|');
-    }
-    _sameStack(a, b) {
-        return !!a && !!b && this._stackKey(a) === this._stackKey(b);
-    }
-    _addStacks(proto, qty, order) {
-        let left = Math.max(0, Math.floor(qty || 0));
-        if (left <= 0) return 0;
-        for (const area of order) {
-            if (left <= 0) break;
-            const arr = this._areaArr(area);
-            const lim = this._areaLimit(area);
-            for (let i = 0; i < lim && left > 0; i++) {
-                const s = arr[i];
-                if (!s || !this._sameStack(s, proto)) continue;
-                const max = this._maxStack(s);
-                if ((s.quantity || 0) >= max) continue;
-                const take = Math.min(max - (s.quantity || 0), left);
-                s.quantity = (s.quantity || 0) + take;
-                left -= take;
-            }
-            for (let i = 0; i < lim && left > 0; i++) {
-                if (arr[i]) continue;
-                const max = this._maxStack(proto);
-                const take = Math.min(max, left);
-                const copy = Object.assign({}, proto);
-                copy.quantity = take;
-                arr[i] = copy;
-                left -= take;
-            }
-        }
-        return left;
-    }
-    _addUnique(proto, order) {
-        for (const area of order) {
-            const idx = this.firstEmpty(area);
-            if (idx >= 0) {
-                const copy = Object.assign({}, proto);
-                copy.quantity = 1;
-                this._areaArr(area)[idx] = copy;
-                return true;
-            }
-        }
-        return false;
-    }
+      findItemEverywhere(pred) {
+          for (let i = 0; i < this.items.length; i++) {
+              if (pred(this.items[i], 'bag', i)) return { item: this.items[i], where: 'bag', index: i };
+          }
+          for (let i = 0; i < this.quickSlots.length; i++) {
+              const it = this.quickSlots[i];
+              if (it && pred(it, 'belt', i)) return { item: it, where: 'belt', index: i };
+          }
+          return null;
+      }
 
-    // ---------- Alta de objetos ----------
-    addItem(item) {
-        if (!item) return false;
-        if (item.type === 'ammo') {
-            const added = this.addAmmoAmount(item.ammoType, item.amount || item.quantity || 1);
-            return added > 0;
-        }
-        if (item.type === 'resource') {
-            const key = item.resourceKey || item.id;
-            const added = this.addResource(key, item.amount || item.quantity || 1);
-            return added > 0;
-        }
-        const qty = Math.max(1, Math.floor(item.quantity || 1));
-        let left = qty;
-        if (item.stackable) {
-            left = this._addStacks(Object.assign({}, item, { quantity: qty }), qty, this._orderFor(item));
-        } else {
-            for (const area of this._orderFor(item)) {
-                if (this._addUnique(item, [area])) { left -= 1; break; }
-            }
-        }
-        const added = qty - left;
-        if (added > 0) this._changed();
-        else this._notify('Mochila llena');
-        return left === 0;
-    }
+      backpackSlotCount() {
+          return this.items.length;
+      }
 
-    addResource(key, amount) {
-        if (!INV_RESOURCE_KEYS.includes(key)) return 0;
-        const want = Math.max(0, Math.floor(amount || 0));
-        if (!want) return 0;
-        const proto = {
-            id: key,
-            name: INV_RESOURCE_NAMES[key] || key,
-            type: 'resource',
-            resourceKey: key,
-            stackable: true,
-            maxStack: INV_RESOURCE_STACK
-        };
-        const left = this._addStacks(proto, want, ['bag', 'belt']);
-        const added = want - left;
-        if (added > 0) this._changed();
-        else this._notify('Mochila llena: no entra ' + (INV_RESOURCE_NAMES[key] || key).toLowerCase());
-        return added;
-    }
+      backpackHasSpace(forItem) {
+          if (forItem && forItem.stackable) {
+              const existing = this.items.find(i =>
+                  i.id === forItem.id && i.type === forItem.type &&
+                  (i.quantity || 0) < (i.maxStack || Infinity)
+              );
+              if (existing) return true;
+          }
+          return this.items.length < this.maxSlots;
+      }
 
-    countResource(key) {
-        let n = 0;
-        for (let i = 0; i < this.capacity; i++) {
-            const s = this.slots[i];
-            if (s && s.type === 'resource' && (s.resourceKey || s.id) === key) n += s.quantity || 0;
-        }
-        for (let i = 0; i < this.quickSlots.length; i++) {
-            const s = this.quickSlots[i];
-            if (s && s.type === 'resource' && (s.resourceKey || s.id) === key) n += s.quantity || 0;
-        }
-        return n;
-    }
+      syncResourceCounters() {
+          const sums = { wood: 0, stone: 0, metal: 0 };
+          this.items.forEach(it => {
+              if (!it || it.type !== 'resource') return;
+              const k = it.resourceKey || it.id;
+              if (sums[k] != null) sums[k] += (it.quantity || 0);
+          });
+          this.resources.wood = sums.wood;
+          this.resources.stone = sums.stone;
+          this.resources.metal = sums.metal;
+      }
 
-    removeResource(key, amount) {
-        let left = Math.max(0, Math.floor(amount || 0));
-        if (left <= 0) return 0;
-        const want = left;
-        const areas = [['bag', this.slots], ['belt', this.quickSlots]];
-        for (const [area, arr] of areas) {
-            const lim = this._areaLimit(area);
-            for (let i = 0; i < lim && left > 0; i++) {
-                const s = arr[i];
-                if (!s || s.type !== 'resource' || (s.resourceKey || s.id) !== key) continue;
-                const take = Math.min(s.quantity || 0, left);
-                s.quantity -= take;
-                left -= take;
-                if ((s.quantity || 0) <= 0) arr[i] = null;
-            }
-        }
-        const removed = want - left;
-        if (removed > 0) this._changed();
-        return removed;
-    }
+      syncAmmoFromStacks() {
+          const sums = { pistol: 0, rifle: 0, shotgun: 0, energy: 0 };
+          this.items.forEach(it => {
+              if (!it || it.type !== 'ammo' || !it.ammoType) return;
+              if (sums[it.ammoType] == null) return;
+              sums[it.ammoType] += (it.quantity || 0);
+          });
+          Object.keys(sums).forEach(t => {
+              this.ammo[t] = Math.min(sums[t], this.getMaxAmmo(t));
+          });
+          try { this.updateAmmoUI(); } catch (e) {}
+      }
 
-    setResourceTotal(key, total) {
-        const target = Math.max(0, Math.floor(total || 0));
-        const cur = this.countResource(key);
-        if (target > cur) return this.addResource(key, target - cur);
-        if (target < cur) return -this.removeResource(key, cur - target);
-        return 0;
-    }
+      ensureResourceStacksMigrated() {
+          if (this._resourceStacksReady) return;
+          this._resourceStacksReady = true;
+          ['wood', 'stone', 'metal'].forEach(k => {
+              const have = this.items
+                  .filter(it => it && it.type === 'resource' && (it.resourceKey || it.id) === k)
+                  .reduce((n, it) => n + (it.quantity || 0), 0);
+              const legacy = this.resources[k] || 0;
+              if (legacy > have) {
+                  this._addResourceStackOnly(k, legacy - have);
+              }
+          });
+          // Balas iniciales del pool → ficha en mochila
+          const ammoHave = this.items
+              .filter(it => it && it.type === 'ammo' && it.ammoType === 'pistol')
+              .reduce((n, it) => n + (it.quantity || 0), 0);
+          if ((this.ammo.pistol || 0) > ammoHave) {
+              this._addAmmoStackOnly('pistol', (this.ammo.pistol || 0) - ammoHave);
+          }
+          this.syncResourceCounters();
+          this.syncAmmoFromStacks();
+          this.normalizeResourceStackCaps();
+      }
 
-    addAmmoAmount(type, amount) {
-        if (!INV_AMMO_TYPES.includes(type)) return 0;
-        const want = Math.max(0, Math.floor(amount || 0));
-        if (!want) return 0;
-        const proto = {
-            id: type + '_ammo',
-            name: 'Balas de ' + (INV_AMMO_NAMES[type] || type).toLowerCase(),
-            type: 'ammo',
-            ammoType: type,
-            stackable: true,
-            maxStack: INV_AMMO_STACK[type] || 60,
-            amount: 1
-        };
-        const left = this._addStacks(proto, want, ['bag', 'belt']);
-        const added = want - left;
-        if (added > 0) this._changed();
-        else this._notify('Mochila llena: no entra munición');
-        return added;
-    }
+      _resourceDef(key) {
+          const map = { wood: 'res_wood', stone: 'res_stone', metal: 'res_metal' };
+          const dk = map[key];
+          return (dk && ITEM_DEFINITIONS[dk]) ? ITEM_DEFINITIONS[dk] : {
+              id: key, name: key, type: 'resource', resourceKey: key, stackable: true, maxStack: 10
+          };
+      }
 
-    // Compat: devuelve true si entró al menos una bala.
-    addAmmo(type, amount) {
-        return this.addAmmoAmount(type, amount) > 0;
-    }
+      _addResourceStackOnly(key, amount) {
+          let left = amount || 0;
+          if (left <= 0) return 0;
+          const def = this._resourceDef(key);
+          const cap = def.maxStack || 10;
+          let added = 0;
+          for (let i = 0; i < this.items.length && left > 0; i++) {
+              const it = this.items[i];
+              if (!it || it.type !== 'resource' || (it.resourceKey || it.id) !== key) continue;
+              if ((it.maxStack || cap) > cap) it.maxStack = cap;
+              const space = (it.maxStack || cap) - (it.quantity || 0);
+              if (space <= 0) continue;
+              const take = Math.min(space, left);
+              it.quantity = (it.quantity || 0) + take;
+              left -= take;
+              added += take;
+          }
+          while (left > 0 && this.items.length < this.maxSlots) {
+              const take = Math.min(left, cap);
+              this.items.push({
+                  id: def.id || key,
+                  name: def.name || key,
+                  type: 'resource',
+                  resourceKey: key,
+                  stackable: true,
+                  maxStack: cap,
+                  quantity: take
+              });
+              left -= take;
+              added += take;
+          }
+          return added;
+      }
 
-    countAmmo(type) {
-        let n = 0;
-        const check = (s) => {
-            if (s && s.type === 'ammo' && s.ammoType === type) n += s.quantity || 0;
-        };
-        for (let i = 0; i < this.capacity; i++) check(this.slots[i]);
-        for (let i = 0; i < this.quickSlots.length; i++) check(this.quickSlots[i]);
-        return n;
-    }
+      // Parte stacks viejos (>10) al techo actual de recursos
+      normalizeResourceStackCaps() {
+          const overflow = [];
+          for (let i = 0; i < this.items.length; i++) {
+              const it = this.items[i];
+              if (!it || it.type !== 'resource') continue;
+              const key = it.resourceKey || it.id;
+              const def = this._resourceDef(key);
+              const cap = def.maxStack || 10;
+              it.maxStack = cap;
+              if ((it.quantity || 0) <= cap) continue;
+              let extra = it.quantity - cap;
+              it.quantity = cap;
+              while (extra > 0) {
+                  const take = Math.min(extra, cap);
+                  overflow.push({
+                      id: def.id || key,
+                      name: def.name || it.name || key,
+                      type: 'resource',
+                      resourceKey: key,
+                      stackable: true,
+                      maxStack: cap,
+                      quantity: take
+                  });
+                  extra -= take;
+              }
+          }
+          overflow.forEach((stack) => {
+              if (this.items.length < this.maxSlots) this.items.push(stack);
+              else this._addResourceStackOnly(stack.resourceKey, stack.quantity);
+          });
+          this.syncResourceCounters();
+      }
 
-    removeAmmo(type, amount) {
-        let left = Math.max(0, Math.floor(amount || 0));
-        if (left <= 0) return 0;
-        const want = left;
-        const areas = [['bag', this.slots], ['belt', this.quickSlots]];
-        for (const [area, arr] of areas) {
-            const lim = this._areaLimit(area);
-            for (let i = 0; i < lim && left > 0; i++) {
-                const s = arr[i];
-                if (!s || s.type !== 'ammo' || s.ammoType !== type) continue;
-                const take = Math.min(s.quantity || 0, left);
-                s.quantity -= take;
-                left -= take;
-                if ((s.quantity || 0) <= 0) arr[i] = null;
-            }
-        }
-        const removed = want - left;
-        if (removed > 0) this._changed();
-        return removed;
-    }
+      addResource(key, amount) {
+          this.ensureResourceStacksMigrated();
+          const n = this._addResourceStackOnly(key, amount || 1);
+          this.syncResourceCounters();
+          this.updateInventoryUI();
+          return n > 0;
+      }
 
-    setAmmoTotal(type, total) {
-        const target = Math.max(0, Math.floor(total || 0));
-        const cur = this.countAmmo(type);
-        if (target > cur) return this.addAmmoAmount(type, target - cur);
-        if (target < cur) return -this.removeAmmo(type, cur - target);
-        return 0;
-    }
+      spendResource(key, amount) {
+          this.ensureResourceStacksMigrated();
+          let need = amount || 1;
+          if (this.getResourceCount(key) < need) return false;
+          for (let i = this.items.length - 1; i >= 0 && need > 0; i--) {
+              const it = this.items[i];
+              if (!it || it.type !== 'resource' || (it.resourceKey || it.id) !== key) continue;
+              const q = it.quantity || 0;
+              if (q <= need) {
+                  need -= q;
+                  this.items.splice(i, 1);
+              } else {
+                  it.quantity = q - need;
+                  need = 0;
+              }
+          }
+          this.syncResourceCounters();
+          this.updateInventoryUI();
+          return need === 0;
+      }
 
-    useAmmo(type, amount) {
-        if (this.countAmmo(type) < (amount || 1)) {
-            try { playSound('weapon_empty'); } catch (e) {}
-            return false;
-        }
-        this.removeAmmo(type, amount || 1);
-        this.updateAmmoUI();
-        return true;
-    }
+      getResourceCount(key) {
+          this.ensureResourceStacksMigrated();
+          return this.resources[key] || 0;
+      }
 
-    // ---------- Baja / movimiento ----------
-    removeItem(item, quantity = 1) {
-        const loc = this.findSlot(item);
-        if (!loc) return false;
-        const arr = this._areaArr(loc.area);
-        const slot = arr[loc.idx];
-        if (!slot) return false;
-        const qty = Math.max(1, Math.floor(quantity || 1));
-        if (slot.stackable && (slot.quantity || 1) > qty) {
-            slot.quantity -= qty;
-        } else {
-            arr[loc.idx] = null;
-            if (this.equippedItem === slot) this.unequipItem();
-        }
-        this._changed();
-        return true;
-    }
+      _addAmmoStackOnly(ammoType, amount) {
+          let left = amount || 0;
+          if (left <= 0) return 0;
+          const maxStack = this.getMaxAmmo(ammoType) || 60;
+          const id = ammoType === 'pistol' ? 'pistol_ammo' : (ammoType + '_ammo');
+          const name = ammoType === 'pistol' ? 'Balas de pistola' : ('Munición ' + ammoType);
+          let added = 0;
+          for (let i = 0; i < this.items.length && left > 0; i++) {
+              const it = this.items[i];
+              if (!it || it.type !== 'ammo' || it.ammoType !== ammoType) continue;
+              const space = (it.maxStack || maxStack) - (it.quantity || 0);
+              if (space <= 0) continue;
+              const take = Math.min(space, left);
+              it.quantity = (it.quantity || 0) + take;
+              left -= take;
+              added += take;
+          }
+          while (left > 0 && this.items.length < this.maxSlots) {
+              const take = Math.min(left, maxStack);
+              this.items.push({
+                  id: id,
+                  name: name,
+                  type: 'ammo',
+                  ammoType: ammoType,
+                  stackable: true,
+                  maxStack: maxStack,
+                  quantity: take
+              });
+              left -= take;
+              added += take;
+          }
+          return added;
+      }
 
-    removeItemById(id, quantity = 1) {
-        let left = Math.max(1, Math.floor(quantity || 1));
-        const areas = [['bag', this.slots], ['belt', this.quickSlots]];
-        for (const [area, arr] of areas) {
-            const lim = this._areaLimit(area);
-            for (let i = 0; i < lim && left > 0; i++) {
-                const s = arr[i];
-                if (!s || s.id !== id) continue;
-                const take = Math.min(left, s.stackable ? (s.quantity || 1) : 1);
-                if (s.stackable && (s.quantity || 1) > take) s.quantity -= take;
-                else {
-                    arr[i] = null;
-                    if (this.equippedItem === s) this.unequipItem();
-                }
-                left -= take;
-            }
-        }
-        if (left < Math.max(1, Math.floor(quantity || 1))) {
-            this._changed();
-            return true;
-        }
-        return false;
-    }
+      spendAmmoFromStacks(ammoType, amount) {
+          let need = amount || 1;
+          for (let i = this.items.length - 1; i >= 0 && need > 0; i--) {
+              const it = this.items[i];
+              if (!it || it.type !== 'ammo' || it.ammoType !== ammoType) continue;
+              const q = it.quantity || 0;
+              if (q <= need) {
+                  need -= q;
+                  this.items.splice(i, 1);
+              } else {
+                  it.quantity = q - need;
+                  need = 0;
+              }
+          }
+          this.syncAmmoFromStacks();
+          this.updateInventoryUI();
+          return need === 0;
+      }
+      
+      // Add an item to inventory (now handles all our defined item types)
+      addItem(item) {
+          this.ensureResourceStacksMigrated();
+          // Handle ammo pickups → ficha que alimenta el pool
+          if (item.type === 'ammo') {
+              return this.addAmmo(item.ammoType, item.amount || item.quantity || 1);
+          }
+          // Resource pickups (branch/pebble/scrap) → stack de recurso
+          if (item.type === 'resource' && item.resourceKey) {
+              return this.addResource(item.resourceKey, item.amount || item.quantity || 1);
+          }
+          if (item.type === 'resource' && (item.id === 'wood' || item.id === 'stone' || item.id === 'metal')) {
+              return this.addResource(item.id, item.quantity || 1);
+          }
 
-    hasItemId(id) {
-        return this.items.some((it) => it && it.id === id);
-    }
+          // Try to stack if possible
+          if (this.tryStackItem(item)) {
+              return true;
+          }
 
-    // Mueve/mezcla entre cinturón y mochila. Devuelve true si cambió algo.
-    moveItem(fromArea, fromIdx, toArea, toIdx) {
-        if (fromArea !== 'belt' && fromArea !== 'bag') return false;
-        if (toArea !== 'belt' && toArea !== 'bag') return false;
-        const fromArr = this._areaArr(fromArea);
-        const toArr = this._areaArr(toArea);
-        if (fromIdx < 0 || fromIdx >= this._areaLimit(fromArea)) return false;
-        if (toIdx < 0 || toIdx >= this._areaLimit(toArea)) return false;
-        if (fromArea === toArea && fromIdx === toIdx) return true;
-        const a = fromArr[fromIdx];
-        if (!a) return false;
-        const b = toArr[toIdx];
-        if (b && a.stackable && b.stackable && this._sameStack(a, b)) {
-            const max = this._maxStack(b);
-            const space = Math.max(0, max - (b.quantity || 0));
-            if (space > 0) {
-                const take = Math.min(space, a.quantity || 1);
-                b.quantity = (b.quantity || 0) + take;
-                if (a.stackable && (a.quantity || 1) > take) a.quantity -= take;
-                else fromArr[fromIdx] = null;
-                this._changed();
-                return true;
-            }
-        }
-        fromArr[fromIdx] = b || null;
-        toArr[toIdx] = a;
-        this._changed();
-        return true;
-    }
+          if (this.items.length >= this.maxSlots) {
+              console.log("¡Mochila llena!");
+              return false;
+          }
+          
+          // Add new item to inventory
+          this.items.push({
+              ...item,
+              quantity: item.quantity || 1
+          });
+          
+          this.updateInventoryUI();
+          return true;
+      }
+      
+      // Improved stack handling
+      tryStackItem(item) {
+          if (!item.stackable) return false;
+          
+          // Find existing stack of same type
+          const existing = this.items.find(i => 
+              i.id === item.id && 
+              i.quantity < (i.maxStack || Infinity)
+          );
+          
+          if (existing) {
+              const remainingSpace = (existing.maxStack || Infinity) - existing.quantity;
+              const toAdd = Math.min(remainingSpace, item.quantity || 1);
+              
+              existing.quantity += toAdd;
+              
+              // If we have leftover items, try to create another stack
+              if (item.quantity && (item.quantity - toAdd) > 0) {
+                  return this.addItem({
+                      ...item,
+                      quantity: item.quantity - toAdd
+                  });
+              }
+              
+              this.updateInventoryUI();
+              return true;
+          }
+          return false;
+      }
+      
+      // Remove item from backpack (no del cinturón; usar clearQuickSlot / moveFromBelt)
+      removeItem(item, quantity = 1) {
+          const index = this.items.indexOf(item);
+          if (index === -1) return false;
+          
+          if (item.stackable && item.quantity > quantity) {
+              item.quantity -= quantity;
+          } else {
+              this.items.splice(index, 1);
+              if (this.equippedItem === item) {
+                  this.unequipItem();
+              }
+              try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
+          }
+          if (item.type === 'resource') this.syncResourceCounters();
+          if (item.type === 'ammo') this.syncAmmoFromStacks();
+          this.updateInventoryUI();
+          return true;
+      }
+      
+      // Equip an item (mochila o cinturón)
+      equipItem(item) {
+          if (!item) return false;
+          const owned = this.items.includes(item) || this.quickSlots.includes(item);
+          if (!owned) {
+              return false;
+          }
+          try {
+              if (item && !item.model && item.toolType) {
+                  for (const k in ITEM_DEFINITIONS) {
+                      const d = ITEM_DEFINITIONS[k];
+                      if (d.toolType === item.toolType && d.createModel) { item.model = d.createModel(); break; }
+                  }
+              }
+              if (typeof attachToolModel === 'function') attachToolModel(item, null);
+          } catch (e) {}
 
-    // Mueve un objeto al primer hueco de la mochila. Devuelve el índice o -1.
-    moveToBag(area, idx) {
-        const free = this.firstEmpty('bag');
-        if (free < 0) return -1;
-        return this.moveItem(area, idx, 'bag', free) ? free : -1;
-    }
+          // Skip if already equipped
+          if (this.equippedItem === item) return true;
 
-    // ---------- Equipar / usar ----------
-    equipItem(item) {
-        if (!item || !this.findSlot(item)) return false;
-        try {
-            if (item && !item.model && item.toolType) {
-                for (const k in ITEM_DEFINITIONS) {
-                    const d = ITEM_DEFINITIONS[k];
-                    if (d.toolType === item.toolType && d.createModel) { item.model = d.createModel(); break; }
-                }
-            }
-            if (typeof attachToolModel === 'function') attachToolModel(item, null);
-        } catch (e) {}
+          // Hide previous item model
+          if (this.equippedItem?.model) {
+              this.equippedItem.model.visible = false;
+          }
 
-        if (this.equippedItem === item) return true;
+          // Show new item model
+          if (item.model) {
+              item.model.visible = true;
+          }
 
-        if (this.equippedItem?.model) this.equippedItem.model.visible = false;
-        if (item.model) item.model.visible = true;
-        this.equippedItem = item;
+          this.equippedItem = item;
 
-        if (item.toolType) this.player.currentTool = item.toolType;
+          // Update player's current tool if this is a tool item
+          if (item.toolType) {
+              this.player.currentTool = item.toolType;
+          }
 
-        if (item.ammoType) {
-            this.ensureWeaponMagazine(item);
-            if ((item.magazine || 0) <= 0 && this.countAmmo(item.ammoType) > 0) this.reloadWeapon();
-        }
+          // Armas: asegurar cargador; si está vacío y hay reserva, recargar al equipar.
+          if (item.ammoType) {
+              this.ensureWeaponMagazine(item);
+              if ((item.magazine || 0) <= 0 && (this.ammo[item.ammoType] || 0) > 0) {
+                  this.reloadWeapon();
+              }
+          }
 
-        this._changed();
-        updateActionButton();
-        return true;
-    }
+          this.updateInventoryUI();
+          this.updateWeaponHUD();
+          this.updateAmmoUI();
+          updateActionButton(); // Update mobile button
 
-    unequipItem() {
-        if (this.equippedItem?.model) this.equippedItem.model.visible = false;
-        this.equippedItem = null;
-        this._changed();
-    }
+          return true;
+      }
 
-    useItem(item) {
-        if (!item || item.type !== 'consumable') return false;
-        if (item.healAmount > 0) {
-            if (this.player.health >= (this.player.maxHealth || 100)) {
-                this._notify('Vida al máximo');
-                return false;
-            }
-            this.player.health = Math.min(this.player.maxHealth || 100, this.player.health + (item.healAmount || 30));
-            try { this.player.updateStatsHUD(); playSound('health-regen'); } catch (e) {}
-            return this.removeItem(item, 1);
-        }
-        this._notify('Ese consumible no se puede usar');
-        return false;
-    }
+      unequipItem() {
+          if (this.equippedItem?.model) {
+              this.equippedItem.model.visible = false;
+          }
+          this.equippedItem = null;
+          this.updateInventoryUI();
+          this.updateWeaponHUD();
+          this.updateAmmoUI();
+      }
+      
+      // Use a consumable item (now works with food/toxin)
+      useItem(item) {
+          if (!item || item.type !== 'consumable') return false;
+          
+          switch (item.id) {
+              case 'food':
+                  if (this.player.health >= 100) {
+                      console.log("Health already full!");
+                      return false;
+                  }
+                  this.player.health = Math.min(100, this.player.health + (item.healAmount || 30));
+                  playSound('health-regen');
+                  break;
+                  
+              case 'toxin':
+                  // Could implement some special effect here
+                  console.log("Toxin used - no effect on self");
+                  break;
+                  
+              default:
+                  console.log("Unknown consumable:", item.id);
+                  return false;
+          }
+          
+          // Remove item or decrement quantity
+          return this.removeItem(item, 1);
+      }
+      
+      // Balas: ficha en mochila alimenta el pool (ammo{} es mirror)
+      addAmmo(type, amount) {
+          if (this.ammo[type] === undefined) return false;
+          this.ensureResourceStacksMigrated();
+          const room = this.getMaxAmmo(type) - (this.ammo[type] || 0);
+          if (room <= 0) return false;
+          const take = Math.min(amount || 1, room);
+          const added = this._addAmmoStackOnly(type, take);
+          this.syncAmmoFromStacks();
+          this.updateInventoryUI();
+          return added > 0;
+      }
+      
+      useAmmo(type, amount) {
+          this.ensureResourceStacksMigrated();
+          this.syncAmmoFromStacks();
+          if (this.ammo[type] === undefined || this.ammo[type] < (amount || 1)) {
+              playSound('weapon_empty');
+              return false;
+          }
+          const ok = this.spendAmmoFromStacks(type, amount || 1);
+          if (!ok) playSound('weapon_empty');
+          return ok;
+      }
 
-    // ---------- Armas / recarga ----------
-    getMagazineSize(item) {
-        if (!item) return 0;
-        if (typeof item.magazineSize === 'number' && item.magazineSize > 0) return item.magazineSize;
-        const byType = { pistol: 12, rifle: 30, shotgun: 6, energy: 20 };
-        return byType[item.ammoType] || 12;
-    }
+      getMagazineSize(item) {
+          if (!item) return 0;
+          if (typeof item.magazineSize === 'number' && item.magazineSize > 0) return item.magazineSize;
+          const byType = { pistol: 12, rifle: 30, shotgun: 6, energy: 20 };
+          return byType[item.ammoType] || 12;
+      }
 
-    ensureWeaponMagazine(item) {
-        if (!item || !item.ammoType) return;
-        if (typeof item.magazineSize !== 'number' || item.magazineSize <= 0) {
-            item.magazineSize = this.getMagazineSize(item);
-        }
-        if (typeof item.magazine !== 'number' || item.magazine < 0) item.magazine = 0;
-        if (item.magazine > item.magazineSize) item.magazine = item.magazineSize;
-    }
+      ensureWeaponMagazine(item) {
+          if (!item || !item.ammoType) return;
+          if (typeof item.magazineSize !== 'number' || item.magazineSize <= 0) {
+              item.magazineSize = this.getMagazineSize(item);
+          }
+          if (typeof item.magazine !== 'number' || item.magazine < 0) {
+              item.magazine = 0;
+          }
+          if (item.magazine > item.magazineSize) item.magazine = item.magazineSize;
+      }
 
-    reloadWeapon() {
-        const item = this.equippedItem;
-        if (!item || !item.ammoType) return false;
-        this.ensureWeaponMagazine(item);
-        const magSize = item.magazineSize;
-        const cur = item.magazine || 0;
-        if (cur >= magSize) {
-            try { if (typeof lvToast === 'function') lvToast('Cargador lleno'); } catch (e) {}
-            return false;
-        }
-        const reserve = this.countAmmo(item.ammoType);
-        if (reserve <= 0) {
-            try { playSound('weapon_empty'); } catch (e) {}
-            try { if (typeof lvToast === 'function') lvToast('Sin balas de reserva'); } catch (e) {}
-            return false;
-        }
-        const take = Math.min(magSize - cur, reserve);
-        this.removeAmmo(item.ammoType, take);
-        item.magazine = cur + take;
-        try { playSound('ammo-pickup'); } catch (e) {}
-        this.updateAmmoUI();
-        try { if (typeof shootCooldown !== 'undefined') shootCooldown = Math.max(shootCooldown || 0, 0.55); } catch (e) {}
-        this._changed();
-        return true;
-    }
+      // R: llenar cargador desde la reserva.
+      reloadWeapon() {
+          const item = this.equippedItem;
+          if (!item || !item.ammoType) return false;
+          this.ensureWeaponMagazine(item);
+          const magSize = item.magazineSize;
+          const cur = item.magazine || 0;
+          if (cur >= magSize) {
+              try { if (typeof lvToast === 'function') lvToast('Cargador lleno'); } catch (e) {}
+              return false;
+          }
+          this.syncAmmoFromStacks();
+          const reserve = this.ammo[item.ammoType] || 0;
+          if (reserve <= 0) {
+              playSound('weapon_empty');
+              try { if (typeof lvToast === 'function') lvToast('Sin balas de reserva'); } catch (e) {}
+              return false;
+          }
+          const take = Math.min(magSize - cur, reserve);
+          if (!this.spendAmmoFromStacks(item.ammoType, take)) {
+              playSound('weapon_empty');
+              return false;
+          }
+          item.magazine = cur + take;
+          try { playSound('ammo-pickup'); } catch (e) {}
+          this.updateAmmoUI();
+          try { if (typeof shootCooldown !== 'undefined') shootCooldown = Math.max(shootCooldown || 0, 0.55); } catch (e) {}
+          return true;
+      }
+      
+      // Get max ammo capacity (reserva)
+      getMaxAmmo(type) {
+          const maxAmmo = {
+              pistol: 60,
+              rifle: 180,
+              shotgun: 40,
+              energy: 100
+          };
+          return maxAmmo[type] || 0;
+      }
+      
+      // Key management (unchanged)
+      addKey(keyId, keyName) {
+          if (!this.resources.keys.some(k => k.id === keyId)) {
+              this.resources.keys.push({ id: keyId, name: keyName });
+              this.updateInventoryUI();
+              return true;
+          }
+          return false;
+      }
+      
+      hasKey(keyId) {
+          return this.resources.keys.some(k => k.id === keyId);
+      }
 
-    getMaxAmmo(type) {
-        // Ya no hay tope global: el límite es el espacio físico de la mochila.
-        return 9999;
-    }
+      removeKey(keyId) {
+          const i = this.resources.keys.findIndex(k => k.id === keyId);
+          if (i < 0) return false;
+          this.resources.keys.splice(i, 1);
+          this.updateInventoryUI();
+          return true;
+      }
+      
+      // Improved inventory UI
+      updateInventoryUI() {
+          const inventoryDiv = document.getElementById('inventory');
+          if (!inventoryDiv) return;
+          
+          let html = '<h3>Mochila</h3><ul>';
+          
+          // List items with quantity and equipped indicator
+          this.items.forEach(item => {
+              const equippedClass = this.equippedItem === item ? ' class="equipped"' : '';
+              html += `<li${equippedClass}>`;
+              
+              html += `${item.name} ${itemIcon(item)}`;
+              
+              // Show quantity if stackable
+              if (item.stackable && item.quantity > 1) {
+                  html += ` (${item.quantity})`;
+              }
+              
+              html += '</li>';
+          });
+          
+          html += '</ul>';
+          
+          // Show keys separately
+          if (this.resources.keys.length > 0) {
+              html += '<div class="keys"><h4>Llaves</h4><ul>';
+              this.resources.keys.forEach(key => {
+                  html += `<li>${key.name}</li>`;
+              });
+              html += '</ul></div>';
+          }
+          
+          inventoryDiv.innerHTML = html;
+      }
+      
+      // Update ammo display in HUD
+      updateAmmoUI() {
+          const ammoDiv = document.getElementById('ammo');
+          const ammoTypeDiv = document.getElementById('ammoType');
+          
+          if (!ammoDiv || !ammoTypeDiv) return;
+          
+          if (this.equippedItem?.ammoType) {
+              this.ensureWeaponMagazine(this.equippedItem);
+              const mag = this.equippedItem.magazine || 0;
+              const magSize = this.equippedItem.magazineSize || this.getMagazineSize(this.equippedItem);
+              const reserve = this.ammo[this.equippedItem.ammoType] || 0;
+              // Formato FPS: cargador | reserva
+              ammoDiv.textContent = `${mag}/${magSize} | ${reserve}`;
+              ammoTypeDiv.textContent = 'R RECARGAR · ' + (this.equippedItem.ammoType === 'pistol' ? 'PISTOLA' : String(this.equippedItem.ammoType).toUpperCase());
 
-    // ---------- Mochila: mejoras ----------
-    upgradeBackpack(tier) {
-        const t = Math.max(0, Math.min(INV_BAG_TIERS.length - 1, Math.floor(tier || 0)));
-        if (t <= this.bagTier) return false;
-        this.bagTier = t;
-        this._changed();
-        try { if (typeof lvToast === 'function') lvToast('Mochila: ' + this.bagTierName + ' (' + this.capacity + ' espacios)'); } catch (e) {}
-        return true;
-    }
+              if (mag <= 0) {
+                  ammoDiv.style.color = 'red';
+              } else if (mag / magSize < 0.35) {
+                  ammoDiv.style.color = '#ffcc66';
+              } else {
+                  ammoDiv.style.color = 'white';
+              }
+          } else {
+              ammoDiv.textContent = '';
+              ammoTypeDiv.textContent = '';
+          }
+      }
+      
+      // Update weapon name display
+      updateWeaponHUD() {
+          const weaponDiv = document.getElementById('weaponInfo');
+          if (!weaponDiv) return;
+          const hud = document.getElementById('weaponHud');
+          const hasItem = !!this.equippedItem;
+          if (hud) hud.style.display = hasItem ? 'block' : 'none';
 
-    resetAll() {
-        this.slots = new Array(this.slots.length || INV_MAX_BAG_SLOTS).fill(null);
-        for (let i = 0; i < this.quickSlots.length; i++) this.quickSlots[i] = null;
-        this.bagTier = 0;
-        this.equippedItem = null;
-        this.selectedSlot = 0;
-        this.craftedFlags = {};
-        this._keys = [];
-        this._changed();
-    }
+          if (this.equippedItem?.type === 'weapon') {
+              weaponDiv.textContent = `${this.equippedItem.name}`;
+          } else if (this.equippedItem?.type === 'tool') {
+              weaponDiv.textContent = `${this.equippedItem.name}`;
+          } else {
+              weaponDiv.textContent = 'MANOS';
+          }
+      }
+      
+      // Quick access to items (for number keys 1-4)
+      quickSelect(slotIndex) {
+          if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return;
+          
+          const item = this.quickSlots[slotIndex];
+          // Consumibles no van al cinturón (solo mochila)
+          if (item && this.canPlaceOnBelt(item)) {
+              this.equipItem(item);
+              if (item.toolType) {
+                  this.player.currentTool = item.toolType;
+              } else {
+                  this.player.currentTool = TOOLS.HANDS;
+              }
+              updateActionButton();
+          } else {
+              this.unequipItem();
+              this.player.currentTool = TOOLS.HANDS;
+              updateActionButton();
+          }
+          this.selectedSlot = slotIndex;
+          this.updateQuickSlotUI();
+          this.player.updateToolHUD();
+      }
 
-    // ---------- Llaves ----------
-    addKey(keyId, keyName) {
-        if (!this._keys.some(k => k.id === keyId)) {
-            this._keys.push({ id: keyId, name: keyName });
-            this._changed();
-            return true;
-        }
-        return false;
-    }
-    hasKey(keyId) {
-        return this._keys.some(k => k.id === keyId);
-    }
-    removeKey(keyId) {
-        const i = this._keys.findIndex(k => k.id === keyId);
-        if (i < 0) return false;
-        this._keys.splice(i, 1);
-        this._changed();
-        return true;
-    }
+      /** Mueve herramienta de mochila → cinturón (sale de la mochila). */
+      assignToQuickSlot(item, slotIndex) {
+          if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return false;
+          if (!item || !this.canPlaceOnBelt(item)) return false;
 
-    spendResources(cost) {
-        if (!cost) return true;
-        for (const k in cost) {
-            if (this.countResource(k) < cost[k]) return false;
-        }
-        for (const k in cost) this.removeResource(k, cost[k]);
-        return true;
-    }
+          // Ya está en este slot
+          if (this.quickSlots[slotIndex] === item) return true;
 
-    // ---------- Refresco de UI ----------
-    _notify(msg) {
-        try {
-            if (typeof lvToast === 'function') lvToast(msg);
-            else if (typeof showMessage === 'function') showMessage(msg);
-        } catch (e) {}
-    }
+          // Sacarla de otro slot del cinturón
+          for (let i = 0; i < this.quickSlots.length; i++) {
+              if (this.quickSlots[i] === item) this.quickSlots[i] = null;
+          }
 
-    _changed() {
-        try { this.updateInventoryUI(); } catch (e) {}
-        try { this.updateQuickSlotUI(); } catch (e) {}
-        try { this.updateAmmoUI(); } catch (e) {}
-        try { this.updateWeaponHUD(); } catch (e) {}
-        try { if (typeof updateResourceHUD === 'function') updateResourceHUD(); } catch (e) {}
-        try { if (typeof invOpen !== 'undefined' && invOpen && typeof refreshInvModal === 'function') refreshInvModal(); } catch (e) {}
-        try { if (typeof refreshCraftUI === 'function') refreshCraftUI(); } catch (e) {}
-        try {
-            if (typeof benchOpen !== 'undefined' && benchOpen && typeof renderBenchBaseUI === 'function') {
-                renderBenchBaseUI(typeof currentBench !== 'undefined' ? currentBench : null);
-            }
-        } catch (e) {}
-        try {
-            if (typeof pauseUI !== 'undefined' && pauseUI.activeTab === 'craft' && typeof refreshTechTreeState === 'function') {
-                refreshTechTreeState();
-            }
-        } catch (e) {}
-    }
+          const inBag = this.items.indexOf(item);
+          if (inBag === -1 && !this.quickSlots.includes(item)) return false;
 
-    // HUD lateral legado (oculto): resumen corto.
-    updateInventoryUI() {
-        const inventoryDiv = document.getElementById('inventory');
-        if (!inventoryDiv) return;
-        let html = '<h3>Mochila ' + this.usedBagSlots + '/' + this.capacity + '</h3>';
-        if (this._keys.length) {
-            html += '<div class="keys"><h4>Llaves</h4><ul>';
-            this._keys.forEach(key => { html += '<li>' + key.name + '</li>'; });
-            html += '</ul></div>';
-        }
-        inventoryDiv.innerHTML = html;
-    }
+          // Evitar dos copias del mismo toolType/id en cinturón
+          if (this.quickSlots.some((slot, i) => slot && i !== slotIndex && slot.id === item.id)) {
+              return false;
+          }
 
-    updateAmmoUI() {
-        const ammoDiv = document.getElementById('ammo');
-        const ammoTypeDiv = document.getElementById('ammoType');
-        if (!ammoDiv || !ammoTypeDiv) return;
-        if (this.equippedItem?.ammoType) {
-            this.ensureWeaponMagazine(this.equippedItem);
-            const mag = this.equippedItem.magazine || 0;
-            const magSize = this.equippedItem.magazineSize || this.getMagazineSize(this.equippedItem);
-            const reserve = this.countAmmo(this.equippedItem.ammoType);
-            ammoDiv.textContent = `${mag}/${magSize} | ${reserve}`;
-            ammoTypeDiv.textContent = 'R RECARGAR · ' + String(this.equippedItem.ammoType).toUpperCase();
-            if (mag <= 0) ammoDiv.style.color = 'red';
-            else if (mag / magSize < 0.35) ammoDiv.style.color = '#ffcc66';
-            else ammoDiv.style.color = 'white';
-        } else {
-            ammoDiv.textContent = '';
-            ammoTypeDiv.textContent = '';
-        }
-    }
+          const displaced = this.quickSlots[slotIndex];
+          if (displaced && displaced !== item) {
+              if (!this.backpackHasSpace(displaced)) return false;
+              this.items.push(displaced);
+          }
 
-    updateWeaponHUD() {
-        const weaponDiv = document.getElementById('weaponInfo');
-        if (!weaponDiv) return;
-        const hud = document.getElementById('weaponHud');
-        const hasItem = !!this.equippedItem;
-        if (hud) hud.style.display = hasItem ? 'block' : 'none';
-        if (this.equippedItem) weaponDiv.textContent = this.equippedItem.name;
-        else weaponDiv.textContent = 'MANOS';
-    }
+          if (inBag !== -1) this.items.splice(inBag, 1);
+          this.quickSlots[slotIndex] = item;
+          this.updateQuickSlotUI();
+          this.updateInventoryUI();
+          return true;
+      }
 
-    // ---------- Cinturón / atajos ----------
-    quickSelect(slotIndex) {
-        if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return;
-        const item = this.quickSlots[slotIndex];
-        if (!item) {
-            this.unequipItem();
-            this.player.currentTool = TOOLS.HANDS;
-            updateActionButton();
-            this.updateQuickSlotUI();
-            this.player.updateToolHUD();
-            return;
-        }
-        if (item.type === 'consumable' && item.healAmount > 0) {
-            this.useItem(item);
-            this.updateQuickSlotUI();
-            return;
-        }
-        if (item.toolType || item.type === 'weapon') {
-            this.equipItem(item);
-            this.player.currentTool = item.toolType || TOOLS.HANDS;
-            updateActionButton();
-        } else if (item.type === 'ammo' || item.type === 'resource') {
-            this._notify('Ese espacio guarda ' + item.name + ' (no se equipa)');
-        } else {
-            this._notify(item.name + ' no se puede equipar');
-        }
-        this.updateQuickSlotUI();
-        this.player.updateToolHUD();
-    }
+      /** Cinturón → mochila (si hay espacio). */
+      clearQuickSlot(slotIndex) {
+          if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return false;
+          const item = this.quickSlots[slotIndex];
+          if (!item) return true;
+          if (!this.backpackHasSpace(item)) {
+              try {
+                  if (typeof setCraftStatus === 'function') setCraftStatus('Mochila llena — no podés bajar del cinturón');
+                  else if (typeof lvToast === 'function') lvToast('Mochila llena');
+              } catch (e) {}
+              return false;
+          }
+          this.quickSlots[slotIndex] = null;
+          this.items.push(item);
+          if (this.equippedItem === item) {
+              // Sigue equipada desde mochila
+          }
+          this.updateQuickSlotUI();
+          this.updateInventoryUI();
+          return true;
+      }
 
-    assignToQuickSlot(item, slotIndex) {
-        if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return false;
-        const loc = this.findSlot(item);
-        if (!loc) return false;
-        if (loc.area === 'belt') return this.moveItem('belt', loc.idx, 'belt', slotIndex);
-        return this.moveItem('bag', loc.idx, 'belt', slotIndex);
-    }
+      moveBeltToBag(slotIndex) {
+          return this.clearQuickSlot(slotIndex);
+      }
 
-    clearQuickSlot(slotIndex) {
-        if (slotIndex < 0 || slotIndex >= this.quickSlots.length) return false;
-        if (!this.quickSlots[slotIndex]) return true;
-        const free = this.firstEmpty('bag');
-        if (free < 0) {
-            this._notify('Mochila llena: no puedo moverlo');
-            return false;
-        }
-        return this.moveItem('belt', slotIndex, 'bag', free);
-    }
-
-    updateQuickSlotUI() {
-        const quickSlotElements = document.querySelectorAll('#quickSlots .quick-slot');
-        quickSlotElements.forEach((el) => {
-            const index = parseInt(el.getAttribute('data-slot'), 10);
-            if (isNaN(index)) return;
-            el.innerHTML = '';
-            el.classList.remove('active', 'empty');
-            const item = this.quickSlots[index];
-            const icon = document.createElement('div');
-            icon.className = 'quick-slot-icon';
-            if (item) {
-                icon.textContent = (typeof itemIcon === 'function') ? itemIcon(item) : '❔';
-                el.setAttribute('title', item.name + (item.quantity > 1 ? ' x' + item.quantity : ''));
-                if (item.stackable && (item.quantity || 1) > 1) {
-                    const q = document.createElement('span');
-                    q.className = 'quick-slot-qty';
-                    q.textContent = item.quantity;
-                    el.appendChild(q);
-                }
-                el.oncontextmenu = (e) => { e.preventDefault(); this.clearQuickSlot(index); };
-                if (this.equippedItem === item) el.classList.add('active');
-            } else {
-                el.removeAttribute('title');
-                icon.textContent = '＋';
-                icon.style.opacity = '0.5';
-                el.classList.add('empty');
-                el.oncontextmenu = (e) => { e.preventDefault(); this.clearQuickSlot(index); };
-            }
-            const keyNum = document.createElement('div');
-            keyNum.className = 'quick-slot-key';
-            keyNum.textContent = index + 1;
-            el.appendChild(icon);
-            el.appendChild(keyNum);
-        });
-    }
-}
+      updateQuickSlotUI() {
+          const quickSlotElements = document.querySelectorAll('.quick-slot');
+          quickSlotElements.forEach((el) => {
+              const index = parseInt(el.getAttribute('data-slot'), 10);
+              if (isNaN(index)) return;
+              el.innerHTML = '';
+              el.classList.remove('active');
+              
+              const item = this.quickSlots[index];
+              
+              // Create icon/content
+              const icon = document.createElement('div');
+              icon.className = 'quick-slot-icon';
+              
+              if (item) {
+                  // Item exists - show it
+                  if (item.type === 'weapon') {
+                      icon.textContent = '🔫';
+                  } else if (item.toolType) { // Check toolType instead of item.type
+                      icon.textContent = {
+                          [TOOLS.HAMMER]: '🔨',
+                          [TOOLS.AXE]: '🪓',
+                          [TOOLS.PICKAXE]: '⛏️',
+                          [TOOLS.TORCH]: '🔥'
+                      }[item.toolType] || '❔';
+                  } else if (item.healAmount > 0) {
+                      icon.textContent = '🍖';
+                  } else if (typeof itemIcon === 'function') {
+                      icon.textContent = itemIcon(item);
+                  }
+                  
+                  el.setAttribute('title', item.name + (item.healAmount > 0 ? ' — usar/equipar' : ''));
+                  el.oncontextmenu = (e) => { e.preventDefault(); this.clearQuickSlot(index); };
+                  
+                  // Highlight if equipped
+                  if (this.equippedItem === item) {
+                      el.classList.add('active');
+                  }
+              } else {
+                  el.removeAttribute('title');
+                  el.oncontextmenu = (e) => { e.preventDefault(); this.clearQuickSlot(index); };
+                  // Empty slot - show placeholder
+                  icon.textContent = '＋';
+                  icon.style.opacity = '0.5';
+              }
+              
+              // Add key number
+              const keyNum = document.createElement('div');
+              keyNum.className = 'quick-slot-key';
+              keyNum.textContent = index + 1;
+              
+              el.appendChild(icon);
+              el.appendChild(keyNum);
+          });
+      }
+  }

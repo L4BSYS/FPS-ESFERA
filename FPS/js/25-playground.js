@@ -97,8 +97,9 @@ function buildPlaygroundLevel() {
         detail: [
           'La mochila del pedestal: E para tomarla (en Playground Q ya anda).',
           'Q abre inventario / craft a mano.',
-          'Cofre: E abre. Click slot = sacar; click mochila = guardar.',
-          'El dispenser de balas está junto al combate (sureste).'
+          'Cofre: E abre. Arrastrá o click fichas Cosas ↔ Cofre.',
+          'Loot del cofre: alcanza para martillo (piedra+piedra) y mesa (madera+metal).',
+          'El dispenser de balas (sureste): E · Tomar 10.'
         ]
       }
     );
@@ -108,7 +109,11 @@ function buildPlaygroundLevel() {
       label: 'Cofre de prueba',
       slots: 12,
       seed: [
-        { id: 'food', name: 'Comida', type: 'consumable', quantity: 2, healAmount: 30, stackable: true }
+        { id: 'stone', type: 'resource', resourceKey: 'stone', name: 'Piedra', quantity: 10, stackable: true, maxStack: 10 },
+        { id: 'stone', type: 'resource', resourceKey: 'stone', name: 'Piedra', quantity: 10, stackable: true, maxStack: 10 },
+        { id: 'wood', type: 'resource', resourceKey: 'wood', name: 'Madera', quantity: 10, stackable: true, maxStack: 10 },
+        { id: 'metal', type: 'resource', resourceKey: 'metal', name: 'Metal', quantity: 10, stackable: true, maxStack: 10 },
+        { id: 'food', name: 'Comida', type: 'consumable', quantity: 2, healAmount: 30, stackable: true, maxStack: 5 }
       ]
     });
     try { placeTutorialToolPad(5.4, 0.3, 'PgBag'); } catch (e) {}
@@ -183,7 +188,7 @@ function buildPlaygroundLevel() {
           'Pistola: click dispara · R recarga (cargador 12).',
           'Sin balas o con otra herramienta: click = melee.',
           'Manos / hacha / pico / martillo / antorcha también pegan.',
-          'Balas en el piso o en el dispenser (E · Tomar 1).',
+          'Balas en el piso o en el dispenser (E · Tomar 10).',
           'Tótem naranja: prende el anillo y activa las oleadas.',
           'Sin robots al inicio: vos elegís cuándo pelear.',
           'Autoridad de combate: solo el sistema de oleadas.'
@@ -208,7 +213,8 @@ function buildPlaygroundLevel() {
       x: 13.6, z: 12.2, rotY: faceSpawn,
       label: 'Dispenser de balas',
       cooldown: 1.25,
-      stock: { id: 'pistol_ammo', name: 'Balas de pistola', amount: 36 }
+      takeAmount: 10,
+      stock: { id: 'pistol_ammo', name: 'Balas de pistola', amount: 60 }
     });
 
     [[11.5, 15.8], [14.2, 16.5]].forEach(function (c) {

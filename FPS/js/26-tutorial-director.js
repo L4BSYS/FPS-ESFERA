@@ -356,9 +356,25 @@ function directorOnPickaxeResourceHarvested() {
 
 function buildTutorialBagModel() {
   const g = new THREE.Group();
-  const cloth = new THREE.MeshStandardMaterial({ color: 0x3d5a3d, roughness: 0.85, metalness: 0.05, emissive: 0x1a2e1a, emissiveIntensity: 0.25 });
-  const strap = new THREE.MeshStandardMaterial({ color: 0x5c4030, roughness: 0.9 });
-  const buckle = new THREE.MeshStandardMaterial({ color: 0xc4a574, metalness: 0.6, roughness: 0.4, emissive: 0x664400, emissiveIntensity: 0.3 });
+  const skin = (typeof BAG_SKIN !== 'undefined') ? BAG_SKIN : null;
+  const cloth = new THREE.MeshStandardMaterial({
+    color: skin ? skin.clothHex : 0x4a6b3a,
+    roughness: 0.85,
+    metalness: 0.05,
+    emissive: skin ? skin.clothEmissiveHex : 0x1a2e1a,
+    emissiveIntensity: 0.25
+  });
+  const strap = new THREE.MeshStandardMaterial({
+    color: skin ? skin.strapHex : 0x6b4a2e,
+    roughness: 0.9
+  });
+  const buckle = new THREE.MeshStandardMaterial({
+    color: skin ? skin.buckleHex : 0xc4a574,
+    metalness: 0.6,
+    roughness: 0.4,
+    emissive: skin ? skin.buckleEmissiveHex : 0x664400,
+    emissiveIntensity: 0.3
+  });
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.28), cloth);
   body.position.y = 0.28;
   body.castShadow = true;
@@ -376,6 +392,7 @@ function buildTutorialBagModel() {
   b.position.set(0, 0.4, 0.15);
   g.add(b);
   g.name = 'TutorialBag';
+  g.userData.bagSkin = true;
   return g;
 }
 
@@ -429,12 +446,12 @@ function revealTutorialStep3() {
     updateCartelLines(DIRECTOR.step3Cartel, [
       'E     tomá la mochila',
       'Q     abrí el craft',
-      'Martillo  4 madera+2 piedra'
+      'Martillo  piedra+piedra'
     ], [
       'Hasta tomar la mochila, Q y el craft están bloqueados.',
       'E en el kit del pedestal desbloquea la mochila.',
       'Q abre inventario / craft a mano.',
-      'Crafteá el Martillo: 4 madera + 2 piedra.',
+      'Crafteá el Martillo: piedra + piedra en A y B (4 piedra en total).',
       'Si te faltan recursos, volvé a picar al norte / noroeste.',
       'El martillo no aparece en el piso: solo sale del craft.'
     ]);
@@ -589,7 +606,7 @@ function revealTutorialStep4() {
       'Martillo equipado'
     ], [
       'La Mesa de trabajo exige tener un martillo en el inventario.',
-      'Costo: 6 madera + 4 piedra.',
+      'Costo: madera + metal en A/B (6 madera + 4 metal en total).',
       'Al craftarla entra en modo colocación: click para confirmar.',
       'Tiene que ir dentro del círculo azul marcado.',
       'Fuera del círculo se rechaza y se te reintegra el craft.',

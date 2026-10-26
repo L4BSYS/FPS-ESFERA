@@ -14,6 +14,18 @@
   --rg-ink: #d6ffd6;
   --rg-dim: #8aa88a;
   --rg-line: #2c4a2c;
+  /* Mochila — defaults; applyBagSkin() puede sobrescribir */
+  --bag-cloth: #4a6b3a;
+  --bag-cloth-dark: #24331f;
+  --bag-cloth-mid: #354f2c;
+  --bag-strap: #6b4a2e;
+  --bag-buckle: #c4a574;
+  --bag-stitch: rgba(196, 165, 116, 0.35);
+  --bag-ink: #e8f5d8;
+  --bag-icon: "🎒";
+  /* Cursores autocontenidos (SVG data-URI): menú óxido/ámbar · UI dot táctico */
+  --rg-cursor-menu: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 28 28'%3E%3Cpath fill='%23ffb300' stroke='%230b0e0b' stroke-width='1.25' stroke-linejoin='round' d='M3.5 2.5v18.5l5.2-5.1 3.8 9.2 3.1-1.3-3.7-9 7.1-.1z'/%3E%3C/svg%3E") 3 2, pointer;
+  --rg-cursor-ui: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'%3E%3Ccircle cx='10' cy='10' r='5' fill='none' stroke='%2333ff66' stroke-width='1' opacity='.45'/%3E%3Ccircle cx='10' cy='10' r='2.25' fill='%2333ff66'/%3E%3C/svg%3E") 10 10, crosshair;
 }
 
 body, html {
@@ -22,6 +34,41 @@ body, html {
   height: 100%;
   background: var(--rg-bg);
   font-family: 'VT323', 'Courier New', monospace;
+  /* Evita menú contextual nativo (clic derecho / long-press iOS) */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Cursor dual por contexto (clases en <html>) */
+html.rg-cursor-menu,
+html.rg-cursor-menu * {
+  cursor: var(--rg-cursor-menu) !important;
+}
+html.rg-cursor-ui,
+html.rg-cursor-ui * {
+  cursor: var(--rg-cursor-ui) !important;
+}
+html.rg-cursor-game,
+html.rg-cursor-game * {
+  cursor: none !important;
+}
+html.rg-cursor-menu input,
+html.rg-cursor-menu textarea,
+html.rg-cursor-ui input,
+html.rg-cursor-ui textarea,
+html.rg-cursor-menu input *,
+html.rg-cursor-ui input * {
+  cursor: text !important;
+}
+html.rg-cursor-menu :disabled,
+html.rg-cursor-ui :disabled {
+  cursor: not-allowed !important;
+}
+/* El chat necesita selección de texto; el menú contextual sigue bloqueado por JS */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* Crujido CRT sutil encima de todo (no captura clicks) */
@@ -50,12 +97,29 @@ body, html {
   font-size: 20px;
   text-shadow: 2px 2px 0 #000;
 }
+/* Mira FPS = mismo lenguaje que el cursor dot táctico */
 #crosshair {
   position: absolute;
   top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 26px;
-  color: var(--rg-green);
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(51, 255, 102, 0.45);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 5;
+}
+#crosshair::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 50%;
+  background: var(--rg-green);
+  box-shadow: 0 0 6px rgba(51, 255, 102, 0.55);
 }
 #stats {
   position: absolute;
@@ -285,6 +349,513 @@ body, html {
   touch-action: none;
 }
 
+/* ============ Mochila: contenedor + banco de mano (una pantalla) ============ */
+#invModal.rg-cinema-center {
+  padding: 2vh 1.5vw;
+  box-sizing: border-box;
+}
+.rg-inv-card.rg-cinema-card {
+  width: min(1120px, 98vw);
+  height: min(880px, 94vh);
+  max-height: 94vh;
+  overflow: hidden; /* sin barra exterior */
+  text-align: left;
+  gap: 8px;
+  padding: clamp(16px, 2.2vh, 28px) clamp(16px, 2vw, 28px);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Piel lona: misma paleta que el prop 3D (BAG_SKIN) */
+.rg-bag-skin {
+  border-color: var(--bag-buckle) !important;
+  color: var(--bag-ink);
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.18) 0%, rgba(0, 0, 0, 0.45) 100%),
+    repeating-linear-gradient(
+      90deg,
+      var(--bag-cloth-mid) 0px,
+      var(--bag-cloth-mid) 3px,
+      var(--bag-cloth) 3px,
+      var(--bag-cloth) 7px
+    ),
+    linear-gradient(160deg, var(--bag-cloth) 0%, var(--bag-cloth-dark) 100%);
+  box-shadow:
+    inset 0 0 0 1px var(--bag-stitch),
+    inset 0 1px 0 rgba(255, 230, 180, 0.12),
+    0 0 28px rgba(74, 107, 58, 0.25);
+}
+.rg-bag-skin .rg-home-title {
+  color: var(--bag-ink);
+  text-shadow: 0 0 10px rgba(196, 165, 116, 0.25);
+}
+.rg-bag-ico {
+  display: inline-block;
+  margin-right: 0.2em;
+  filter: drop-shadow(0 0 6px rgba(196, 165, 116, 0.35));
+}
+.rg-bag-skin .rg-belt-wrap {
+  border-color: rgba(107, 74, 46, 0.75);
+  background:
+    linear-gradient(180deg, rgba(74, 107, 58, 0.35) 0%, rgba(36, 51, 31, 0.85) 100%);
+}
+.rg-bag-skin .rg-inv-col {
+  border-color: rgba(196, 165, 116, 0.28);
+  background: rgba(20, 28, 16, 0.55);
+}
+.rg-bag-skin .rg-inv-q {
+  border-color: var(--bag-buckle);
+  color: var(--bag-buckle);
+}
+.rg-fab.rg-bag-fab {
+  border-color: var(--bag-buckle);
+  background: var(--bag-cloth-dark);
+  box-shadow: 0 0 12px rgba(74, 107, 58, 0.45);
+}
+.rg-inv-card .rg-home-hint,
+.rg-inv-card .rg-status,
+.rg-inv-card .rg-home-status {
+  text-align: left;
+}
+.rg-inv-card > .rg-home-hint {
+  flex: 0 0 auto;
+  font-size: 16px;
+  opacity: 0.9;
+}
+.rg-inv-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.rg-inv-head .rg-home-title {
+  margin: 0;
+  text-align: left;
+  font-size: clamp(15px, 1.8vw, 20px);
+}
+.rg-inv-card .rg-btn {
+  width: auto;
+}
+.rg-inv-q {
+  width: 42px !important;
+  min-width: 42px !important;
+  margin: 0 !important;
+  padding: 8px 0 !important;
+  flex: 0 0 auto;
+  font-family: 'Press Start 2P', monospace;
+  font-size: 11px;
+  line-height: 1;
+  border-color: var(--rg-line);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--rg-dim);
+}
+.rg-inv-q:hover {
+  color: var(--rg-ink);
+  border-color: var(--rg-green);
+}
+.rg-belt-wrap {
+  flex: 0 0 auto;
+  margin: 4px 0 2px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  border: 2px solid rgba(196, 165, 116, 0.55);
+  background:
+    linear-gradient(180deg, rgba(92, 64, 48, 0.45) 0%, rgba(20, 14, 10, 0.75) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 220, 160, 0.12),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.45),
+    0 0 18px rgba(196, 165, 116, 0.12);
+  position: relative;
+}
+.rg-belt-wrap::before,
+.rg-belt-wrap::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 2px;
+  background: rgba(212, 175, 55, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.rg-belt-wrap::before { left: 4px; }
+.rg-belt-wrap::after { right: 4px; }
+.rg-belt-label {
+  font-family: 'VT323', monospace;
+  font-size: 16px;
+  letter-spacing: 1px;
+  color: #e6c78a;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.rg-inv-card .rg-belt {
+  flex: 0 0 auto;
+  margin: 0;
+  justify-content: center;
+  gap: 10px;
+}
+.rg-inv-card .rg-belt .quick-slot {
+  width: 64px;
+  height: 64px;
+  border-width: 2px;
+  border-color: rgba(230, 199, 138, 0.7);
+  background: rgba(40, 28, 16, 0.65);
+  box-shadow:
+    0 0 12px rgba(196, 165, 116, 0.28),
+    inset 0 1px 0 rgba(255, 220, 160, 0.14);
+}
+.rg-inv-card .rg-belt .quick-slot .quick-slot-icon {
+  font-size: 32px;
+}
+.rg-inv-card .rg-belt .quick-slot.active {
+  border-color: var(--rg-green);
+  box-shadow: 0 0 14px rgba(51, 255, 102, 0.35);
+}
+.rg-tray-drop.rg-drag-over {
+  border-color: var(--rg-amber);
+  box-shadow: 0 0 12px rgba(255, 179, 0, 0.35);
+}
+.rg-inv-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0; /* permite que las cols usen el alto restante */
+  margin-top: 4px;
+  align-items: stretch;
+}
+.rg-inv-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(44, 74, 44, 0.55);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+.rg-inv-col .rg-h {
+  margin: 0 0 2px 0;
+  text-align: left;
+  flex: 0 0 auto;
+}
+.rg-inv-col > .rg-home-hint {
+  flex: 0 0 auto;
+  font-size: 15px;
+  margin: 0;
+}
+.rg-inv-items,
+.rg-inv-recipes {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(44, 74, 44, 0.85) transparent;
+}
+.rg-inv-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  align-content: start;
+}
+.rg-inv-slot-cell {
+  position: relative;
+  min-height: 64px;
+  box-sizing: border-box;
+  border: 2px solid var(--rg-line);
+  border-radius: 6px;
+  background: #0a0d0a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 2px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.rg-inv-slot-cell.is-empty {
+  opacity: 0.4;
+  cursor: default;
+  border-style: dashed;
+}
+.rg-inv-slot-cell .rg-inv-slot-ico {
+  font-size: 22px;
+  line-height: 1;
+}
+.rg-inv-slot-cell .rg-inv-slot-name {
+  font-family: 'VT323', monospace;
+  font-size: 13px;
+  color: var(--rg-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.rg-inv-slot-cell .rg-inv-slot-qty {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  font-family: 'VT323', monospace;
+  font-size: 14px;
+  color: var(--rg-amber);
+}
+.rg-inv-items::-webkit-scrollbar,
+.rg-inv-recipes::-webkit-scrollbar {
+  width: 5px;
+}
+.rg-inv-items::-webkit-scrollbar-track,
+.rg-inv-recipes::-webkit-scrollbar-track {
+  background: transparent;
+}
+.rg-inv-items::-webkit-scrollbar-thumb,
+.rg-inv-recipes::-webkit-scrollbar-thumb {
+  background: rgba(44, 74, 44, 0.75);
+  border-radius: 4px;
+}
+.rg-inv-recipes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rg-inv-recipes .rg-craft {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  flex: 0 0 auto;
+}
+.rg-inv-recipes .rg-craft.on {
+  border-color: var(--rg-green);
+  background: rgba(51, 255, 102, 0.1);
+}
+.rg-inv-tray {
+  display: grid;
+  grid-template-columns: auto auto auto auto auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-content: center;
+  column-gap: 8px;
+  row-gap: 8px;
+  padding: 10px 8px;
+  margin: 2px 0 4px;
+  border: 1px dashed rgba(44, 74, 44, 0.7);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  flex: 0 0 auto;
+}
+.rg-inv-tray .rg-inv-slot:nth-child(1) { grid-column: 1; grid-row: 1; }
+.rg-inv-tray-op:nth-child(2) { grid-column: 2; grid-row: 1; }
+.rg-inv-tray .rg-inv-slot:nth-child(3) { grid-column: 3; grid-row: 1; }
+.rg-inv-tray-op:nth-child(4) { grid-column: 4; grid-row: 1; }
+.rg-inv-tray .rg-inv-slot-out { grid-column: 5; grid-row: 1; }
+.rg-inv-tray .rg-home-cta {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: center;
+  width: auto;
+  min-width: 140px;
+  margin: 0 !important;
+  padding: 10px 16px;
+  font-size: 10px;
+}
+.rg-inv-slot {
+  width: 58px;
+  height: 58px;
+  box-sizing: border-box;
+  border: 2px solid var(--rg-line);
+  border-radius: 6px;
+  background: #0a0d0a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--rg-dim);
+  font-family: 'VT323', monospace;
+  line-height: 1.05;
+}
+.rg-inv-slot-out {
+  border-color: var(--rg-green-dim);
+  box-shadow: 0 0 10px rgba(51, 255, 102, 0.15);
+}
+.rg-inv-slot-ico {
+  font-size: 20px;
+  color: var(--rg-ink);
+}
+.rg-inv-slot-lbl {
+  font-size: 14px;
+  color: var(--rg-dim);
+  max-width: 54px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.rg-inv-tray-op {
+  color: var(--rg-amber);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+}
+.rg-inv-card #invMsg {
+  flex: 0 0 auto;
+  min-height: 1.2em;
+  margin: 0;
+}
+.rg-inv-close {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding-top: 4px;
+}
+.rg-inv-close .rg-btn {
+  width: auto;
+  min-width: 140px;
+  margin: 0;
+}
+
+/* Shell compartido de estaciones (mochila / mesa / cofre / dispenser) */
+.rg-station-card .rg-inv-head {
+  align-items: flex-start;
+}
+
+/* Mesa: mismo shell que mochila + franja de HP / cinturón / reparar */
+#benchModal.rg-cinema-center {
+  padding: 2vh 1.5vw;
+  box-sizing: border-box;
+}
+.rg-bench-card {
+  border-color: rgba(255, 179, 0, 0.4);
+}
+.rg-bench-hp {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  padding: 8px 12px 10px;
+  border-radius: 10px;
+  border: 2px solid rgba(255, 179, 0, 0.4);
+  background:
+    linear-gradient(180deg, rgba(80, 56, 20, 0.4) 0%, rgba(20, 14, 10, 0.75) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 220, 160, 0.1),
+    0 0 14px rgba(255, 179, 0, 0.1);
+}
+.rg-bench-hp .rg-belt-label {
+  margin-bottom: 6px;
+  color: #ffcc66;
+}
+.rg-bench-card .rg-hpbar {
+  width: 100%;
+  max-width: none;
+  height: 12px;
+}
+.rg-bench-card .rg-belt-wrap {
+  margin-top: 6px;
+}
+.rg-bench-repair {
+  flex: 0 0 auto;
+  width: 100% !important;
+  margin: 6px 0 0 0 !important;
+  text-align: center;
+}
+
+/* Cofre: mismo shell ficha que mochila */
+#containerModal.rg-cinema-center {
+  padding: 2vh 1.5vw;
+  box-sizing: border-box;
+}
+.rg-chest-card {
+  border-color: rgba(255, 179, 0, 0.35);
+}
+.rg-chest-card.is-dispenser {
+  border-color: rgba(76, 175, 80, 0.45);
+}
+.rg-chest-card #containerStorage,
+.rg-chest-card #containerDispenser {
+  display: grid;
+}
+.rg-chest-card #containerInvItems,
+.rg-chest-card #containerSlots,
+.rg-chest-card #containerDispItems {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.rg-chest-card .rg-inv-slot-cell[data-chest-idx] {
+  border-color: rgba(196, 165, 116, 0.4);
+}
+.rg-disp-panel {
+  align-items: stretch;
+}
+.rg-disp-product {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  padding: 16px 12px;
+  border-radius: 10px;
+  border: 2px solid rgba(76, 175, 80, 0.4);
+  background:
+    linear-gradient(180deg, rgba(30, 60, 40, 0.45) 0%, rgba(12, 18, 14, 0.8) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 255, 180, 0.08),
+    0 0 16px rgba(76, 175, 80, 0.12);
+}
+.rg-disp-ico {
+  font-size: 52px;
+  line-height: 1;
+  filter: drop-shadow(0 0 10px rgba(76, 175, 80, 0.35));
+}
+.rg-disp-name {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 12px;
+  color: var(--rg-ink);
+}
+.rg-disp-stock-wrap {
+  width: 100%;
+  max-width: 280px;
+}
+.rg-disp-stock-wrap .rg-belt-label {
+  color: #9fe6a8;
+  margin-bottom: 6px;
+}
+.rg-disp-stock-wrap .rg-hpbar {
+  width: 100%;
+  max-width: none;
+  height: 12px;
+}
+.rg-disp-product .rg-home-cta {
+  width: min(240px, 100%);
+  margin: 4px 0 0;
+}
+/* Solo apilar en pantallas muy angostas; desktop/tablet landscape mantienen 2 cols */
+@media (max-width: 640px) {
+  .rg-inv-card.rg-cinema-card {
+    width: 98vw;
+    height: auto;
+    max-height: 96vh;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(44, 74, 44, 0.85) transparent;
+  }
+  .rg-inv-split {
+    grid-template-columns: 1fr;
+    flex: 0 0 auto;
+  }
+  .rg-inv-col {
+    height: auto;
+    max-height: 42vh;
+  }
+}
+
 /* ============ Cinturón dentro de la mochila ============ */
 .rg-belt {
   display: flex;
@@ -395,17 +966,8 @@ body, html {
   font-size: 20px;
 }
 .rg-pause {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 24px 28px;
+  /* legado: la pausa ahora usa .rg-overlay.rg-cinema-center + .rg-cinema-card */
   text-align: center;
-  display: none;
-  z-index: 100;
-  max-height: 85vh;
-  overflow-y: auto;
-  min-width: 300px;
-  max-width: 94vw;
   box-sizing: border-box;
 }
 .rg-modalbox {
@@ -1092,6 +1654,356 @@ input[type="range"] {
   gap: 8px;
   justify-content: center;
   margin: 8px 0;
+}
+
+/* ============ Home cinematográfico (supervivencia) ============ */
+#mainMenu.rg-menu-cinematic {
+  justify-content: stretch;
+  align-items: stretch;
+  background:
+    radial-gradient(ellipse at 70% 45%, rgba(0, 0, 0, 0.2) 0%, rgba(0, 0, 0, 0.55) 45%, rgba(0, 0, 0, 0.88) 100%),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.72) 0%, rgba(0, 0, 0, 0.35) 42%, rgba(0, 0, 0, 0.15) 100%);
+}
+.rg-home {
+  position: relative;
+  z-index: 1;
+  width: min(440px, 94vw);
+  height: 100%;
+  max-height: 100%;
+  padding: clamp(28px, 6vh, 56px) clamp(22px, 3vw, 40px) 28px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  background: linear-gradient(90deg, rgba(8, 12, 8, 0.55) 0%, rgba(8, 12, 8, 0.22) 78%, rgba(8, 12, 8, 0) 100%);
+  pointer-events: auto;
+}
+.rg-home-brand {
+  margin-bottom: 4px;
+}
+.rg-home-title {
+  font-family: 'Press Start 2P', monospace;
+  font-size: clamp(16px, 2.4vw, 22px);
+  letter-spacing: 2px;
+  color: var(--rg-green);
+  text-shadow: 0 0 18px rgba(51, 255, 102, 0.35), 2px 2px 0 #000;
+  margin: 0 0 10px 0;
+  line-height: 1.35;
+}
+.rg-home-title.danger {
+  color: var(--rg-red);
+  text-shadow: 0 0 18px rgba(255, 68, 68, 0.35), 2px 2px 0 #000;
+}
+.rg-home-session,
+.rg-home-status,
+.rg-home-hint {
+  font-family: 'VT323', monospace;
+  font-size: 18px;
+  color: var(--rg-dim);
+  line-height: 1.25;
+  margin: 0;
+}
+.rg-home-status {
+  color: var(--rg-amber);
+  margin-bottom: 6px;
+}
+.rg-home-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+.rg-home-edit .rg-home-edit-btn,
+.rg-home-edit .rg-home-link {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+}
+.rg-home-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  flex: 1 1 auto;
+}
+.rg-home-nav .rg-btn {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  box-sizing: border-box;
+}
+.rg-home-cta {
+  padding: 14px 18px;
+  font-size: 11px;
+  border-color: var(--rg-green);
+  box-shadow: 0 4px 0 #000, 0 0 16px rgba(51, 255, 102, 0.25);
+  margin-bottom: 4px !important;
+}
+.rg-home-cta:hover:not(:disabled) {
+  border-color: var(--rg-green);
+  background: rgba(51, 255, 102, 0.12);
+}
+.rg-home-link {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--rg-ink);
+  padding: 10px 12px;
+}
+.rg-home-link:hover:not(:disabled) {
+  background: rgba(51, 255, 102, 0.08);
+  border-color: var(--rg-line);
+  box-shadow: none;
+}
+.rg-home-link:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+.rg-home-locked {
+  opacity: 0.55;
+  color: var(--rg-dim);
+}
+.rg-home-sep {
+  height: 1px;
+  margin: 10px 4px;
+  background: linear-gradient(90deg, var(--rg-line) 0%, transparent 100%);
+  border: 0;
+}
+.rg-home-foot {
+  margin-top: auto;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid rgba(44, 74, 44, 0.55);
+}
+.rg-home-foot .rg-home-foot-btn {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--rg-dim);
+}
+.rg-home-foot .rg-home-foot-btn:hover:not(:disabled) {
+  color: var(--rg-ink);
+  border-color: var(--rg-line);
+  background: rgba(0, 0, 0, 0.25);
+  box-shadow: none;
+}
+.rg-home-foot .rg-home-foot-btn:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+@media (max-width: 768px) {
+  .rg-home {
+    width: 100%;
+    background: linear-gradient(180deg, rgba(8, 12, 8, 0.72) 0%, rgba(8, 12, 8, 0.5) 100%);
+    padding: 22px 16px 20px;
+  }
+  .rg-home-title { font-size: 15px; }
+}
+
+/* ============ Overlays cinematográficos centrados (pausa / muerte / rewards) ============ */
+.rg-overlay.rg-cinema-center {
+  justify-content: center;
+  align-items: center;
+  background: radial-gradient(ellipse at 50% 42%, rgba(0, 0, 0, 0.28) 0%, rgba(0, 0, 0, 0.62) 48%, rgba(0, 0, 0, 0.9) 100%);
+}
+.rg-cinema-card {
+  position: relative;
+  z-index: 1;
+  width: min(420px, 92vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: clamp(24px, 4vh, 40px) clamp(20px, 3vw, 34px);
+  box-sizing: border-box;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  background: linear-gradient(180deg, rgba(8, 12, 8, 0.78) 0%, rgba(8, 12, 8, 0.58) 100%);
+  border: 1px solid rgba(44, 74, 44, 0.5);
+  border-radius: 8px;
+  box-shadow: 0 0 48px rgba(0, 0, 0, 0.5), inset 0 0 40px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
+}
+.rg-cinema-card--pause {
+  width: min(520px, 94vw);
+  height: min(640px, 86vh);
+  max-height: 86vh;
+  overflow: hidden;
+  gap: 8px;
+}
+.rg-pause-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(44, 74, 44, 0.85) transparent;
+  text-align: left;
+  padding-right: 2px;
+}
+.rg-cinema-card--pause > .rg-home-title,
+.rg-cinema-card--pause > .rg-home-cta,
+.rg-cinema-card--pause > .rg-tabs,
+.rg-cinema-card--pause > .rg-status {
+  flex: 0 0 auto;
+}
+.rg-cinema-card--pause .rg-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  justify-content: flex-start;
+  gap: 4px;
+  padding-bottom: 2px;
+}
+.rg-cinema-card--pause .rg-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 6px;
+  font-size: 8px;
+  white-space: nowrap;
+}
+/* Ajustes: filas compactas (no botones a ancho completo tipo “barra lateral”) */
+.rg-cinema-card--pause .rg-section {
+  margin-top: 6px;
+  padding: 8px 4px;
+}
+.rg-cinema-card--pause .rg-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 8px 0;
+  flex-wrap: nowrap;
+}
+.rg-cinema-card--pause .rg-setting-row > span,
+.rg-cinema-card--pause .rg-setting-label {
+  font-size: 18px;
+  color: var(--rg-ink);
+  flex: 1 1 auto;
+}
+.rg-cinema-card--pause .rg-setting-row .rg-btn {
+  width: auto;
+  min-width: 120px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.rg-cinema-card--pause .rg-setting-row input[type="range"] {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 220px;
+  margin: 0;
+  accent-color: var(--rg-green);
+}
+.rg-cinema-card--pause .rg-setting-val {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  color: var(--rg-amber);
+  min-width: 3.5em;
+  text-align: right;
+}
+.rg-cinema-card--pause #keyRows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rg-cinema-card--pause #keyRows .rg-keys-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  flex-wrap: nowrap;
+}
+.rg-cinema-card--pause #keyRows .rg-keys-row .rg-rownote {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 18px;
+  color: var(--rg-ink);
+}
+.rg-cinema-card--pause #keyRows .rg-btn {
+  width: auto;
+  min-width: 56px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.rg-cinema-card .rg-home-title {
+  margin-bottom: 4px;
+}
+.rg-cinema-card .rg-home-status,
+.rg-cinema-card .rg-home-hint,
+.rg-cinema-card .rg-home-session,
+.rg-cinema-card .rg-stats,
+.rg-cinema-card .rg-hint,
+.rg-cinema-card .rg-status {
+  text-align: center;
+}
+.rg-cinema-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+.rg-cinema-card .rg-btn,
+.rg-cinema-nav .rg-btn {
+  width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+  text-align: center;
+}
+.rg-cinema-card .rg-home-cta {
+  margin-bottom: 2px !important;
+}
+.rg-cinema-card .rg-home-link {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.rg-cinema-card .rg-home-link:hover:not(:disabled) {
+  background: rgba(51, 255, 102, 0.08);
+  border-color: var(--rg-line);
+  box-shadow: none;
+}
+.rg-cinema-card .rg-home-link:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+.rg-cinema-card .rg-home-sep {
+  margin: 8px 10% 6px;
+  background: linear-gradient(90deg, transparent 0%, var(--rg-line) 30%, var(--rg-line) 70%, transparent 100%);
+}
+.rg-cinema-card .rg-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+.rg-cinema-card .rg-section {
+  text-align: left;
+  border-top-color: rgba(44, 74, 44, 0.55);
+}
+.rg-cinema-card .rg-menubtns {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+.rg-cinema-card .rg-menubtns .rg-btn {
+  width: 100%;
+  margin: 0;
+  text-align: center;
+}
+@media (max-width: 768px) {
+  .rg-cinema-card,
+  .rg-cinema-card--pause {
+    width: min(96vw, 540px);
+    padding: 20px 14px;
+  }
 }
 .rg-card {
   display: flex;
