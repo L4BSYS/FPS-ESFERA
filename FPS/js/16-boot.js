@@ -26,3 +26,4 @@ document.body.appendChild(overlay);
 initSounds();
 startAmbientMusic();
 try { if (typeof startAmbientBed === 'function') startAmbientBed(); } catch (e) {}
+try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}

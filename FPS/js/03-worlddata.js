@@ -239,7 +239,7 @@ const ITEM_DEFINITIONS = {
         ammoType: 'pistol',
         amount: 12,
         stackable: true,
-        maxStack: 5,
+        maxStack: 60,
         createModel: () => {
             const g = new THREE.Group();
             const boxMat = new THREE.MeshStandardMaterial({ color: 0x4a4e55, roughness: 0.6, metalness: 0.3 });
@@ -338,6 +338,32 @@ const ITEM_DEFINITIONS = {
         stackable: false
     },
 
+    // Stacks de recurso en mochila (1 slot = 1 stack; alimentan resources{} vía sync)
+    res_wood: {
+        id: 'wood',
+        name: 'Madera',
+        type: 'resource',
+        resourceKey: 'wood',
+        stackable: true,
+        maxStack: 10
+    },
+    res_stone: {
+        id: 'stone',
+        name: 'Piedra',
+        type: 'resource',
+        resourceKey: 'stone',
+        stackable: true,
+        maxStack: 10
+    },
+    res_metal: {
+        id: 'metal',
+        name: 'Metal',
+        type: 'resource',
+        resourceKey: 'metal',
+        stackable: true,
+        maxStack: 10
+    },
+
     // Recursos que se juntan sin herramienta (se suman a wood/stone/metal)
     branch: {
         id: 'branch',
@@ -346,7 +372,7 @@ const ITEM_DEFINITIONS = {
         resourceKey: 'wood',
         amount: 2,
         stackable: true,
-        maxStack: 9,
+        maxStack: 10,
         createModel: () => {
             const g = new THREE.Group();
             const mat = new THREE.MeshStandardMaterial({ color: 0x7a4a22, roughness: 0.9 });
@@ -367,7 +393,7 @@ const ITEM_DEFINITIONS = {
         resourceKey: 'stone',
         amount: 2,
         stackable: true,
-        maxStack: 9,
+        maxStack: 10,
         createModel: () => {
             const g = new THREE.Group();
             const mat = new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.95 });
@@ -386,7 +412,7 @@ const ITEM_DEFINITIONS = {
         resourceKey: 'metal',
         amount: 2,
         stackable: true,
-        maxStack: 9,
+        maxStack: 10,
         createModel: () => {
             const g = new THREE.Group();
             const mat = new THREE.MeshStandardMaterial({ color: 0x8a8f96, metalness: 0.8, roughness: 0.4 });

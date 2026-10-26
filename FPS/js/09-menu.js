@@ -1,24 +1,28 @@
-// js/09-menu.js (part 9/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
+﻿// js/09-menu.js (part 9/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // --- Pause Menu ---
   let pauseMenu;
   const pauseUI = {};
   function createPauseMenu() {
       const pauseDiv = document.createElement('div');
       pauseDiv.id = 'pauseMenu';
-      pauseDiv.className = 'rg-panel rg-pause';
+      pauseDiv.className = 'rg-overlay rg-cinema-center';
       pauseDiv.style.display = 'none';
+
+      const card = document.createElement('div');
+      card.className = 'rg-cinema-card rg-cinema-card--pause';
+      pauseDiv.appendChild(card);
 
       const title = document.createElement('h2');
       title.textContent = 'JUEGO EN PAUSA';
-      title.className = 'rg-title';
-      pauseDiv.appendChild(title);
+      title.className = 'rg-home-title';
+      card.appendChild(title);
 
       const resumeBtn = document.createElement('button');
       resumeBtn.textContent = 'Seguir (ESC)';
-      resumeBtn.className = 'rg-btn rg-btn-primary';
+      resumeBtn.className = 'rg-btn rg-btn-primary rg-home-cta';
 
       resumeBtn.addEventListener('click', togglePause);
-      pauseDiv.appendChild(resumeBtn);
+      card.appendChild(resumeBtn);
 
       const tabBar = document.createElement('div');
       tabBar.className = 'rg-tabs';
@@ -31,13 +35,18 @@
         tabBar.appendChild(b);
         pauseUI.tabs[key] = b;
       });
-      pauseDiv.appendChild(tabBar);
+      card.appendChild(tabBar);
+
+      const pauseBody = document.createElement('div');
+      pauseBody.className = 'rg-pause-body';
+      card.appendChild(pauseBody);
+      pauseUI.body = pauseBody;
 
       // Session stats line
       const statsDiv = document.createElement('div');
       statsDiv.id = 'pauseStats';
       statsDiv.className = 'rg-stats';
-      pauseDiv.appendChild(statsDiv);
+      pauseBody.appendChild(statsDiv);
       pauseUI.stats = statsDiv;
 
       // --- Account section ---
@@ -76,7 +85,7 @@
       });
       authDiv.appendChild(logoutBtn);
       pauseUI.logoutBtn = logoutBtn;
-      pauseDiv.appendChild(authDiv);
+      pauseBody.appendChild(authDiv);
       pauseUI.userInfo = userInfo;
 
       // --- Scene section (needs sign-in) ---
@@ -113,7 +122,7 @@
       loadBtn.textContent = 'Cargar';
       loadBtn.addEventListener('click', () => loadSceneFromFirestore());
       sceneDiv.appendChild(loadBtn);
-      pauseDiv.appendChild(sceneDiv);
+      pauseBody.appendChild(sceneDiv);
       pauseUI.sceneSection = sceneDiv;
       const trialDiv = document.createElement('div');
       trialDiv.className = 'rg-section';
@@ -125,7 +134,7 @@
       const trialBox = document.createElement('div');
       trialBox.id = 'trialBox';
       trialDiv.appendChild(trialBox);
-      pauseDiv.appendChild(trialDiv);
+      pauseBody.appendChild(trialDiv);
 
       // --- Mundos (gestor de niveles/portales) ---
       const levelsDiv = document.createElement('div');
@@ -137,7 +146,7 @@
       const levelsPanel = document.createElement('div');
       levelsPanel.id = 'levelsPanel';
       levelsDiv.appendChild(levelsPanel);
-      pauseDiv.appendChild(levelsDiv);
+      pauseBody.appendChild(levelsDiv);
 
       // --- Creator section (works offline, no sign-in needed) ---
       const creatorDiv = document.createElement('div');
@@ -183,12 +192,12 @@
       pauseUI.creatorPalette = palette;
       const clearBtn = document.createElement('button');
       clearBtn.className = 'rg-btn rg-btn-danger';
-      clearBtn.textContent = '🧹 Vaciar mundo (solo piso y paredes)';
+      clearBtn.textContent = '�Y�� Vaciar mundo (solo piso y paredes)';
       clearBtn.addEventListener('click', () => {
           if (confirm('¿Vaciar todo (bloques, objetos, base, enemigos)? Quedan piso y paredes.')) clearWorld();
       });
       creatorDiv.appendChild(clearBtn);
-      pauseDiv.appendChild(creatorDiv);
+      pauseBody.appendChild(creatorDiv);
 
       // --- Crafting section (any mode, uses harvested resources) ---
       const craftDiv = document.createElement('div');
@@ -199,7 +208,7 @@
       craftTitle.textContent = 'Craftear';
       craftDiv.appendChild(craftTitle);
       renderCraftButtons(craftDiv, 'hand');
-      pauseDiv.appendChild(craftDiv);
+      pauseBody.appendChild(craftDiv);
 
       // --- Online (multijugador: presencia + chat, por mundo) ---
       const onlineDiv = document.createElement('div');
@@ -248,42 +257,105 @@
       ghostRow.appendChild(ghostChk);
       ghostRow.appendChild(ghostLab);
       onlineDiv.appendChild(ghostRow);
-      pauseDiv.appendChild(onlineDiv);
-      // --- Audio section ---
+      pauseBody.appendChild(onlineDiv);
+
+      // --- Ajustes: sonido ---
       const audioDiv = document.createElement('div');
       audioDiv.className = 'rg-section';
       const audioTitle = document.createElement('h4');
       audioTitle.className = 'rg-h';
       audioTitle.textContent = 'Sonido';
       audioDiv.appendChild(audioTitle);
+      const musicRow = document.createElement('div');
+      musicRow.className = 'rg-setting-row';
+      const musicLab = document.createElement('span');
+      musicLab.className = 'rg-setting-label';
+      musicLab.textContent = 'Música';
+      musicRow.appendChild(musicLab);
       const musicBtn = document.createElement('button');
-      musicBtn.className = 'rg-btn';
-      musicBtn.textContent = 'Música: Sí';
+      musicBtn.className = 'rg-btn rg-btn-small';
+      musicBtn.textContent = (typeof musicEnabled !== 'undefined' && musicEnabled) ? 'Sí' : 'No';
       musicBtn.addEventListener('click', () => {
         setMusicEnabled(!musicEnabled);
-        musicBtn.textContent = musicEnabled ? 'Música: Sí' : 'Música: No';
+        musicBtn.textContent = musicEnabled ? 'Sí' : 'No';
       });
-      audioDiv.appendChild(musicBtn);
-      const volLabel = document.createElement('span');
-      volLabel.textContent = ' Volumen ';
-      audioDiv.appendChild(volLabel);
+      musicRow.appendChild(musicBtn);
+      audioDiv.appendChild(musicRow);
+      const volRow = document.createElement('div');
+      volRow.className = 'rg-setting-row';
+      const volLab = document.createElement('span');
+      volLab.className = 'rg-setting-label';
+      volLab.textContent = 'Volumen';
+      volRow.appendChild(volLab);
       const volSlider = document.createElement('input');
       volSlider.type = 'range';
       volSlider.min = '0';
       volSlider.max = '100';
       volSlider.value = '100';
-      volSlider.addEventListener('input', () => { musicVolume = volSlider.value / 100; });
-      audioDiv.appendChild(volSlider);
+      const volVal = document.createElement('span');
+      volVal.className = 'rg-setting-val';
+      volVal.textContent = '100';
+      volSlider.addEventListener('input', () => {
+        musicVolume = volSlider.value / 100;
+        volVal.textContent = String(volSlider.value);
+      });
+      volRow.appendChild(volSlider);
+      volRow.appendChild(volVal);
+      audioDiv.appendChild(volRow);
+      const sfxRow = document.createElement('div');
+      sfxRow.className = 'rg-setting-row';
+      const sfxLab = document.createElement('span');
+      sfxLab.className = 'rg-setting-label';
+      sfxLab.textContent = 'Efectos';
+      sfxRow.appendChild(sfxLab);
       const sfxBtn = document.createElement('button');
-      sfxBtn.className = 'rg-btn';
-      sfxBtn.textContent = sfxEnabled ? 'Efectos: Sí' : 'Efectos: No';
+      sfxBtn.className = 'rg-btn rg-btn-small';
+      sfxBtn.textContent = sfxEnabled ? 'Sí' : 'No';
       sfxBtn.addEventListener('click', () => {
         if (typeof setSfxEnabled === 'function') setSfxEnabled(!sfxEnabled);
         else sfxEnabled = !sfxEnabled;
-        sfxBtn.textContent = sfxEnabled ? 'Efectos: Sí' : 'Efectos: No';
+        sfxBtn.textContent = sfxEnabled ? 'Sí' : 'No';
       });
-      audioDiv.appendChild(sfxBtn);
-      pauseDiv.appendChild(audioDiv);
+      sfxRow.appendChild(sfxBtn);
+      audioDiv.appendChild(sfxRow);
+      pauseBody.appendChild(audioDiv);
+
+      // --- Ajustes: sensibilidad (sin texto tutorial) ---
+      const controlsDiv = document.createElement('div');
+      controlsDiv.className = 'rg-section';
+      const controlsTitle = document.createElement('h4');
+      controlsTitle.className = 'rg-h';
+      controlsTitle.textContent = 'Mouse';
+      controlsDiv.appendChild(controlsTitle);
+      const sensRow = document.createElement('div');
+      sensRow.className = 'rg-setting-row';
+      const sensLab = document.createElement('span');
+      sensLab.className = 'rg-setting-label';
+      sensLab.textContent = 'Sensibilidad';
+      sensRow.appendChild(sensLab);
+      const sensSlider = document.createElement('input');
+      sensSlider.type = 'range';
+      sensSlider.min = '0.0005';
+      sensSlider.max = '0.01';
+      sensSlider.step = '0.0005';
+      const sens0 = (typeof PLAYER_CONFIG !== 'undefined' && PLAYER_CONFIG.sensitivity) || 0.002;
+      sensSlider.value = String(sens0);
+      const sensVal = document.createElement('span');
+      sensVal.className = 'rg-setting-val';
+      const fmtSens = function (v) { return (Math.round(v * 10000) / 10).toFixed(1); };
+      sensVal.textContent = fmtSens(sens0);
+      sensSlider.addEventListener('input', () => {
+        const v = parseFloat(sensSlider.value);
+        if (typeof PLAYER_CONFIG !== 'undefined') PLAYER_CONFIG.sensitivity = v;
+        if (typeof player !== 'undefined' && player && player.config) player.config.sensitivity = v;
+        sensVal.textContent = fmtSens(v);
+      });
+      sensRow.appendChild(sensSlider);
+      sensRow.appendChild(sensVal);
+      controlsDiv.appendChild(sensRow);
+      pauseBody.appendChild(controlsDiv);
+
+      // --- Ajustes: teclas rebind ---
       const keysDiv = document.createElement('div');
       keysDiv.className = 'rg-section';
       const keysTitle = document.createElement('h4');
@@ -293,59 +365,19 @@
       const keysBox = document.createElement('div');
       keysBox.id = 'keyRows';
       keysDiv.appendChild(keysBox);
-      const keysHint = document.createElement('div');
-      keysHint.className = 'rg-hint';
-      keysHint.textContent = 'WASD, espacio, shift y 1-5 son fijos. El resto se guarda en este navegador.';
-      keysDiv.appendChild(keysHint);
-      audioDiv.appendChild(keysDiv);
+      pauseBody.appendChild(keysDiv);
       renderKeyRows();
-
-      // --- Controls section ---
-      const controlsDiv = document.createElement('div');
-      controlsDiv.className = 'rg-section';
-      controlsDiv.style.textAlign = 'left';
-      const controlsTitle = document.createElement('h4');
-      controlsTitle.className = 'rg-h';
-      controlsTitle.textContent = 'Controles';
-      controlsTitle.style.textAlign = 'center';
-      controlsDiv.appendChild(controlsTitle);
-      const sensRow = document.createElement('div');
-      sensRow.style.textAlign = 'center';
-      sensRow.style.marginBottom = '6px';
-      sensRow.textContent = 'Sensibilidad ';
-      const sensSlider = document.createElement('input');
-      sensSlider.type = 'range';
-      sensSlider.min = '0.0005';
-      sensSlider.max = '0.01';
-      sensSlider.step = '0.0005';
-      sensSlider.value = (typeof PLAYER_CONFIG !== 'undefined' && PLAYER_CONFIG.sensitivity) || 0.002;
-      sensSlider.addEventListener('input', () => {
-        const v = parseFloat(sensSlider.value);
-        if (typeof PLAYER_CONFIG !== 'undefined') PLAYER_CONFIG.sensitivity = v;
-        if (typeof player !== 'undefined' && player && player.config) player.config.sensitivity = v;
-      });
-      sensRow.appendChild(sensSlider);
-      controlsDiv.appendChild(sensRow);
-      const keysList = document.createElement('div');
-      keysList.innerHTML = 'WASD moverse &middot; Mouse mirar &middot; Clic disparar / poner<br>' +
-        'Q mochila &middot; E usar &middot; B barra creador &middot; Rueda atajos &middot; T chat<br>' +
-        'Clic derecho destruir (martillo) &middot; E agarrar / usar<br>' +
-        'Z/X/C tipo de bloque (martillo) &middot; soltar objetos desde la mochila<br>' +
-        'Shift correr &middot; Espacio saltar &middot; ESC pausa/seguir' +
-        '<br>Vuelo creador: Espacio subir &middot; Shift bajar';
-      controlsDiv.appendChild(keysList);
-      pauseDiv.appendChild(controlsDiv);
 
       const status = document.createElement('div');
       status.className = 'rg-status';
       status.id = 'pauseStatus';
-      pauseDiv.appendChild(status);
+      card.appendChild(status);
       pauseUI.panels = {
         play: [levelsDiv],
         craft: [craftDiv],
         build: [creatorDiv],
-        account: [statsDiv, authDiv, onlineDiv],
-        settings: [audioDiv, controlsDiv]
+        account: [statsDiv, authDiv, sceneDiv, onlineDiv],
+        settings: [audioDiv, controlsDiv, keysDiv]
       };
       showPauseTab('play');
       document.body.appendChild(pauseDiv);
@@ -360,39 +392,156 @@
       }
   });
   var lastPointerUnlockTs = 0;
+  var _lockRetryTimer = null;
+  var _lookBridgeOn = false;
+  var _bridgeLastX = null;
+  var _bridgeLastY = null;
+  function clearLockRetries() {
+      if (_lockRetryTimer) { clearTimeout(_lockRetryTimer); _lockRetryTimer = null; }
+  }
+  // Chrome/Edge no tratan ESC como gesto válido para requestPointerLock.
+  // Mientras tanto, puentear la mira con deltas de clientX/Y (cursor oculto).
+  function onLookBridgeMove(e) {
+      if (isGamePaused || document.pointerLockElement) return;
+      if (_bridgeLastX == null) {
+          _bridgeLastX = e.clientX;
+          _bridgeLastY = e.clientY;
+          return;
+      }
+      const dx = e.clientX - _bridgeLastX;
+      const dy = e.clientY - _bridgeLastY;
+      _bridgeLastX = e.clientX;
+      _bridgeLastY = e.clientY;
+      if ((!dx && !dy) || !player || isGamePaused) return;
+      player.handleMouseMove({ movementX: dx, movementY: dy }, player.config.sensitivity);
+  }
+  function onLookBridgeGesture(e) {
+      if (isGamePaused || document.pointerLockElement) return;
+      if (typeof LEVEL !== 'undefined' && LEVEL.menuOpen) return;
+      if (e.type === 'keydown') {
+          const k = e.key;
+          if (k === 'Escape' || k === 'Esc') return;
+          if (k === 'Shift' || k === 'Control' || k === 'Alt' || k === 'Meta' || k === 'Tab') return;
+      }
+      // Gesto válido (click / WASD / etc.): pedir lock en este mismo turno
+      try {
+          const canvas = renderer && renderer.domElement;
+          if (!canvas) return;
+          pointerLockPending = true;
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (err) {}
+          const r = canvas.requestPointerLock();
+          if (r && typeof r.catch === 'function') r.catch(function () {});
+      } catch (err) {}
+  }
+  function startLookBridge() {
+      if (_lookBridgeOn) {
+          _bridgeLastX = null;
+          _bridgeLastY = null;
+          return;
+      }
+      _lookBridgeOn = true;
+      _bridgeLastX = null;
+      _bridgeLastY = null;
+      document.addEventListener('mousemove', onLookBridgeMove, true);
+      document.addEventListener('pointerdown', onLookBridgeGesture, true);
+      document.addEventListener('keydown', onLookBridgeGesture, true);
+  }
+  function stopLookBridge() {
+      if (!_lookBridgeOn) return;
+      _lookBridgeOn = false;
+      _bridgeLastX = null;
+      _bridgeLastY = null;
+      document.removeEventListener('mousemove', onLookBridgeMove, true);
+      document.removeEventListener('pointerdown', onLookBridgeGesture, true);
+      document.removeEventListener('keydown', onLookBridgeGesture, true);
+  }
   function lockPointer() {
       try {
-          const canvas = renderer.domElement;
-          if (!canvas || document.pointerLockElement === canvas) return;
-          const sinceUnlock = Date.now() - lastPointerUnlockTs;
-          // Chrome rejects lock requests made right after exiting the lock; wait out the cooldown
-          const wait = sinceUnlock < 1500 ? (1500 - sinceUnlock) : 0;
-          const doLock = () => {
-              if (isGamePaused) return;
-              if (document.pointerLockElement === canvas) return;
+          const canvas = renderer && renderer.domElement;
+          if (!canvas || document.pointerLockElement === canvas || isGamePaused) return;
+          pointerLockPending = true;
+          startLookBridge();
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
+          clearLockRetries();
+
+          let attempts = 0;
+          const maxAttempts = 12;
+          const attempt = () => {
+              if (isGamePaused) {
+                  pointerLockPending = false;
+                  clearLockRetries();
+                  stopLookBridge();
+                  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
+                  return;
+              }
+              if (document.pointerLockElement === canvas) {
+                  pointerLockPending = false;
+                  clearLockRetries();
+                  stopLookBridge();
+                  return;
+              }
+              attempts++;
               try {
                   const r = canvas.requestPointerLock();
                   if (r && typeof r.catch === 'function') {
-                      r.catch((e) => {
-                          console.warn('Pointer lock deferred, click the game to capture mouse:', (e && e.message) || e);
-                      });
+                      r.catch(function () { scheduleRetry(); });
+                  } else {
+                      _lockRetryTimer = setTimeout(function () {
+                          if (document.pointerLockElement !== canvas) scheduleRetry();
+                          else {
+                              pointerLockPending = false;
+                              stopLookBridge();
+                          }
+                      }, 80);
                   }
               } catch (e) {
-                  console.warn('Pointer lock unavailable:', (e && e.message) || e);
+                  scheduleRetry();
               }
           };
-          if (wait > 0) setTimeout(doLock, wait);
-          else doLock();
+          const scheduleRetry = () => {
+              if (isGamePaused || document.pointerLockElement === canvas) {
+                  pointerLockPending = false;
+                  clearLockRetries();
+                  if (document.pointerLockElement === canvas) stopLookBridge();
+                  return;
+              }
+              if (attempts >= maxAttempts) {
+                  // Seguir con puente de mira; el próximo click/tecla reengancha el lock
+                  pointerLockPending = true;
+                  clearLockRetries();
+                  startLookBridge();
+                  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
+                  return;
+              }
+              const sinceUnlock = Date.now() - lastPointerUnlockTs;
+              const cooldownLeft = sinceUnlock < 700 ? (700 - sinceUnlock) : 0;
+              const delay = Math.max(cooldownLeft, 30 + attempts * 50);
+              clearLockRetries();
+              _lockRetryTimer = setTimeout(attempt, delay);
+          };
+
+          attempt();
+          const sinceUnlock = Date.now() - lastPointerUnlockTs;
+          if (sinceUnlock < 700) {
+              clearLockRetries();
+              _lockRetryTimer = setTimeout(attempt, 700 - sinceUnlock);
+          }
       } catch (e) {
+          pointerLockPending = true;
+          startLookBridge();
           console.warn('Pointer lock unavailable:', (e && e.message) || e);
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (err) {}
       }
   }
   function togglePause() {
       isGamePaused = !isGamePaused;
       console.log("Game Paused:", isGamePaused);
       if (isGamePaused) {
+          pointerLockPending = false;
+          clearLockRetries();
+          stopLookBridge();
           document.exitPointerLock();
-          pauseMenu.style.display = 'block';
+          pauseMenu.style.display = 'flex';
           refreshPauseStats();
           try { refreshCraftUI(); } catch (e) {}
           // Si estás creando un mundo, abrir directo "Jugar" (tiene el botón Guardar)
@@ -402,11 +551,16 @@
                 updatePauseAuthUI(firebase.auth().currentUser);
             }
           } catch (e) {}
-            } else {
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
+      } else {
           pauseMenu.style.display = 'none';
           setPauseStatus('');
+          // ESC no sirve como gesto de lock en Chrome: puente de mira al toque + retries
+          pointerLockPending = true;
+          startLookBridge();
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
           if (document.hasFocus()) {
-               lockPointer();
+              lockPointer();
           }
       }
   }

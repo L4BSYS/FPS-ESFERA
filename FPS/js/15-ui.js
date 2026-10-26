@@ -1,4 +1,4 @@
-// js/15-ui.js (part 15/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
+﻿// js/15-ui.js (part 15/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // --- Pause menu helpers: status, stats, account UI ---
 // --- Mochila: icono compartido HUD/lista ---
 function itemIcon(item) {
@@ -10,6 +10,13 @@ function itemIcon(item) {
       if (item.id === 'pickaxe') return '⛏️ ';
       if (item.id === 'torch') return '🔥 ';
       return '🔧 ';
+  }
+  if (item.type === 'resource' || item.resourceKey) {
+      const k = item.resourceKey || item.id;
+      if (k === 'wood') return '🪵 ';
+      if (k === 'stone') return '🪨 ';
+      if (k === 'metal') return '⚙️ ';
+      return '▫️ ';
   }
   if (item.id === 'bandage') return '🩹 ';
   if (item.type === 'consumable' || item.id === 'food') return '🍎 ';
@@ -40,12 +47,16 @@ function recipeIcon(r) {
   if (r.id === 'dressing') return '🩹 ';
   return '🧰 ';
 }
-// station: 'hand' (mochila/pausa) o 'bench' (mesa de trabajo). Sin station = todas.
-function renderCraftButtons(container, station) {
+// station: 'hand' | 'bench'. Libro: craftOnClick false (solo highlight); craft = bandeja.
+// opts: { onSelect(idx, recipe), craftOnClick=false, unlockedOnly=false }
+function renderCraftButtons(container, station, opts) {
   if (!container || container.dataset.rendered) return;
   container.dataset.rendered = '1';
+  const craftOnClick = !!(opts && opts.craftOnClick);
+  const unlockedOnly = !!(opts && opts.unlockedOnly);
   CRAFT_RECIPES.forEach((r, i) => {
       if (station && r.station !== station) return;
+      if (unlockedOnly && typeof isRecipeUnlocked === 'function' && !isRecipeUnlocked(r.id)) return;
       const b = document.createElement('button');
       b.className = 'rg-btn rg-btn-small rg-craft';
       b.dataset.idx = i;
@@ -56,7 +67,10 @@ function renderCraftButtons(container, station) {
               '<span class="rg-craft-cost"></span>' +
           '</span>' +
           '<span class="rg-craft-lock" style="display:none;"></span>';
-      b.addEventListener('click', () => craftItem(i));
+      b.addEventListener('click', () => {
+          try { if (opts && typeof opts.onSelect === 'function') opts.onSelect(i, r); } catch (e) {}
+          if (craftOnClick) craftItem(i);
+      });
       container.appendChild(b);
   });
   try { refreshCraftUI(); } catch (e) {}
@@ -67,11 +81,15 @@ function renderMaterialChips(el) {
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (!inv) { el.innerHTML = ''; return; }
   const names = (typeof RESOURCE_ES !== 'undefined') ? RESOURCE_ES : {};
-  let html = ['wood', 'stone', 'metal'].map(k =>
-      '<span class="rg-mat rg-mat-' + k + '" title="' + (names[k] || k) + '">' +
-      resIcon(k) + '<b>' + (inv.resources[k] || 0) + '</b></span>').join('');
-  const ammoTxt = Object.keys(inv.ammo || {}).map(a => a + ': ' + inv.ammo[a]).join(' · ');
-  if (ammoTxt) html += '<span class="rg-mat rg-mat-ammo">📦 ' + ammoTxt + '</span>';
+  let html = ['wood', 'stone', 'metal'].map(k => {
+      const n = (typeof inv.getResourceCount === 'function') ? inv.getResourceCount(k) : (inv.resources[k] || 0);
+      return '<span class="rg-mat rg-mat-' + k + '" title="' + (names[k] || k) + '">' +
+      resIcon(k) + '<b>' + n + '</b></span>';
+  }).join('');
+  const ammoBits = Object.keys(inv.ammo || {}).filter(function (a) {
+      return (inv.ammo[a] || 0) > 0;
+  }).map(function (a) { return a + ': ' + inv.ammo[a]; });
+  if (ammoBits.length) html += '<span class="rg-mat rg-mat-ammo">📦 ' + ammoBits.join(' · ') + '</span>';
   el.innerHTML = html;
 }
 function setCraftStatus(t) {
@@ -99,26 +117,39 @@ function closeTopModal() {
   if (openModal === 'container' && typeof toggleContainer === 'function') { toggleContainer(false); return true; }
   return false;
 }
-function invShowTab(which) {
-  const items = document.getElementById('invItems');
-  const craft = document.getElementById('invCraft');
-  if (!items || !craft) return;
-  items.style.display = which === 'items' ? 'block' : 'none';
-  craft.style.display = which === 'craft' ? 'block' : 'none';
-  if (which === 'craft') { renderCraftButtons(craft, 'hand'); try { refreshCraftUI(); } catch (e) {} }
+
+// Tray / unlock / DnD → js/28-craft.js, js/29-tray.js, js/30-station-drag.js
+function canCraftRecipeNow(r) {
+  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
+  if (!inv || !r) return false;
+  if (r.requires) {
+      const has = (typeof inv.ownsToolType === 'function')
+          ? inv.ownsToolType(r.requires)
+          : inv.items.some(function (it) { return it.toolType === r.requires; });
+      if (!has) return false;
+  }
+  for (const k in (r.cost || {})) {
+      const have = (typeof inv.getResourceCount === 'function') ? inv.getResourceCount(k) : (inv.resources[k] || 0);
+      if (have < r.cost[k]) return false;
+  }
+  return true;
 }
+
 function renderInvFab() {
   let fab = document.getElementById('invFab');
   if (!fab) {
       fab = document.createElement('button');
       fab.id = 'invFab';
-      fab.textContent = '🎒';
       fab.title = 'Mochila';
-      fab.className = 'rg-fab';
+      fab.className = 'rg-fab rg-bag-fab rg-bag-ico';
+      fab.textContent = (typeof BAG_SKIN !== 'undefined' && BAG_SKIN.icon) ? BAG_SKIN.icon : '🎒';
       fab.style.left = '12px';
       fab.style.bottom = '150px';
       fab.addEventListener('click', () => toggleInventory());
       document.body.appendChild(fab);
+  } else {
+      fab.classList.add('rg-bag-fab', 'rg-bag-ico');
+      fab.textContent = (typeof BAG_SKIN !== 'undefined' && BAG_SKIN.icon) ? BAG_SKIN.icon : '🎒';
   }
   const touch = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) || ('ontouchstart' in window);
   fab.style.display = touch ? 'block' : 'none';
@@ -127,10 +158,12 @@ function toggleInventory() {
   const modal = document.getElementById('invModal');
   if (!modal || typeof player === 'undefined' || !player) return;
   if (invOpen) {
+      try { clearHandTrayToBag(); } catch (e) {}
       modal.style.display = 'none';
       invOpen = false;
       openModal = null;
       isGamePaused = false;
+      try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
       lockPointer();
   } else {
       if (typeof canOpenInventory === 'function' && !canOpenInventory()) {
@@ -147,27 +180,83 @@ function toggleInventory() {
       if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
       isGamePaused = true;
       try { document.exitPointerLock(); } catch (e) {}
-      invShowTab('items');
+      ensureInvCraftUI();
       refreshInvModal();
+      try { if (typeof applyBagSkin === 'function') applyBagSkin(); } catch (e) {}
       modal.style.display = 'flex';
       invOpen = true;
       openModal = 'inv';
+      try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
   }
 }
-function refreshInvModal() {
-  const grid = document.getElementById('invItems');
+function renderPlayerItemsInto(grid, opts) {
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (!grid || !inv) return;
+  try { if (typeof inv.ensureResourceStacksMigrated === 'function') inv.ensureResourceStacksMigrated(); } catch (e) {}
+  const allowDrag = !opts || opts.allowDrag !== false;
+  const showDrop = !opts || opts.showDrop !== false;
+  const asGrid = !opts || opts.asGrid !== false;
   grid.innerHTML = '';
-  if (!inv.items.length) grid.innerHTML = '<div style="color:#888;">Mochila vacía. ¡Salí a buscar cosas!</div>';
+
+  if (asGrid) {
+      const max = inv.maxSlots || 20;
+      const disableUse = !!(opts && opts.disableUse);
+      const titleSuffix = (opts && opts.titleSuffix) || '';
+      grid.classList.add('rg-inv-grid');
+      for (let idx = 0; idx < max; idx++) {
+          const item = inv.items[idx] || null;
+          const cell = document.createElement('div');
+          cell.className = 'rg-inv-slot-cell' + (item ? '' : ' is-empty');
+          cell.setAttribute('data-bag-idx', idx);
+          if (item) {
+              const eq = inv.equippedItem === item;
+              if (allowDrag) {
+                  cell.classList.add('rg-drag-handle');
+                  cell.setAttribute('data-idx', idx);
+              }
+              cell.innerHTML =
+                  '<span class="rg-inv-slot-ico">' + itemIcon(item).trim() + '</span>' +
+                  '<span class="rg-inv-slot-name">' + (item.name || '') + (eq ? ' ●' : '') + '</span>' +
+                  ((item.stackable && (item.quantity || 0) > 1)
+                      ? ('<span class="rg-inv-slot-qty">×' + item.quantity + '</span>') : '');
+              cell.title = (item.name || '') +
+                  ((item.stackable && item.quantity > 1) ? (' ×' + item.quantity) : '') +
+                  (eq ? ' (equipada)' : '') + titleSuffix;
+              if (!disableUse) {
+                  cell.addEventListener('dblclick', function () {
+                      if (item.toolType) invUseItem(idx);
+                      else if (item.healAmount > 0) invUseItem(idx);
+                  });
+              }
+              if (showDrop) {
+                  cell.addEventListener('contextmenu', function (e) {
+                      e.preventDefault();
+                      invDropItem(idx);
+                  });
+              }
+          } else {
+              cell.innerHTML = '<span class="rg-inv-slot-ico">·</span>';
+          }
+          grid.appendChild(cell);
+      }
+      return;
+  }
+
+  grid.classList.remove('rg-inv-grid');
+  if (!inv.items.length) {
+      grid.innerHTML = '<div class="rg-home-hint">Mochila vacía. ¡Salí a buscar cosas!</div>';
+      return;
+  }
   inv.items.forEach((item, idx) => {
       const row = document.createElement('div');
       row.className = 'rg-row';
       const eq = inv.equippedItem === item;
       const info = document.createElement('span');
       info.style.flex = '1';
-      info.className = 'rg-drag-handle';
-      info.setAttribute('data-idx', idx);
+      if (allowDrag) {
+          info.className = 'rg-drag-handle';
+          info.setAttribute('data-idx', idx);
+      }
       info.innerHTML = '<span style="font-size:20px;">' + itemIcon(item) + '</span> ' + item.name +
           ((item.stackable && item.quantity > 1) ? ' x' + item.quantity : '') +
           (eq ? ' <b style="color:#4CAF50;">(equipada)</b>' : '');
@@ -179,119 +268,59 @@ function refreshInvModal() {
       useBtn.disabled = !usable;
       useBtn.addEventListener('click', () => invUseItem(idx));
       row.appendChild(useBtn);
-      const dropBtn = document.createElement('button');
-      dropBtn.textContent = 'Soltar';
-      dropBtn.className = 'rg-btn rg-btn-small';
-      dropBtn.addEventListener('click', () => invDropItem(idx));
-      row.appendChild(dropBtn);
+      if (showDrop) {
+          const dropBtn = document.createElement('button');
+          dropBtn.textContent = 'Soltar';
+          dropBtn.className = 'rg-btn rg-btn-small';
+          dropBtn.addEventListener('click', () => invDropItem(idx));
+          row.appendChild(dropBtn);
+      }
       grid.appendChild(row);
   });
+}
+function refreshInvModal() {
+  const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
+  try { if (inv && typeof inv.ensureResourceStacksMigrated === 'function') inv.ensureResourceStacksMigrated(); } catch (e) {}
+  renderPlayerItemsInto(document.getElementById('invItems'), { allowDrag: true, showDrop: true, asGrid: true });
   renderBelt();
-  const foot = document.getElementById('invFoot');
-  if (foot) renderMaterialChips(foot);
+  // Recursos se ven en la grilla de la mochila (sin chips bajo el título)
+  ensureInvCraftUI();
+  try { updateInvTrayUI(); } catch (e) {}
+}
+function refreshBenchItems() {
+  renderPlayerItemsInto(document.getElementById('benchItems'), { allowDrag: true, showDrop: false, asGrid: true });
+}
+function refreshBenchModalLists() {
+  refreshBenchItems();
+  renderBelt();
+  try { updateBenchTrayUI(); } catch (e) {}
 }
 
 // --- Cinturón (atajos 1-5): se puede arrastrar y soltar ---
 function renderBelt() {
-  const belt = document.getElementById('invBelt');
-  if (!belt || typeof player === 'undefined' || !player) return;
+  if (typeof player === 'undefined' || !player) return;
   const inv = player.inventory;
-  belt.innerHTML = '';
-  inv.quickSlots.forEach((_, index) => {
-      const slot = document.createElement('div');
-      slot.className = 'quick-slot';
-      slot.setAttribute('data-slot', index);
-      slot.addEventListener('click', () => { try { inv.quickSelect(index); renderBelt(); } catch (e) {} });
-      belt.appendChild(slot);
-  });
+  const paint = function (belt) {
+      if (!belt) return;
+      belt.innerHTML = '';
+      inv.quickSlots.forEach((_, index) => {
+          const slot = document.createElement('div');
+          slot.className = 'quick-slot';
+          slot.setAttribute('data-slot', index);
+          slot.addEventListener('click', () => { try { inv.quickSelect(index); renderBelt(); } catch (e) {} });
+          belt.appendChild(slot);
+      });
+  };
+  paint(document.getElementById('invBelt'));
+  paint(document.getElementById('benchBelt'));
   inv.updateQuickSlotUI();
 }
 
-let _beltDrag = null;
-function _beltSlotUnder(x, y) {
-  const els = document.querySelectorAll('#invBelt .quick-slot');
-  for (const el of Array.from(els)) {
-      const r = el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return parseInt(el.getAttribute('data-slot'), 10);
-  }
-  return -1;
+function refreshOpenStationLists() {
+  if (typeof refreshOpenStation === 'function') refreshOpenStation();
+  else if (typeof benchOpen !== 'undefined' && benchOpen) refreshBenchModalLists();
+  else refreshInvModal();
 }
-function _beltGhost(item, x, y) {
-  let g = document.getElementById('beltGhost');
-  if (!g) {
-      g = document.createElement('div');
-      g.id = 'beltGhost';
-      g.className = 'rg-drag-ghost';
-      document.body.appendChild(g);
-  }
-  g.textContent = itemIcon(item) + ' ' + item.name;
-  g.style.left = x + 'px';
-  g.style.top = y + 'px';
-  return g;
-}
-function startBeltDrag(item, fromSlot, x, y) {
-  if (!item) return;
-  _beltDrag = { item, fromSlot, moved: false, x, y };
-  _beltGhost(item, x, y);
-}
-function moveBeltDrag(x, y) {
-  if (!_beltDrag) return;
-  if (Math.abs(x - _beltDrag.x) + Math.abs(y - _beltDrag.y) > 6) _beltDrag.moved = true;
-  const g = document.getElementById('beltGhost');
-  if (g) { g.style.left = x + 'px'; g.style.top = y + 'px'; }
-}
-function endBeltDrag(x, y) {
-  if (!_beltDrag) return;
-  const drag = _beltDrag;
-  _beltDrag = null;
-  const g = document.getElementById('beltGhost');
-  if (g) g.remove();
-  if (!drag.moved) {
-      if (drag.fromSlot >= 0) { try { player.inventory.quickSelect(drag.fromSlot); } catch (e) {} }
-      return;
-  }
-  const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
-  if (!inv) return;
-  const target = _beltSlotUnder(x, y);
-  if (target >= 0) {
-      const existing = inv.quickSlots.findIndex(s => s && drag.item && s.id === drag.item.id);
-      if (drag.fromSlot >= 0) {
-          const tmp = inv.quickSlots[target];
-          inv.quickSlots[target] = inv.quickSlots[drag.fromSlot];
-          inv.quickSlots[drag.fromSlot] = tmp;
-      } else {
-          if (existing >= 0 && existing !== target) inv.quickSlots[existing] = null;
-          inv.quickSlots[target] = drag.item;
-      }
-  } else if (drag.fromSlot >= 0) {
-      inv.clearQuickSlot(drag.fromSlot);
-      return;
-  } else {
-      return; // dropped nothing meaningful
-  }
-  inv.updateQuickSlotUI();
-}
-
-document.addEventListener('pointerdown', (e) => {
-  if (!invOpen) return;
-  if (e.target && e.target.closest && e.target.closest('button')) return;
-  const handle = e.target && e.target.closest ? e.target.closest('.rg-drag-handle') : null;
-  if (handle) {
-      const idx = parseInt(handle.getAttribute('data-idx'), 10);
-      const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
-      if (inv && inv.items[idx]) { e.preventDefault(); startBeltDrag(inv.items[idx], -1, e.clientX, e.clientY); }
-      return;
-  }
-  const slotEl = e.target && e.target.closest ? e.target.closest('#invBelt .quick-slot') : null;
-  if (slotEl) {
-      const idx = parseInt(slotEl.getAttribute('data-slot'), 10);
-      const inv = (typeof player !== 'undefined' && player) ? player.inventory : null;
-      if (inv && inv.quickSlots[idx]) { e.preventDefault(); startBeltDrag(inv.quickSlots[idx], idx, e.clientX, e.clientY); }
-  }
-});
-document.addEventListener('pointermove', (e) => { if (_beltDrag) moveBeltDrag(e.clientX, e.clientY); });
-document.addEventListener('pointerup', (e) => { if (_beltDrag) endBeltDrag(e.clientX, e.clientY); });
-document.addEventListener('pointercancel', (e) => { if (_beltDrag) endBeltDrag(e.clientX, e.clientY); });
 function invUseItem(idx) {
   const inv = (typeof player !== 'undefined' && player && player.inventory) ? player.inventory : null;
   if (!inv || !inv.items[idx]) return;
@@ -301,12 +330,12 @@ function invUseItem(idx) {
       inv.removeItem(item, 1);
       try { player.updateStatsHUD(); playSound('health-regen'); } catch (e) {}
       try { if (typeof directorOnFoodLesson === 'function') directorOnFoodLesson(); } catch (e) {}
-      refreshInvModal();
+      refreshOpenStationLists();
       return;
   }
   if (item.toolType) {
       try { player.setTool(item.toolType); } catch (e) {}
-      refreshInvModal();
+      refreshOpenStationLists();
       return;
   }
 }
@@ -331,7 +360,7 @@ function invDropItem(idx) {
       placeWorldItem(key, p);
       try { player.setTool(TOOLS.HANDS); player.updateToolHUD(); } catch (e) {}
   }
-  refreshInvModal();
+  refreshOpenStationLists();
 }
 // --- Teclas configurables (estilo RUST, humilde: solo acciones, WASD fijo) ---
 var KeyMap = { interact: 'e', inventory: 'q', palette: 'b', creator: 'g', reload: 'r' };
@@ -458,6 +487,7 @@ function showGameOver() {
   console.log("Player defeated!");
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
+  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 function respawnPlayer() {
   if (typeof player === 'undefined' || !player) return;
@@ -478,6 +508,7 @@ function respawnPlayer() {
   if (go) go.style.display = 'none';
   isGamePaused = false;
   if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
+  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
   lockPointer();
 }
 function setPauseStatus(t) {

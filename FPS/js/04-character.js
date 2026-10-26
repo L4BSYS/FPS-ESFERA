@@ -786,6 +786,7 @@
     
           // Initialize inventory with empty hands
           this.inventory = new Inventory(this);
+          try { this.inventory.ensureResourceStacksMigrated(); } catch (e) {}
 
           this.updateToolModelVisibility(); // Set initial visibility
           this.updateToolHUD(); // Set initial HUD
@@ -1501,10 +1502,14 @@
               return;
           }
 
-          // Handle loose resources separately - add to resource counts
+          // Handle loose resources separately - stacks en mochila
           if (def.type === 'resource') {
               const key = def.resourceKey || def.id;
-              this.inventory.resources[key] = (this.inventory.resources[key] || 0) + (def.amount || 1);
+              if (typeof this.inventory.addResource === 'function') {
+                  this.inventory.addResource(key, def.amount || 1);
+              } else {
+                  this.inventory.resources[key] = (this.inventory.resources[key] || 0) + (def.amount || 1);
+              }
               this.scene.remove(item);
               const ri = collidableObjects.indexOf(item);
               if (ri > -1) collidableObjects.splice(ri, 1);
@@ -1658,7 +1663,11 @@
                   const pollinated = !!(node.userData && node.userData.pollinatedUntil &&
                       performance.now() < node.userData.pollinatedUntil);
                   const amount = gained + (pollinated ? 1 : 0);
-                  this.inventory.resources[node.type] = (this.inventory.resources[node.type] || 0) + amount;
+                  if (typeof this.inventory.addResource === 'function') {
+                      this.inventory.addResource(node.type, amount);
+                  } else {
+                      this.inventory.resources[node.type] = (this.inventory.resources[node.type] || 0) + amount;
+                  }
                   updateResourceHUD();
                   createHarvestEffect(hit.point);
                   playSoundAt('harvest', hit.point, { surface: node.type, gain: 0.9, maxDist: 30 });

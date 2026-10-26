@@ -290,6 +290,7 @@ function resetPlayerInventory() {
   inv.quickSlots = [null, null, null, null, null];
   inv.ammo = { pistol: 0, rifle: 0, shotgun: 0, energy: 0 };
   inv.resources = { wood: 0, stone: 0, metal: 0, keys: [] };
+  inv._resourceStacksReady = true; // vacío ya sincronizado
   try { player.heldItem = null; } catch (e) {}
   try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
   try { player.currentTool = TOOLS.HANDS; } catch (e) {}
@@ -433,22 +434,21 @@ function showTutorialReward() {
   if (!m) {
     m = document.createElement('div');
     m.id = 'tutorialReward';
-    m.className = 'rg-overlay';
+    m.className = 'rg-overlay rg-cinema-center';
     document.body.appendChild(m);
   }
+  m.className = 'rg-overlay rg-cinema-center';
   m.innerHTML = '';
   const panel = document.createElement('div');
-  panel.className = 'rg-panel rg-modalbox narrow';
-  panel.style.textAlign = 'center';
+  panel.className = 'rg-cinema-card';
   const h = document.createElement('h2');
-  h.className = 'rg-title';
+  h.className = 'rg-home-title';
   h.textContent = '🎉 ¡COMPLETASTE EL TUTORIAL!';
   panel.appendChild(h);
 
   const user = currentUser();
   const p = document.createElement('div');
-  p.className = 'rg-hint';
-  p.style.margin = '10px 0';
+  p.className = 'rg-home-session';
   p.textContent = user
     ? ('Sesión: ' + (user.displayName || user.email || 'tu cuenta') + '. Elegí cómo seguir.')
     : 'Ingresá con Google para guardar y publicar tus mundos, o seguí explorando sin cuenta.';
@@ -457,42 +457,45 @@ function showTutorialReward() {
   const close = function () {
     m.style.display = 'none';
     isGamePaused = false;
+    try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
     try { lockPointer(); } catch (e) {}
   };
   const play = function (id) {
     m.style.display = 'none';
     isGamePaused = false;
+    try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
     playLevel(id);
   };
 
-  const row = document.createElement('div');
-  row.className = 'rg-menubtns';
-  row.appendChild(lvBtn('▶ Continuar (La Grieta)', 'rg-btn-primary', function () { play('mundo-1'); }));
-  row.appendChild(lvBtn('🗺 Mis mundos', '', function () {
+  const nav = document.createElement('nav');
+  nav.className = 'rg-cinema-nav';
+  nav.setAttribute('aria-label', 'Tutorial completado');
+  nav.appendChild(lvBtn('▶ Continuar (La Grieta)', 'rg-btn-primary rg-home-cta', function () { play('mundo-1'); }));
+  nav.appendChild(lvBtn('🗺 Mis mundos', 'rg-home-link', function () {
     m.style.display = 'none';
     isGamePaused = true;
     showMainMenu('mine');
   }));
-  row.appendChild(lvBtn('➕ Crear mundo', '', function () {
+  nav.appendChild(lvBtn('➕ Crear mundo', 'rg-home-link', function () {
     m.style.display = 'none';
     isGamePaused = true;
     showMainMenu('create');
   }));
-  panel.appendChild(row);
-
-  const row2 = document.createElement('div');
-  row2.className = 'rg-menubtns';
-  row2.style.marginTop = '10px';
+  const sep = document.createElement('div');
+  sep.className = 'rg-home-sep';
+  sep.setAttribute('aria-hidden', 'true');
+  nav.appendChild(sep);
   if (!user) {
-    row2.appendChild(lvBtn('Ingresar con Google', 'rg-btn-primary', function () { lvLogin(); }));
+    nav.appendChild(lvBtn('Ingresar con Google', 'rg-home-link', function () { lvLogin(); }));
   }
-  row2.appendChild(lvBtn('Seguir explorando', user ? '' : 'rg-btn-primary', close));
-  panel.appendChild(row2);
+  nav.appendChild(lvBtn('Seguir explorando', 'rg-home-link', close));
+  panel.appendChild(nav);
 
   m.appendChild(panel);
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
   m.style.display = 'flex';
+  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 
 // ------------------------------------------------------------
@@ -597,22 +600,32 @@ function mainMenuEl() {
 }
 function showMainMenu(view) {
   LEVEL.menuOpen = true;
-  LEVEL.menuView = view || 'home';
+  // 'start' (boot) y vistas desconocidas caen en home
+  const known = { home: 1, mine: 1, community: 1, create: 1, editorial: 1 };
+  LEVEL.menuView = (view && known[view]) ? view : 'home';
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
   try { if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none'; } catch (e) {}
   mainMenuEl().style.display = 'flex';
   renderMainMenu();
   refreshMenuLevels();
+  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 function hideMainMenu() {
   LEVEL.menuOpen = false;
   const m = document.getElementById('mainMenu');
   if (m) m.style.display = 'none';
+  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 function renderMainMenu() {
   const m = mainMenuEl();
   m.innerHTML = '';
+  const isHome = LEVEL.menuView === 'home';
+  m.classList.toggle('rg-menu-cinematic', isHome);
+  if (isHome) {
+    renderHome(m);
+    return;
+  }
   const panel = document.createElement('div');
   panel.className = 'rg-panel rg-modalbox rg-menu-wrap';
   panel.appendChild(mainMenuHeader());
@@ -624,7 +637,6 @@ function renderMainMenu() {
   else if (LEVEL.menuView === 'community') renderCommunity(body);
   else if (LEVEL.menuView === 'create') renderCreateForm(body);
   else if (LEVEL.menuView === 'editorial') renderEditorView(body);
-  else renderHome(body);
 }
 function mainMenuHeader() {
   const head = document.createElement('div');
@@ -640,61 +652,91 @@ function mainMenuHeader() {
   head.appendChild(who);
   return head;
 }
-function renderHome(body) {
-  const status = document.createElement('div');
-  status.className = 'rg-status';
+function renderHome(root) {
+  const home = document.createElement('div');
+  home.className = 'rg-home';
+  home.id = 'mainMenuBody';
+
+  const brand = document.createElement('div');
+  brand.className = 'rg-home-brand';
+  const title = document.createElement('h1');
+  title.className = 'rg-home-title';
+  title.textContent = '🌵 LA GRIETA';
+  brand.appendChild(title);
+  const who = document.createElement('div');
+  who.className = 'rg-home-session';
+  const u = currentUser();
+  who.textContent = u
+    ? ('Sesión: ' + (u.displayName || u.email || u.uid))
+    : 'Sin sesión (podés jugar el tutorial; ingresá para crear y compartir)';
+  brand.appendChild(who);
+  home.appendChild(brand);
+
   const last = getLastLevelId();
   const lastDef = last ? resolveLevelDef(last) : null;
+  const status = document.createElement('div');
+  status.className = 'rg-home-status';
   status.textContent = lastDef ? ('Último mundo: ' + lastDef.name) : 'Todavía no jugaste ningún mundo.';
-  body.appendChild(status);
+  home.appendChild(status);
 
-  // Si hay un mundo en edición, ofrecer guardar/seguir acá mismo (lo más visible).
   if (LEVEL.working) {
     const w = LEVEL.working;
-    const editRow = document.createElement('div');
-    editRow.className = 'rg-menubtns';
-    editRow.appendChild(lvBtn('💾 Guardar «' + (w.name || 'sin nombre') + '»', 'rg-btn-primary', function () { saveWorkingFromPause(false); }));
-    editRow.appendChild(lvBtn('✎ Seguir editando', '', function () { LEVEL.menuView = 'editorial'; renderMainMenu(); }));
-    body.appendChild(editRow);
+    const edit = document.createElement('div');
+    edit.className = 'rg-home-edit';
+    edit.appendChild(lvBtn('💾 Guardar «' + (w.name || 'sin nombre') + '»', 'rg-btn-primary rg-home-edit-btn', function () { saveWorkingFromPause(false); }));
+    edit.appendChild(lvBtn('✎ Seguir editando', 'rg-home-link', function () { LEVEL.menuView = 'editorial'; renderMainMenu(); }));
+    home.appendChild(edit);
     const st = document.createElement('div');
-    st.className = 'rg-hint';
+    st.className = 'rg-home-hint';
     st.id = 'levelsSaveStatus';
     if (!currentUser()) st.textContent = 'Ingresá con Google para guardar tu mundo.';
-    body.appendChild(st);
+    home.appendChild(st);
   }
 
-  const row = document.createElement('div');
-  row.className = 'rg-menubtns';
-  row.appendChild(lvBtn('▶ Playground', 'rg-btn-primary', function () { playLevel('playground'); }));
-  row.appendChild(lvBtn('Tutorial', '', function () { playLevel('tutorial'); }));
-  if (lastDef) row.appendChild(lvBtn('⏵ Continuar', '', function () { playLevel(lastDef.id); }));
-  row.appendChild(lvBtn('🗺 Mis mundos', '', function () { LEVEL.menuView = 'mine'; renderMainMenu(); refreshMenuLevels(); }));
-  row.appendChild(lvBtn('🌐 Comunidad', '', function () { LEVEL.menuView = 'community'; renderMainMenu(); refreshMenuLevels(); }));
+  const nav = document.createElement('nav');
+  nav.className = 'rg-home-nav';
+  nav.setAttribute('aria-label', 'Menú principal');
+
+  if (lastDef) {
+    nav.appendChild(lvBtn('⏵ Continuar', 'rg-btn-primary rg-home-cta', function () { playLevel(lastDef.id); }));
+    nav.appendChild(lvBtn('Tutorial', 'rg-home-link', function () { playLevel('tutorial'); }));
+    nav.appendChild(lvBtn('▶ Playground', 'rg-home-link', function () { playLevel('playground'); }));
+  } else {
+    nav.appendChild(lvBtn('Tutorial', 'rg-btn-primary rg-home-cta', function () { playLevel('tutorial'); }));
+    nav.appendChild(lvBtn('▶ Playground', 'rg-home-link', function () { playLevel('playground'); }));
+  }
+
+  const sep = document.createElement('div');
+  sep.className = 'rg-home-sep';
+  sep.setAttribute('aria-hidden', 'true');
+  nav.appendChild(sep);
+
+  nav.appendChild(lvBtn('🗺 Mis mundos', 'rg-home-link', function () { LEVEL.menuView = 'mine'; renderMainMenu(); refreshMenuLevels(); }));
+  nav.appendChild(lvBtn('🌐 Comunidad', 'rg-home-link', function () { LEVEL.menuView = 'community'; renderMainMenu(); refreshMenuLevels(); }));
   if (tutorialDone()) {
-    row.appendChild(lvBtn('➕ Crear mundo', 'rg-btn-primary', function () { LEVEL.menuView = 'create'; renderMainMenu(); }));
+    nav.appendChild(lvBtn('➕ Crear mundo', 'rg-home-link', function () { LEVEL.menuView = 'create'; renderMainMenu(); }));
   } else {
-    const locked = lvBtn('🔒 Crear mundo (terminá el tutorial)', '', function () {});
+    const locked = lvBtn('🔒 Crear mundo (terminá el tutorial)', 'rg-home-link rg-home-locked', function () {});
     locked.disabled = true;
-    locked.style.opacity = '0.6';
-    row.appendChild(locked);
+    nav.appendChild(locked);
   }
-  body.appendChild(row);
+  home.appendChild(nav);
 
-  const row2 = document.createElement('div');
-  row2.className = 'rg-menubtns';
-  row2.style.marginTop = '10px';
+  const foot = document.createElement('div');
+  foot.className = 'rg-home-foot';
   if (currentUser()) {
-    row2.appendChild(lvBtn('Cerrar sesión (' + (currentUser().displayName || 'cuenta') + ')', 'rg-btn-small', function () { lvLogout(); }));
+    foot.appendChild(lvBtn('Cerrar sesión (' + (currentUser().displayName || 'cuenta') + ')', 'rg-btn-small rg-home-foot-btn', function () { lvLogout(); }));
   } else {
-    row2.appendChild(lvBtn('Ingresar con Google', 'rg-btn-small', function () { lvLogin(); }));
+    foot.appendChild(lvBtn('Ingresar con Google', 'rg-btn-small rg-home-foot-btn', function () { lvLogin(); }));
   }
-  const resume = lvBtn('▶ Reanudar partida', 'rg-btn-small', function () {
+  foot.appendChild(lvBtn('▶ Reanudar partida', 'rg-btn-small rg-home-foot-btn', function () {
     hideMainMenu();
     isGamePaused = false;
     try { lockPointer(); } catch (e) {}
-  });
-  row2.appendChild(resume);
-  body.appendChild(row2);
+  }));
+  home.appendChild(foot);
+
+  root.appendChild(home);
 }
 function renderMine(body) {
   if (!currentUser()) {

@@ -9,12 +9,12 @@
     <link rel="stylesheet" href="css/retro.css">
   <title>FPS La Grieta — Jugando en La Grieta</title>
 </head>
-<body>
+<body oncontextmenu="return false;">
 
   <canvas id="gameCanvas"></canvas>
   <div id="rg-crt"></div>
   <div id="hud">
-    <div id="crosshair">+</div>
+    <div id="crosshair" aria-hidden="true"></div>
     <div id="stats">Vida: 100</div>
     <div id="objectiveHud" class="objective-hud"></div>
     <div id="baseHud" class="base-hud">
@@ -71,33 +71,50 @@
   <!-- Gestor de niveles (se rellena por JS: 19-levels.js) -->
   <div id="mainMenu" class="rg-overlay"></div>
 
-  <div id="gameOver" class="rg-overlay">
-      <h2 class="rg-title danger">☠ MORISTE</h2>
-      <div id="gameOverStats" class="rg-stats"></div>
-      <div>
-        <button onclick="respawnPlayer()" class="rg-btn rg-btn-primary">Reaparecer</button>
-        <button onclick="window.location.reload()" class="rg-btn">Reiniciar</button>
+  <div id="gameOver" class="rg-overlay rg-cinema-center">
+      <div class="rg-cinema-card">
+        <h2 class="rg-home-title danger">☠ MORISTE</h2>
+        <div id="gameOverStats" class="rg-stats rg-home-status"></div>
+        <nav class="rg-cinema-nav" aria-label="Después de morir">
+          <button onclick="respawnPlayer()" class="rg-btn rg-btn-primary rg-home-cta">Reaparecer</button>
+          <button onclick="window.location.reload()" class="rg-btn rg-home-link">Reiniciar</button>
+        </nav>
+        <div class="rg-home-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
       </div>
-      <div class="rg-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
   </div>
 
-  <div id="invModal" class="rg-overlay">
-    <div class="rg-panel rg-modalbox">
-      <h2 class="rg-title">🎒 Mochila</h2>
-      <div style="margin-bottom:8px;">
-        <button onclick="invShowTab('items')" class="rg-btn rg-btn-small">Cosas</button>
-        <button onclick="invShowTab('craft')" class="rg-btn rg-btn-small">Crafteo</button>
-        <button onclick="toggleInventory()" class="rg-btn rg-btn-small" style="float:right;">Cerrar (Q)</button>
+  <div id="invModal" class="rg-overlay rg-cinema-center">
+    <div class="rg-cinema-card rg-inv-card rg-station-card rg-bag-skin">
+      <div class="rg-inv-head">
+        <h2 class="rg-home-title"><span class="rg-bag-ico" aria-hidden="true">🎒</span> Mochila</h2>
+        <button type="button" onclick="toggleInventory()" class="rg-btn rg-btn-small rg-inv-q" title="Cerrar">Q</button>
       </div>
-      <div id="invBelt" class="rg-belt"></div>
-      <div class="rg-hint" style="margin:2px 0 8px;">Cinturón: arrastrá una cosa de la mochila a un casillero para darle atajo (1-5) · arrastrá afuera o clic derecho para quitarla</div>
-      <div id="invItems"></div>
-      <div id="invCraft" style="display:none;">
-        <div class="rg-hint" style="margin-bottom:6px;">🧰 Básicos a mano · las armas, balas y vendas se hacen en la mesa de trabajo</div>
+      <div class="rg-belt-wrap" aria-label="Cinturón">
+        <div class="rg-belt-label">Cinturón</div>
+        <div id="invBelt" class="rg-belt"></div>
       </div>
-      <div id="invFoot" class="rg-matbar"></div>
-      <div id="invMsg" class="rg-status"></div>
-      <div class="rg-hint">Q o ESC para cerrar · Equipar/Comer con el botón · Soltar deja el objeto en el suelo</div>
+      <div class="rg-home-hint">Herramientas/armas al cinturón · 1 recurso a A y B · stacks máx. 10 · doble clic usa/equipa · clic derecho suelta</div>
+      <div class="rg-inv-split">
+        <section class="rg-inv-col" aria-label="Cosas">
+          <h3 class="rg-h">Cosas</h3>
+          <div id="invItems" class="rg-inv-items"></div>
+        </section>
+        <section class="rg-inv-col" aria-label="Banco de mano">
+          <h3 class="rg-h">Banco de mano</h3>
+          <div class="rg-home-hint">1 ficha en A + 1 en B elige la receta · el resto se paga de la mochila</div>
+          <div id="invTray" class="rg-inv-tray" aria-label="Bandeja de crafteo">
+            <div class="rg-inv-slot rg-tray-drop" id="invTrayA" data-tray="a"><span class="rg-inv-slot-ico">?</span><span class="rg-inv-slot-lbl">A</span></div>
+            <span class="rg-inv-tray-op" aria-hidden="true">+</span>
+            <div class="rg-inv-slot rg-tray-drop" id="invTrayB" data-tray="b"><span class="rg-inv-slot-ico">?</span><span class="rg-inv-slot-lbl">B</span></div>
+            <span class="rg-inv-tray-op" aria-hidden="true">→</span>
+            <div class="rg-inv-slot rg-inv-slot-out" id="invTrayOut"><span class="rg-inv-slot-ico">?</span><span class="rg-inv-slot-lbl">out</span></div>
+            <button type="button" id="invTrayCraft" class="rg-btn rg-btn-primary rg-home-cta" disabled>Craftear</button>
+          </div>
+          <h3 class="rg-h">Recetario</h3>
+          <div id="invCraft" class="rg-inv-recipes"></div>
+        </section>
+      </div>
+      <div id="invMsg" class="rg-status rg-home-status"></div>
     </div>
   </div>
 
@@ -110,32 +127,84 @@
       </div>
     </div>
   </div>
-  <div id="containerModal" class="rg-overlay">
-    <div class="rg-panel rg-modalbox" style="border-color:var(--rg-amber); max-width:520px;">
-      <h2 class="rg-title" id="containerTitle">🧰 Contenedor</h2>
-      <div id="containerBody" style="font-size:18px; line-height:1.45;"></div>
-      <div id="containerMsg" class="rg-status"></div>
-      <div style="margin-top:10px;">
-        <button onclick="toggleContainer(false)" class="rg-btn rg-btn-small">Cerrar (E/ESC)</button>
+  <div id="containerModal" class="rg-overlay rg-cinema-center">
+    <div class="rg-cinema-card rg-inv-card rg-chest-card rg-station-card">
+      <div class="rg-inv-head">
+        <h2 class="rg-home-title" id="containerTitle">🧰 Cofre</h2>
+        <button type="button" onclick="toggleContainer(false)" class="rg-btn rg-btn-small rg-inv-q" title="Cerrar">E</button>
       </div>
-      <div class="rg-hint">Mismo asset: modo cofre (storage) o dispenser</div>
+      <div id="containerHint" class="rg-home-hint">Arrastrá fichas entre Cosas y Cofre · click guarda/saca el stack</div>
+      <div id="containerStorage" class="rg-inv-split">
+        <section class="rg-inv-col" aria-label="Cosas">
+          <h3 class="rg-h">Cosas</h3>
+          <div id="containerInvItems" class="rg-inv-items"></div>
+        </section>
+        <section class="rg-inv-col" aria-label="Cofre">
+          <h3 class="rg-h">Cofre</h3>
+          <div id="containerSlots" class="rg-inv-items rg-chest-slots"></div>
+        </section>
+      </div>
+      <div id="containerDispenser" class="rg-inv-split" style="display:none;">
+        <section class="rg-inv-col" aria-label="Cosas">
+          <h3 class="rg-h">Cosas</h3>
+          <div id="containerDispItems" class="rg-inv-items"></div>
+        </section>
+        <section class="rg-inv-col rg-disp-panel" aria-label="Dispenser">
+          <h3 class="rg-h">Dispenser</h3>
+          <div class="rg-home-hint">Stock limitado · Tomar suelta 10 · hay cooldown</div>
+          <div class="rg-disp-product" id="containerDispProduct">
+            <div class="rg-disp-ico" id="containerDispIco">📦</div>
+            <div class="rg-disp-name" id="containerDispName">—</div>
+            <div class="rg-disp-stock-wrap">
+              <div class="rg-belt-label">Stock <span id="containerDispStockTxt">0</span></div>
+              <div class="rg-hpbar"><div id="containerDispStockBar" style="width:100%;background:#4CAF50;"></div></div>
+            </div>
+            <button type="button" id="containerTakeBtn" class="rg-btn rg-btn-primary rg-home-cta" disabled>Tomar 10</button>
+            <div class="rg-home-hint" id="containerDispCd"></div>
+          </div>
+        </section>
+      </div>
+      <div id="containerMsg" class="rg-status rg-home-status"></div>
     </div>
   </div>
 
-  <div id="benchModal" class="rg-overlay">
-    <div class="rg-panel rg-modalbox" style="border-color:var(--rg-amber);">
-      <h2 class="rg-title">🛠 Mesa de trabajo — tu base</h2>
-      <div style="font-size:19px;">Estructura: <span id="benchHpTxt"></span></div>
-      <div class="rg-hpbar"><div id="benchHpBar" style="background:#4CAF50; width:100%;"></div></div>
-      <div class="rg-hint" style="margin-bottom:6px;">Armas · munición · vendas — lo avanzado se hace acá</div>
-      <div id="benchCraft"></div>
-      <div id="benchFoot" class="rg-matbar"></div>
-      <div style="margin-top:8px;">
-        <button onclick="repairBench()" class="rg-btn rg-btn-small rg-btn-warn">Reparar +100 (3 madera + 2 piedra)</button>
-        <button onclick="toggleBench(false)" class="rg-btn rg-btn-small" style="float:right;">Cerrar (E/ESC)</button>
+  <div id="benchModal" class="rg-overlay rg-cinema-center">
+    <div class="rg-cinema-card rg-inv-card rg-bench-card rg-station-card">
+      <div class="rg-inv-head">
+        <h2 class="rg-home-title">🛠 Mesa de trabajo</h2>
+        <button type="button" onclick="toggleBench(false)" class="rg-btn rg-btn-small rg-inv-q" title="Cerrar">E</button>
       </div>
-      <div id="benchMsg" class="rg-status"></div>
-      <div class="rg-hint">Reclama 14 bloques a la redonda: solo podés construir ahí. Si la rompen, tus bloques decaen y se libera la zona.</div>
+      <div class="rg-bench-hp" aria-label="Estructura">
+        <div class="rg-belt-label">Estructura <span id="benchHpTxt">—</span></div>
+        <div class="rg-hpbar"><div id="benchHpBar" style="background:#4CAF50; width:100%;"></div></div>
+      </div>
+      <div class="rg-belt-wrap" aria-label="Cinturón">
+        <div class="rg-belt-label">Cinturón</div>
+        <div id="benchBelt" class="rg-belt"></div>
+      </div>
+      <div class="rg-home-hint">1 ficha en A + 1 en B · lo avanzado se hace acá · reclama 14 bloques a la redonda</div>
+      <div class="rg-inv-split">
+        <section class="rg-inv-col" aria-label="Cosas">
+          <h3 class="rg-h">Cosas</h3>
+          <div id="benchItems" class="rg-inv-items"></div>
+        </section>
+        <section class="rg-inv-col" aria-label="Banco de mesa">
+          <h3 class="rg-h">Banco de mesa</h3>
+          <div class="rg-home-hint">1 ficha en A + 1 en B elige la receta · el resto se paga de la mochila</div>
+          <div id="benchTray" class="rg-inv-tray" aria-label="Bandeja de crafteo">
+            <div class="rg-inv-slot rg-tray-drop" id="benchTrayA" data-tray="a"><span class="rg-inv-slot-ico">?</span><span class="rg-inv-slot-lbl">A</span></div>
+            <span class="rg-inv-tray-op" aria-hidden="true">+</span>
+            <div class="rg-inv-slot rg-tray-drop" id="benchTrayB" data-tray="b"><span class="rg-inv-slot-ico">?</span><span class="rg-inv-slot-lbl">B</span></div>
+            <span class="rg-inv-tray-op" aria-hidden="true">→</span>
+            <div class="rg-inv-slot rg-inv-slot-out" id="benchTrayOut"><span class="rg-inv-slot-ico">?</span><span class="rg-inv-slot-lbl">out</span></div>
+            <button type="button" id="benchTrayCraft" class="rg-btn rg-btn-primary rg-home-cta" disabled>Craftear</button>
+          </div>
+          <h3 class="rg-h">Recetario</h3>
+          <div id="benchCraft" class="rg-inv-recipes"></div>
+          <button type="button" onclick="repairBench()" class="rg-btn rg-btn-small rg-btn-warn rg-bench-repair">Reparar +100 (3🪵 + 2🪨)</button>
+        </section>
+      </div>
+      <div id="benchMsg" class="rg-status rg-home-status"></div>
     </div>
   </div>
 
@@ -174,9 +243,12 @@
   <!-- LaGrieta FPS: logic split by system. Classic scripts share globals: LOAD ORDER MATTERS. -->
   <script src="js/01-config.js"></script>
   <script src="js/02-systems.js"></script>
+  <script src="js/31-world-signs.js"></script>
+  <script src="js/27-workbench.js"></script>
   <script src="js/03-worlddata.js"></script>
   <script src="js/04-character.js"></script>
   <script src="js/05-inventory.js"></script>
+  <script src="js/28-craft.js"></script>
   <script src="js/06-entities.js"></script>
   <script src="js/07-spawns.js"></script>
   <script src="js/08-build.js"></script>
@@ -187,6 +259,7 @@
   <script src="js/13-audio.js"></script>
   <script src="js/14-serialize.js"></script>
   <script src="js/15-ui.js"></script>
+  <script src="js/29-tray.js"></script>
   <script src="js/17-net.js"></script>
   <script src="js/18-trial.js"></script>
   <script src="js/19-levels.js"></script>
@@ -194,6 +267,7 @@
   <script src="js/21-ambience.js"></script>
   <script src="js/22-neural-fauna.js"></script>
   <script src="js/23-world-container.js"></script>
+  <script src="js/30-station-drag.js"></script>
   <script src="js/24-world-zone.js"></script>
   <script src="js/26-tutorial-director.js"></script>
   <script src="js/25-playground.js"></script>

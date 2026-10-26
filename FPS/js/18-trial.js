@@ -194,34 +194,37 @@ function showTrialModal(ms, isBest) {
   if (!m) {
       m = document.createElement('div');
       m.id = 'trialModal';
-      m.className = 'rg-overlay';
-      m.style.justifyContent = 'center';
-      m.style.alignItems = 'center';
-      m.innerHTML = '<div class="rg-panel rg-modalbox narrow" style="text-align:center;">' +
-          '<h2 class="rg-title">🏁 ¡NIVEL COMPLETO!</h2>' +
-          '<div id="trialModalStats" class="rg-stats"></div>' +
-          '<div><button id="trialRetry" class="rg-btn rg-btn-primary">Reintentar</button> ' +
-          '<button id="trialFree" class="rg-btn">Seguir explorando</button></div></div>';
+      m.className = 'rg-overlay rg-cinema-center';
+      m.innerHTML = '<div class="rg-cinema-card">' +
+          '<h2 class="rg-home-title">🏁 ¡NIVEL COMPLETO!</h2>' +
+          '<div id="trialModalStats" class="rg-stats rg-home-status"></div>' +
+          '<nav class="rg-cinema-nav" aria-label="Nivel completo">' +
+          '<button id="trialRetry" class="rg-btn rg-btn-primary rg-home-cta">Reintentar</button>' +
+          '<button id="trialFree" class="rg-btn rg-home-link">Seguir explorando</button>' +
+          '</nav></div>';
       document.body.appendChild(m);
       document.getElementById('trialRetry').addEventListener('click', () => {
           m.style.display = 'none';
           isGamePaused = false;
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
           trialStart(trialActive ? trialActive.def.id : 'trial-1');
           lockPointer();
       });
       document.getElementById('trialFree').addEventListener('click', () => {
           m.style.display = 'none';
           isGamePaused = false;
+          try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
           trialStop();
           lockPointer();
       });
   }
+  m.className = 'rg-overlay rg-cinema-center';
   const st = document.getElementById('trialModalStats');
   if (st) st.textContent = 'Tiempo ' + trialFmt(ms) + (isBest ? ' ¡RÉCORD! 🏆' : '');
-  const wasPaused = isGamePaused;
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
   m.style.display = 'flex';
+  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 // --- Caja del trial en pestaña Mundo (repurposada al sistema de niveles) ---
 function refreshTrialBox() {
