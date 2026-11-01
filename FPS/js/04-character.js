@@ -14,7 +14,15 @@
           this.health = 100;
           this.maxHealth = 100;
           this.energy = 100;
-          this.stamina = 100;
+          this.maxStamina = config.maxStamina || 100;
+          this.stamina = this.maxStamina;
+          this.staminaSprintDrain = (typeof config.staminaSprintDrain === 'number') ? config.staminaSprintDrain : 12;
+          this.staminaRegen = (typeof config.staminaRegen === 'number') ? config.staminaRegen : 15;
+          this.staminaRegenDelay = (typeof config.staminaRegenDelay === 'number') ? config.staminaRegenDelay : 0.6;
+          this.staminaJumpCost = (typeof config.staminaJumpCost === 'number') ? config.staminaJumpCost : 12;
+          this.staminaExhaustRecover = (typeof config.staminaExhaustRecover === 'number') ? config.staminaExhaustRecover : 35;
+          this.staminaExhausted = false;
+          this._staminaRestTimer = 0;
 
           this.foodCollected = 0;
           this.toxinsCollected = 0;          
@@ -146,12 +154,27 @@
           this.checkGround(collidables);
           this.processMovement(delta, collidables);
 
-          // Regenerate stamina and energy over time
-          const staminaRegenRate = this.isOnGround ? 5 : 2;
-          const energyRegenRate = 2;
-
-          this.stamina = Math.min(100, this.stamina + delta * staminaRegenRate);
-          this.energy = Math.min(100, this.energy + delta * energyRegenRate);
+          // Aguante: drena por segundo mientras esprintás y regenera al descansar.
+          // (Antes se restaba por frame, lo que vaciaba la barra casi al instante.)
+          if (this.isSprinting && this.isOnGround && !this.staminaExhausted && this.stamina > 0) {
+              this.stamina = Math.max(0, this.stamina - this.staminaSprintDrain * delta);
+              this._staminaRestTimer = 0;
+              if (this.stamina <= 0.5) {
+                  this.stamina = 0;
+                  this.staminaExhausted = true;
+                  this.isSprinting = false;
+                  try { if (typeof lvToast === 'function') lvToast('Sin aguante: caminá un poco para recuperarlo'); } catch (e) {}
+              }
+          } else {
+              this._staminaRestTimer = (this._staminaRestTimer || 0) + delta;
+              if (this._staminaRestTimer >= this.staminaRegenDelay) {
+                  this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegen * delta);
+              }
+          }
+          if (this.staminaExhausted && this.stamina >= this.staminaExhaustRecover) {
+              this.staminaExhausted = false;
+          }
+          this.energy = Math.min(100, this.energy + delta * 2);
 
           // Update coyote time
           if (this.isOnGround) {
@@ -187,7 +210,6 @@
           let currentSpeed = this.config.speed;
           if (this.isSprinting && this.isOnGround && this.stamina > 0) {
               currentSpeed *= this.config.sprintMultiplier;
-              this.stamina -= 3;
           }
 
           // Calculate target velocity and apply acceleration
@@ -786,7 +808,6 @@
     
           // Initialize inventory with empty hands
           this.inventory = new Inventory(this);
-          try { this.inventory.ensureResourceStacksMigrated(); } catch (e) {}
 
           this.updateToolModelVisibility(); // Set initial visibility
           this.updateToolHUD(); // Set initial HUD
@@ -908,21 +929,19 @@
           this.input.right = keys['d'] ? 1 : 0;
 
           // Determine sprinting state (affects speed in Character.processMovement)
-          if ((keys['shift'] || this.mobileSprintPressed) && this.isOnGround && (this.input.forward > 0 || this.joystickValues.y < -0.5)) {
-            if(this.stamina > 2) {
-              this.isSprinting = true;
-              this.stamina = Math.max(0, this.stamina - 2);
-              this.energy = Math.max(0, this.energy - 1);
-            } else {
-              this.isSprinting = false;
-              console.log("Sin resto: recuperá el aguante");
-            }
-          } 
+          // Determinar si puede esprintar: el drenaje real ocurre en Character.update.
+          const wantsSprint = (keys['shift'] || this.mobileSprintPressed) && this.isOnGround &&
+            (this.input.forward > 0 || (this.joystickValues && this.joystickValues.y < -0.5));
+          if (wantsSprint && !this.staminaExhausted && this.stamina > 0) {
+            this.isSprinting = true;
+          } else {
+            this.isSprinting = false;
+          }
 
           // Jump handling
           if ((keys[' '] || this.mobileJumpPressed) && 
               (this.isOnGround || this.coyoteTime > 0)) {
-              if(this.stamina > 5) {
+              if(this.stamina >= this.staminaJumpCost) {
                   this.velocity.y = this.config.jumpSpeed;
                   this.isOnGround = false;
                   this.coyoteTime = 0;
@@ -935,7 +954,8 @@
                   this.velocity.z *= speedMultiplier;
 
                   this.canJump = false;
-                  this.stamina -= 5;
+                  this.stamina -= this.staminaJumpCost;
+                  this._staminaRestTimer = 0;
                   // Visual feedback
                   this.applyRecoil(0.1); // Small camera kick
                   playSound('jump');
@@ -1195,9 +1215,10 @@
 
           const hp = Math.max(0, Math.min(100, Math.round(this.health)));
           const energy = Math.max(0, Math.min(100, Math.round(this.energy)));
-          const stamina = Math.max(0, Math.min(100, Math.round(this.stamina)));
+          const stamina = Math.max(0, Math.min(this.maxStamina || 100, Math.round(this.stamina)));
+          const exhausted = this.staminaExhausted ? ' <span style="color:#ff9a3c">(agotado)</span>' : '';
 
-          statsDiv.innerHTML = `Vida: ${hp}<br>Energía: ${energy}<br>Aguante: ${stamina}`;
+          statsDiv.innerHTML = `Vida: ${hp}<br>Energía: ${energy}<br>Aguante: ${stamina}${exhausted}`;
       }
 
       updateToolHUD() {
@@ -1491,7 +1512,8 @@
 
           // Handle ammo separately - add to ammo count
           if (def.type === 'ammo') {
-              if (this.inventory.addAmmo(def.ammoType, def.amount)) {
+              const amt = (item.userData && typeof item.userData.amount === 'number') ? item.userData.amount : def.amount;
+              if (this.inventory.addAmmo(def.ammoType, amt)) {
                   // Remove from world
                   this.scene.remove(item);
                   collidableObjects.splice(collidableObjects.indexOf(item), 1);
@@ -1502,13 +1524,14 @@
               return;
           }
 
-          // Handle loose resources separately - stacks en mochila
+          // Handle loose resources separately - ocupan un slot de la mochila
           if (def.type === 'resource') {
               const key = def.resourceKey || def.id;
-              if (typeof this.inventory.addResource === 'function') {
-                  this.inventory.addResource(key, def.amount || 1);
-              } else {
-                  this.inventory.resources[key] = (this.inventory.resources[key] || 0) + (def.amount || 1);
+              const amt = (item.userData && typeof item.userData.amount === 'number') ? item.userData.amount : (def.amount || 1);
+              const added = this.inventory.addResource(key, amt);
+              if (added <= 0) {
+                  try { showMessage('Mochila llena — no entra ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
+                  return;
               }
               this.scene.remove(item);
               const ri = collidableObjects.indexOf(item);
@@ -1519,7 +1542,7 @@
               }
               playSound('pickup');
               try { updateResourceHUD(); } catch (e) {}
-              try { showMessage('+' + (def.amount || 1) + ' ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
+              try { showMessage('+' + added + ' ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
               return;
           }
 
@@ -1663,10 +1686,10 @@
                   const pollinated = !!(node.userData && node.userData.pollinatedUntil &&
                       performance.now() < node.userData.pollinatedUntil);
                   const amount = gained + (pollinated ? 1 : 0);
-                  if (typeof this.inventory.addResource === 'function') {
-                      this.inventory.addResource(node.type, amount);
-                  } else {
-                      this.inventory.resources[node.type] = (this.inventory.resources[node.type] || 0) + amount;
+                  const added = this.inventory.addResource(node.type, amount);
+                  if (added <= 0) {
+                      try { showMessage('Mochila llena — no entra más ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[node.type]) || node.type)); } catch (e) {}
+                      break;
                   }
                   updateResourceHUD();
                   createHarvestEffect(hit.point);
@@ -1968,9 +1991,14 @@
               this.velocity.y = Math.max(this.velocity.y, -0.1);
           }
           const focus = this.selectFocus(player);
-          const distanceToPlayer = this.container.position.distanceTo(focus.pos);
+          // Distancia real al objetivo elegido (jugador o mesa de trabajo).
+          const focusDist = this.container.position.distanceTo(focus.pos);
           const playerDist = this.container.position.distanceTo(player.container.position);
           const hasLOS = this.hasLineOfSight(player, collidables);
+          // Un bloque construido justo delante: primero se rompe, si no se
+          // atraviesa la base y los enemigos quedan atascados en el muro.
+          const blockingBlock = (this.state === 'chasing' || this.state === 'attacking')
+              ? this.findBlockingBlock() : null;
 
           // --- State Machine ---
           switch (this.state) {
@@ -2013,34 +2041,31 @@
               }
 
               case 'chasing':
-                  if (this.health <= this.maxHealth * this.fleeHealthThreshold && distanceToPlayer < this.detectionRange) {
+                  if (this.health <= this.maxHealth * this.fleeHealthThreshold && focusDist < this.detectionRange) {
                       this.state = 'fleeing';
                       break;
                   }
-                  if (distanceToPlayer < this.attackRange) {
+                  if (focusDist < this.attackRange + (focus.kind === 'base' ? 0.5 : 0)) {
                       this.state = 'attacking';
-                  } else if (distanceToPlayer > this.detectionRange * 2.0) {
+                  } else if (focusDist > this.detectionRange * 2.0) {
                       this.state = 'idle';
                       this.target = null;
+                  } else if (blockingBlock) {
+                      // Hay un bloque construido entre el enemigo y su objetivo:
+                      // se queda golpeándolo en vez de rodearlo para siempre.
+                      this.turnTowards(focus.pos, delta, 3.0);
+                      this.input.forward = -1;
+                      if (this.attackCooldown <= 0) {
+                          this.attackPlacedBlock(blockingBlock);
+                          this.attackCooldown = this.attackCooldownBase;
+                      }
                   } else {
                       this.smartAvoidance(collidables, player);
                       this.tryBreakBlockAhead();
                       this.input.forward = -1;
-                      const direction = new THREE.Vector3().subVectors(
-                          focus.pos,
-                          this.container.position
-                      ).normalize();
-                      const targetYRotation = Math.atan2(direction.x, direction.z);
-                      const rotationDifference = targetYRotation - this.container.rotation.y;
-                      const normalizedDiff = ((rotationDifference + Math.PI) % (Math.PI * 2)) - Math.PI;
-                      const rotationSpeed = this.config.speed * delta * 2.0;
-                      this.container.rotation.y += THREE.MathUtils.clamp(
-                          normalizedDiff,
-                          -rotationSpeed,
-                          rotationSpeed
-                      );
+                      this.turnTowards(focus.pos, delta, this.config.speed * 2.0);
                       // Fire on the move: shoot while closing the distance
-                      if (distanceToPlayer <= this.rangedRange && this.attackCooldown <= 0 &&
+                      if (focusDist <= this.rangedRange && this.attackCooldown <= 0 &&
                           (focus.kind === 'base' || this.energy > 30) &&
                           (focus.kind === 'base' || hasLOS)) {
                           this.shootAt(focus.target);
@@ -2054,7 +2079,7 @@
                   break;
 
               case 'fleeing':
-                  if (distanceToPlayer > this.detectionRange * 1.5 || this.health > this.maxHealth * 0.5) {
+                  if (focusDist > this.detectionRange * 1.5 || this.health > this.maxHealth * 0.5) {
                       this.state = 'chasing';
                   } else {
                       const dirFlee = new THREE.Vector3().subVectors(this.container.position, focus.pos).normalize();
@@ -2064,32 +2089,50 @@
                       this.input.forward = -1;
                   }
                   break;
-              case 'attacking':
-                  if (this.health <= this.maxHealth * this.fleeHealthThreshold && distanceToPlayer < this.detectionRange) {
+              case 'attacking': {
+                  const attackLimit = this.attackRange + (focus.kind === 'base' ? 0.5 : 0);
+                  if (this.health <= this.maxHealth * this.fleeHealthThreshold && focusDist < this.detectionRange) {
                       this.state = 'fleeing';
                       break;
                   }
-                  if (distanceToPlayer > this.attackRange && distanceToPlayer <= this.rangedRange &&
+                  if (blockingBlock) {
+                      // No atacar la mesa a través de un muro: romperlo primero.
+                      this.turnTowards(focus.pos, delta, 3.0);
+                      if (this.attackCooldown <= 0) {
+                          this.attackPlacedBlock(blockingBlock);
+                          this.attackCooldown = this.attackCooldownBase;
+                      }
+                      break;
+                  }
+                  if (focusDist > attackLimit && focusDist <= this.rangedRange &&
                       (focus.kind === 'base' || this.energy > 30)) {
                       this.attackMode = 'ranged';
                   } else {
                       this.attackMode = 'melee';
                   }
-                  this.tryBreakBlockAhead();
-                  if (distanceToPlayer > this.attackRange * 2.0) {
+                  if (focusDist > this.attackRange * 2.0) {
                       this.state = 'chasing';
                   } else if (this.attackCooldown <= 0) {
                       this.attackFocus(focus);
                       this.attackCooldown = this.attackCooldownBase;
                       if (this.attackMode === 'ranged' && focus.kind !== 'base') this.energy -= 20;
                   }
-                  const dirAtk = new THREE.Vector3().subVectors(focus.pos, this.container.position).normalize();
-                  const targetYAtk = Math.atan2(dirAtk.x, dirAtk.z);
-                  const rotDiffAtk = ((targetYAtk - this.container.rotation.y + Math.PI) % (Math.PI*2)) - Math.PI;
-                  this.container.rotation.y += THREE.MathUtils.clamp(rotDiffAtk, -delta*3, delta*3);
+                  this.turnTowards(focus.pos, delta, 3.0);
                   break;
+              }
           }
 
+      }
+
+      turnTowards(point, delta, rate) {
+          if (!point) return;
+          const dir = new THREE.Vector3().subVectors(point, this.container.position);
+          dir.y = 0;
+          if (dir.lengthSq() < 0.0001) return;
+          const targetY = Math.atan2(dir.x, dir.z);
+          let diff = ((targetY - this.container.rotation.y + Math.PI) % (Math.PI * 2)) - Math.PI;
+          const step = Math.max(0.2, rate || 3) * delta;
+          this.container.rotation.y += THREE.MathUtils.clamp(diff, -step, step);
       }
 
       moveTo(targetPosition) {
@@ -2195,7 +2238,7 @@
                   if (d < bestD) { bestD = d; best = wb; }
               }
           } catch (e) {}
-          if (best && bestD < toPlayer * 0.7 && bestD < this.detectionRange * 1.5) {
+          if (best && (bestD < toPlayer - 4 || bestD < toPlayer * 0.7) && bestD < this.detectionRange * 1.5) {
               return {
                   kind: 'base', ref: best, pos: best.pos,
                   target: { container: { position: best.pos }, height: 1.4, collider: best.mesh, mesh: best.mesh }
@@ -2216,20 +2259,32 @@
               this.attack(focus.ref);
           }
       }
+      // Bloque construido justo delante, a la altura del cuerpo. Sirve para
+      // atacarlo en lugar de quedar empujando el muro.
+      findBlockingBlock(reach) {
+          if (typeof placedBlocks === 'undefined' || !placedBlocks.length) return null;
+          const fwd = new THREE.Vector3(0, 0, -1).applyEuler(this.container.rotation).normalize();
+          const maxReach = reach || (this.attackRange || 2.5) + 1.1;
+          const feetY = this.container.position.y - this.halfHeight;
+          const heights = [0.45, 1.15, 1.85];
+          for (let i = 0; i < heights.length; i++) {
+              const origin = this.container.position.clone();
+              origin.y = feetY + heights[i];
+              const ray = new THREE.Raycaster(origin, fwd, 0, maxReach);
+              let hits = [];
+              try { hits = ray.intersectObjects(placedBlocks, false); } catch (e) { return null; }
+              if (hits.length) {
+                  const block = hits[0].object;
+                  if (block && placedBlocks.includes(block)) return block;
+              }
+          }
+          return null;
+      }
       // If a wall the player built blocks the path, tear it down instead of getting stuck
       tryBreakBlockAhead() {
           if (this.attackCooldown > 0) return false;
-          if (typeof placedBlocks === 'undefined' || !placedBlocks.length) return false;
-          const origin = this.container.position.clone();
-          origin.y += this.height * 0.4;
-          const fwd = new THREE.Vector3(0, 0, -1).applyEuler(this.container.rotation).normalize();
-          const reach = (this.attackRange || 2.5) + 0.9;
-          const ray = new THREE.Raycaster(origin, fwd, 0, reach);
-          let hits = [];
-          try { hits = ray.intersectObjects(placedBlocks, false); } catch (e) { return false; }
-          if (!hits.length) return false;
-          const block = hits[0].object;
-          if (!block || !placedBlocks.includes(block)) return false;
+          const block = this.findBlockingBlock();
+          if (!block) return false;
           this.attackPlacedBlock(block);
           this.attackCooldown = this.attackCooldownBase;
           return true;
@@ -2346,14 +2401,15 @@
           const rightDir = forwardDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 6); // 30° right
 
           const scanDistance = 1.5;
+          const obstacles = (typeof placedBlocks !== 'undefined') ? [...collidables, ...placedBlocks] : collidables;
 
           const forwardRay = new THREE.Raycaster(origin, forwardDir, 0, scanDistance);
           const leftRay = new THREE.Raycaster(origin, leftDir, 0, scanDistance);
           const rightRay = new THREE.Raycaster(origin, rightDir, 0, scanDistance);
 
-          const forwardHits = forwardRay.intersectObjects(collidables, true);
-          const leftHits = leftRay.intersectObjects(collidables, true);
-          const rightHits = rightRay.intersectObjects(collidables, true);
+          const forwardHits = forwardRay.intersectObjects(obstacles, true);
+          const leftHits = leftRay.intersectObjects(obstacles, true);
+          const rightHits = rightRay.intersectObjects(obstacles, true);
 
           if (forwardHits.length > 0) {
               const leftClear = leftHits.length === 0;

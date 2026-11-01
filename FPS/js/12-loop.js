@@ -166,6 +166,8 @@
 
       // Red siempre (pausado o no): presencia viva y vecinos interpolados
       try { if (typeof netUpdate === 'function') netUpdate(delta); } catch (e) {}
+      // Sala coop: latidos, host y UI (Fase 1)
+      try { if (typeof onlineUpdate === 'function') onlineUpdate(delta); } catch (e) {}
 
       // HUD de base/objetivo/barra de construcción (se auto-ocultan en pausa)
       try { updateBaseHUD(); } catch (e) {}

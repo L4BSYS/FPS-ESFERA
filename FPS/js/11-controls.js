@@ -1,15 +1,4 @@
 // js/11-controls.js (part 11/16). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
-// Bloqueo global del menú contextual del navegador (clic derecho / long-press).
-// Capture en document cubre canvas, HUD, overlays, menús e inputs; los handlers
-// locales (p.ej. clearQuickSlot) siguen recibiendo el evento.
-(function blockBrowserContextMenu() {
-  if (window.__rgContextMenuBlocked) return;
-  window.__rgContextMenuBlocked = true;
-  const block = (e) => { e.preventDefault(); };
-  document.addEventListener('contextmenu', block, true);
-  window.addEventListener('contextmenu', block, true);
-})();
-
 // --- Controls Setup ---
   function setupControls() {
       const canvas = renderer.domElement;
@@ -28,10 +17,9 @@
       function onPointerLockChange() {
           if (document.pointerLockElement === canvas) {
                console.log("Pointer Locked");
-              pointerLockPending = false;
-              try { if (typeof stopLookBridge === 'function') stopLookBridge(); } catch (e) {}
               document.addEventListener('mousemove', onMouseMove, false);
-              try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
+              // Optional: Hide cursor explicitly
+              // canvas.style.cursor = 'none';
               if (isGamePaused) { // If lock is gained while paused (e.g. clicking resume), unpause
                   togglePause();
               }
@@ -39,28 +27,20 @@
                console.log("Pointer Unlocked");
                lastPointerUnlockTs = Date.now();
               document.removeEventListener('mousemove', onMouseMove, false);
+              // Optional: Show cursor
+              // canvas.style.cursor = 'default';
               if (player) {
                   keys = {}; // Reset global keys state
                   player.keys = {}; // Reset player's view of keys
                   player.input = { forward: 0, backward: 0, left: 0, right: 0 }; // Reset input intention
                   player.velocity.x = 0; player.velocity.z = 0; // Stop horizontal movement immediately
               }
-              // Si estamos reenganchando tras cerrar pausa, no mostrar el dot ni reabrir pausa
-              const resuming = (!isGamePaused && (pointerLockPending || (typeof _lookBridgeOn !== 'undefined' && _lookBridgeOn)));
-              if (resuming) {
-                  pointerLockPending = true;
-                  try { if (typeof startLookBridge === 'function') startLookBridge(); } catch (e) {}
-              }
-              try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
-              if (!resuming && !isGamePaused && !(typeof paletteOpen !== 'undefined' && paletteOpen)) {
+              if (!isGamePaused && !(typeof paletteOpen !== 'undefined' && paletteOpen)) { // If lock is lost unexpectedly, pause the game
                   togglePause();
               }
           }
       }
-      function onPointerLockError() {
-          // No relanzar lockPointer acá (reiniciaría el contador). Los retries internos cubren el cooldown.
-          console.warn('Pointer lock request was denied; waiting retry or click the game to capture the mouse.');
-      }
+      function onPointerLockError() { console.warn('Pointer lock request was denied; click the game view to capture the mouse.'); }
       function onMouseMove(event) { if (player && !isGamePaused) player.handleMouseMove(event, player.config.sensitivity); }
 
       // Keyboard
@@ -179,7 +159,8 @@
           }
       });
 
-      // Menú contextual del navegador: bloqueado globalmente al cargar este script.
+      // Prevent context menu on right-click in game window
+      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
   function setupMobileControls() {
       if (window.__mobileControlsReady) return;

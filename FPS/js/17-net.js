@@ -1,11 +1,36 @@
 // js/17-net.js (part 17). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
-// FASE 1 multijugador: presencia + avatares remotos interpolados + chat de sector.
-// Liviano: se publica a 8Hz solo si algo cambió (si no, latido cada 2s) y
-// cada cliente escucha únicamente su sector 3x3. Sin sesión no hace nada.
+// FASE 0: presencia + avatares remotos interpolados + chat de sector, con tráfico medido.
+// - Pose adaptativa: 3 Hz en movimiento, 0.2 Hz quieto, 0 en pestaña oculta.
+// - Payload compacto: array de enteros + metadatos (nombre/color) en un nodo aparte.
+// - Sin escritura de presencia duplicada en cada pose.
+// - Contadores netStats + panel de debug con F3.
+// Sin sesión no hace nada.
 
 // Cambiá a tu instancia regional cuando exista, ej:
 // window.LAGRIETA_DB_URL = 'https://jugandoenlagrieta-saouth.firebaseio.com';
+
 var NET_SECTOR = 64;
+
+var NET_CONFIG = {
+  mode: 'auto',                 // auto | full | eco | off
+  poseHzMoving: 3,              // 3 Hz por defecto para Spark; 4 Hz en salas de 2-3
+  poseHzIdle: 0.2,              // 1 pose cada 5 s quieto
+  poseHzEco: 1.5,               // modo ahorro
+  poseHzHidden: 0,              // pestaña oculta: no publicar
+  presenceHeartbeatMs: 30000,   // presencia global cada 30 s
+  poseHeartbeatMs: 5000,        // repetir pose aunque no cambie
+  interestRadius: 48,           // sólo animar remotos dentro de este radio
+  sectorSize: NET_SECTOR,
+  sectorRadius: 1,              // 1 = 3x3 sectores
+  maxPlayers: 5,
+  chatMaxChars: 140,
+  chatCooldownMs: 2000,
+  chatHistory: 25,
+  debug: false
+};
+// Override opcional para pruebas o para inyectar Remote Config antes de cargar este script.
+try { if (window.LAGRIETA_NET_CONFIG) Object.assign(NET_CONFIG, window.LAGRIETA_NET_CONFIG); } catch (e) {}
+
 var netOn = false;
 var netUid = null;
 var netName = 'Jugador';
@@ -16,18 +41,43 @@ var netLastPayload = '';
 var netSector = null;
 var netLevel = null;   // escena/nivel actual: la red se aísla por nivel
 var netPlayerRef = null;
+var netPlayerMetaRef = null;
 var netPresRef = null;
-var netSubs = {}; // sector -> { playersRef, cbs }
+var netSubs = {}; // sector -> { playersRef, metaRef, ... }
+var netRoomId = null;       // Fase 1: si hay sala, la pose va a rooms/{id}/players
+var netRoomSubs = null;     // suscripción única a players/playersInfo de la sala
+var netRoomSubscribedFor = null;
+var netMeta = {}; // uid -> { n, c }
 var netChatSector = null;
 var netChatRef = null;
 var netChatLastSend = 0;
-var remotes = {}; // uid -> {mesh, tag, tx,ty,tz, yaw, last, name}
+var netLastPresence = 0;
+var netPoseSeq = 0;
+var remotes = {}; // uid -> {mesh, tag, tx,ty,tz, yaw, last, name, color, sector, state}
 var netCapsuleGeo = null;
 var netChatOpen = false;
 var netGhostsVisible = true;
 try { netGhostsVisible = localStorage.getItem('lagrieta_ghosts') !== '0'; } catch (e) {}
 var netError = '';
 
+var netStats = {
+  sessionStart: Date.now(),
+  posesOut: 0,
+  snapshotsIn: 0,
+  eventsOut: 0,
+  eventsIn: 0,
+  bytesOut: 0,
+  bytesIn: 0,
+  outRate: 0,
+  inRate: 0,
+  lastOut: 0,
+  lastIn: 0,
+  lastSample: 0
+};
+
+function netApplyConfig(overrides) {
+  try { if (overrides && typeof overrides === 'object') Object.assign(NET_CONFIG, overrides); } catch (e) {}
+}
 function netDb() {
   try {
     if (window.LAGRIETA_DB_URL) return firebase.app().database(window.LAGRIETA_DB_URL);
@@ -44,22 +94,178 @@ function netSetLevel(id) {
   const next = id || null;
   if (next === netLevel) return;
   netLevel = next;
-  netSector = null;
   netLastPayload = '';
-  try { if (netPlayerRef) { try { netPlayerRef.onDisconnect().cancel(); } catch (e) {} try { netPlayerRef.remove(); } catch (e) {} } } catch (e) {}
-  netPlayerRef = null;
+  netLastSent = 0;
+  netAcc = 0;
+  netPoseSeq = 0;
+  // En una sala la pose se publica en rooms/{id}; no hay que desarmar la sala
+  // cada vez que el nivel cambia (los clientes cargan el mismo levelId).
+  if (netRoomId) return;
+  netSector = null;
+  netRemovePlayerNodes();
   for (const k in netSubs) netUnsub(k);
-  for (const uid in remotes) netRemoveAvatar(uid);
+  Object.keys(remotes).forEach(netRemoveAvatar);
+  netMeta = {};
   netChatOff();
   netEnsureChat(null); // recolocar panel de chat
 }
+// Entrar/salir de una sala de Fase 1. La pose deja de usar sectores.
+function netSetRoom(roomId) {
+  const next = roomId || null;
+  if (next === netRoomId) return;
+  netRoomId = next;
+  netSector = null;
+  netLastPayload = '';
+  netLastSent = 0;
+  netAcc = 0;
+  netPoseSeq = 0;
+  netRemovePlayerNodes();
+  for (const k in netSubs) netUnsub(k);
+  netRoomOff();
+  Object.keys(remotes).forEach(netRemoveAvatar);
+  netMeta = {};
+  netChatOff();
+  if (netRoomId) {
+    netRoomSubscribe();
+    netEnsureChat('room');
+    netPresenceWrite(true);
+  } else {
+    netEnsureChat(null);
+  }
+}
+function netRoomOff() {
+  const s = netRoomSubs;
+  netRoomSubs = null;
+  netRoomSubscribedFor = null;
+  if (!s) return;
+  try { s.playersRef.off('child_added', s.onAdd); } catch (e) {}
+  try { s.playersRef.off('child_changed', s.onChg); } catch (e) {}
+  try { s.playersRef.off('child_removed', s.onRem); } catch (e) {}
+  try { s.infoRef.off('child_added', s.onInfoAdd); } catch (e) {}
+  try { s.infoRef.off('child_changed', s.onInfoChg); } catch (e) {}
+  try { s.infoRef.off('child_removed', s.onInfoRem); } catch (e) {}
+}
+function netRoomSubscribe() {
+  if (!netRoomId || netRoomSubs || netRoomSubscribedFor === netRoomId) return;
+  const db = netDb();
+  if (!db) return;
+  const room = netRoomId;
+  const playersRef = db.ref('rooms/' + room + '/players');
+  const infoRef = db.ref('rooms/' + room + '/playersInfo');
+  const onErr = (err) => { try { netError = (err && err.code) || 'error-sala'; } catch (e) {} };
+  const onAdd = (snap) => {
+    try { netError = ''; } catch (e) {}
+    if (snap.key === netUid) return;
+    const d = snap.val();
+    netTrackIn(d, 'pose');
+    netAvatar(snap.key, d, 'room');
+  };
+  const onChg = onAdd;
+  const onRem = (snap) => netRemoveAvatar(snap.key);
+  const onInfoAdd = (snap) => {
+    if (snap.key === netUid) return;
+    const d = snap.val();
+    netTrackIn(d, 'meta');
+    if (d) netApplyMeta(snap.key, d);
+  };
+  const onInfoChg = onInfoAdd;
+  const onInfoRem = (snap) => { delete netMeta[snap.key]; };
+  try {
+    playersRef.on('child_added', onAdd, onErr);
+    playersRef.on('child_changed', onChg, onErr);
+    playersRef.on('child_removed', onRem, onErr);
+    infoRef.on('child_added', onInfoAdd, onErr);
+    infoRef.on('child_changed', onInfoChg, onErr);
+    infoRef.on('child_removed', onInfoRem, onErr);
+    netRoomSubs = { playersRef, infoRef, onAdd, onChg, onRem, onInfoAdd, onInfoChg, onInfoRem };
+    netRoomSubscribedFor = room;
+  } catch (e) {}
+}
+function netRoomEnsureRefs() {
+  if (!netRoomId || !netUid) return;
+  netRoomSubscribe();
+  if (netPlayerRef) return;
+  const db = netDb();
+  if (!db) return;
+  netPlayerRef = db.ref('rooms/' + netRoomId + '/players/' + netUid);
+  try { netPlayerRef.onDisconnect().remove(); } catch (e) {}
+}
+function netRemovePlayerNodes() {
+  try { if (netPlayerRef) { try { netPlayerRef.onDisconnect().cancel(); } catch (e) {} try { netPlayerRef.remove(); } catch (e) {} } } catch (e) {}
+  try { if (netPlayerMetaRef) { try { netPlayerMetaRef.onDisconnect().cancel(); } catch (e) {} try { netPlayerMetaRef.remove(); } catch (e) {} } } catch (e) {}
+  netPlayerRef = null;
+  netPlayerMetaRef = null;
+}
 function netSectorOf(x, z) {
-  return Math.floor(x / NET_SECTOR) + '_' + Math.floor(z / NET_SECTOR);
+  const s = NET_CONFIG.sectorSize || NET_SECTOR;
+  return Math.floor(x / s) + '_' + Math.floor(z / s);
 }
 function netColorFor(uid) {
   let h = 0;
   for (let i = 0; i < uid.length; i++) h = (h * 31 + uid.charCodeAt(i)) % 360;
   return 'hsl(' + h + ',90%,60%)';
+}
+function netBytes(obj) {
+  try { return JSON.stringify(obj).length + 32; } catch (e) { return 64; }
+}
+function netStatsReset() {
+  netStats.sessionStart = Date.now();
+  netStats.posesOut = 0;
+  netStats.snapshotsIn = 0;
+  netStats.eventsOut = 0;
+  netStats.eventsIn = 0;
+  netStats.bytesOut = 0;
+  netStats.bytesIn = 0;
+  netStats.outRate = 0;
+  netStats.inRate = 0;
+  netStats.lastOut = 0;
+  netStats.lastIn = 0;
+  netStats.lastSample = 0;
+}
+function netTrackOut(obj, kind) {
+  netStats.bytesOut += netBytes(obj);
+  if (kind === 'pose') netStats.posesOut++;
+  else netStats.eventsOut++;
+}
+function netTrackIn(obj, kind) {
+  netStats.bytesIn += netBytes(obj);
+  if (kind === 'pose') netStats.snapshotsIn++;
+  else netStats.eventsIn++;
+}
+function netIsMoving() {
+  try {
+    const v = player && player.velocity;
+    if (!v) return true;
+    return Math.sqrt(v.x * v.x + v.z * v.z) > 0.6;
+  } catch (e) { return true; }
+}
+function netPoseState() {
+  try {
+    if (player && player.isOnGround === false) return 3; // jump/fall
+    if (netIsMoving()) return (player && player.isSprinting) ? 2 : 1;
+  } catch (e) {}
+  return 0;
+}
+function netPoseHz() {
+  if (NET_CONFIG.mode === 'off') return 0;
+  if (typeof document !== 'undefined' && document.hidden) return NET_CONFIG.poseHzHidden || 0;
+  if (NET_CONFIG.mode === 'eco') return netIsMoving() ? NET_CONFIG.poseHzEco : NET_CONFIG.poseHzIdle;
+  return netIsMoving() ? NET_CONFIG.poseHzMoving : NET_CONFIG.poseHzIdle;
+}
+function netPresenceWrite(force) {
+  if (!netOn || !netPresRef) return;
+  const now = Date.now();
+  if (!force && now - netLastPresence < NET_CONFIG.presenceHeartbeatMs) return;
+  netLastPresence = now;
+  try {
+    netPresRef.update({
+      n: netName,
+      c: netColor,
+      s: netRoomId ? null : (netSector || null),
+      l: netLevel || null,
+      t: firebase.database.ServerValue.TIMESTAMP
+    });
+  } catch (e) {}
 }
 function wireNetAuth() {
   if (netOn) return;
@@ -73,29 +279,40 @@ function wireNetAuth() {
 }
 function netStart(user) {
   try {
+    if (netOn) netStop();
     netUid = user.uid;
-    netName = user.displayName || (user.email ? user.email.split('@')[0] : null) || 'Jugador';
+    netName = String(user.displayName || (user.email ? user.email.split('@')[0] : null) || 'Jugador').slice(0, 16);
     netColor = netColorFor(netUid);
     netOn = true;
     netSector = null;
+    netMeta = {};
+    netPoseSeq = 0;
+    netLastPresence = 0;
+    netStatsReset();
     // Sincronizar la escena activa para publicar en la red correcta
     try { if (typeof LEVEL !== 'undefined' && LEVEL.current) netLevel = LEVEL.current; } catch (e) {}
     const db = netDb();
     if (!db) return;
     netPresRef = db.ref('presence/' + netUid);
     try { netPresRef.onDisconnect().remove(); } catch (e) {}
+    netPresenceWrite(true);
     console.log('Net: sesión como ' + netName);
   } catch (e) { console.error(e); }
 }
 function netStop() {
   try {
-    if (netPlayerRef) { try { netPlayerRef.onDisconnect().cancel(); } catch (e) {} try { netPlayerRef.remove(); } catch (e) {} }
+    netRemovePlayerNodes();
     if (netPresRef) { try { netPresRef.onDisconnect().cancel(); } catch (e) {} try { netPresRef.remove(); } catch (e) {} }
     for (const k in netSubs) netUnsub(k);
+    netRoomOff();
     netChatOff();
-    for (const uid in remotes) netRemoveAvatar(uid);
+    Object.keys(remotes).forEach(netRemoveAvatar);
   } catch (e) {}
-  netOn = false; netUid = null; netSector = null; netPlayerRef = null; netPresRef = null; netLevel = null;
+  netOn = false; netUid = null; netSector = null; netPresRef = null; netLevel = null;
+  netRoomId = null;
+  netMeta = {};
+  netPoseSeq = 0;
+  netLastPresence = 0;
 }
 function netUnsub(k) {
   const s = netSubs[k];
@@ -103,47 +320,153 @@ function netUnsub(k) {
   try { s.playersRef.off('child_added', s.onAdd); } catch (e) {}
   try { s.playersRef.off('child_changed', s.onChg); } catch (e) {}
   try { s.playersRef.off('child_removed', s.onRem); } catch (e) {}
+  try { s.metaRef.off('child_added', s.onMetaAdd); } catch (e) {}
+  try { s.metaRef.off('child_changed', s.onMetaChg); } catch (e) {}
+  try { s.metaRef.off('child_removed', s.onMetaRem); } catch (e) {}
+  // Limpiar avatares que pertenecían a este sector.
+  try {
+    const doomed = [];
+    for (const uid in remotes) {
+      if (remotes[uid] && remotes[uid].sector === k) doomed.push(uid);
+    }
+    for (let i = 0; i < doomed.length; i++) netRemoveAvatar(doomed[i]);
+  } catch (e) {}
   delete netSubs[k];
 }
 function netEnsureSectors(cx, cz) {
+  const radius = Math.max(0, NET_CONFIG.sectorRadius || 0);
   const need = {};
-  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) need[(cx + dx) + '_' + (cz + dz)] = 1;
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dz = -radius; dz <= radius; dz++) {
+      need[(cx + dx) + '_' + (cz + dz)] = 1;
+    }
+  }
   for (const k in netSubs) if (!need[k]) netUnsub(k);
   const db = netDb();
   if (!db) return;
   for (const k in need) {
     if (netSubs[k]) continue;
-    const ref = db.ref(netBase() + '/sectors/' + k + '/players');
-    const onAdd = (snap) => { try { netError = ''; } catch (e) {} if (snap.key !== netUid) netAvatar(snap.key, snap.val()); };
-    const onChg = (snap) => { try { netError = ''; } catch (e) {} if (snap.key !== netUid) netAvatar(snap.key, snap.val()); };
-    const onRem = (snap) => netRemoveAvatar(snap.key);
+    const playersRef = db.ref(netBase() + '/sectors/' + k + '/players');
+    const metaRef = db.ref(netBase() + '/sectors/' + k + '/playersMeta');
     const onErr = (err) => { try { netError = (err && err.code) || 'error-red'; } catch (e) {} };
+    const onAdd = (snap) => {
+      try { netError = ''; } catch (e) {}
+      if (snap.key === netUid) return;
+      const d = snap.val();
+      netTrackIn(d, 'pose');
+      netAvatar(snap.key, d, k);
+    };
+    const onChg = (snap) => {
+      try { netError = ''; } catch (e) {}
+      if (snap.key === netUid) return;
+      const d = snap.val();
+      netTrackIn(d, 'pose');
+      netAvatar(snap.key, d, k);
+    };
+    const onRem = (snap) => netRemoveAvatar(snap.key);
+    const onMetaAdd = (snap) => {
+      if (snap.key === netUid) return;
+      const d = snap.val();
+      netTrackIn(d, 'meta');
+      netApplyMeta(snap.key, d);
+    };
+    const onMetaChg = (snap) => {
+      if (snap.key === netUid) return;
+      const d = snap.val();
+      netTrackIn(d, 'meta');
+      netApplyMeta(snap.key, d);
+    };
+    const onMetaRem = (snap) => { delete netMeta[snap.key]; };
     try {
-      ref.on('child_added', onAdd, onErr);
-      ref.on('child_changed', onChg, onErr);
-      ref.on('child_removed', onRem, onErr);
-      netSubs[k] = { playersRef: ref, onAdd, onChg, onRem };
+      playersRef.on('child_added', onAdd, onErr);
+      playersRef.on('child_changed', onChg, onErr);
+      playersRef.on('child_removed', onRem, onErr);
+      metaRef.on('child_added', onMetaAdd, onErr);
+      metaRef.on('child_changed', onMetaChg, onErr);
+      metaRef.on('child_removed', onMetaRem, onErr);
+      netSubs[k] = { playersRef, metaRef, onAdd, onChg, onRem, onMetaAdd, onMetaChg, onMetaRem };
     } catch (e) {}
   }
 }
-function netAvatar(uid, d) {
-  if (!d || typeof player === 'undefined') return null;
+function netUnpackPose(d) {
+  if (!d) return null;
+  if (Array.isArray(d)) {
+    const x = Number(d[1]);
+    const y = Number(d[2]);
+    const z = Number(d[3]);
+    if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return null;
+    return {
+      seq: Number(d[0]) || 0,
+      x: x / 10, y: y / 10, z: z / 10,
+      yaw: ((Number(d[4]) || 0) / 16) * Math.PI * 2,
+      state: Number(d[5]) || 0,
+      hp: isFinite(Number(d[6])) ? Number(d[6]) : 100,
+      n: null, c: null
+    };
+  }
+  if (typeof d.x !== 'number' || typeof d.z !== 'number') return null;
+  return {
+    seq: Number(d.seq) || 0,
+    x: d.x, y: d.y || 0, z: d.z,
+    yaw: Number(d.yaw) || 0,
+    state: Number(d.st) || 0,
+    hp: (typeof d.hp === 'number') ? d.hp : 100,
+    n: d.n || null,
+    c: d.c || null
+  };
+}
+function netApplyMeta(uid, meta) {
+  if (!meta) return;
+  const n = String(meta.n || 'Jugador').slice(0, 16);
+  const c = meta.c || netColorFor(uid);
+  netMeta[uid] = { n: n, c: c };
+  const r = remotes[uid];
+  if (!r) return;
+  if (r.name !== n || r.color !== c) {
+    r.name = n;
+    r.color = c;
+    try { r.mesh.material.color.set(c); } catch (e) {}
+    netRetag(r, n, c);
+  }
+}
+function netAvatar(uid, d, sector) {
+  const pose = netUnpackPose(d);
+  if (!pose || typeof player === 'undefined') return null;
+  // Compatibilidad con clientes viejos que mandaban n/c dentro del payload.
+  if (pose.n || pose.c) {
+    const prev = netMeta[uid] || {};
+    netMeta[uid] = { n: pose.n || prev.n || 'Jugador', c: pose.c || prev.c || netColorFor(uid) };
+  }
+  const meta = netMeta[uid] || { n: 'Jugador', c: netColorFor(uid) };
   let r = remotes[uid];
   if (!r) {
-      if (!netCapsuleGeo) { try { netCapsuleGeo = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8); } catch (e) { return null; } }
-      const mat = new THREE.MeshStandardMaterial({ color: d.c || '#33ff66', roughness: 0.6, transparent: true, opacity: 0.92 });
-      const mesh = new THREE.Mesh(netCapsuleGeo, mat);
-      mesh.raycast = function () {};
-      const tag = netNameTag(d.n || 'Jugador', d.c || '#33ff66');
-      try { scene.add(mesh); scene.add(tag); } catch (e) { return null; }
-      r = remotes[uid] = { mesh, tag, tx: 0, ty: 0, tz: 0, yaw: 0, last: 0, name: null };
+    if (!netCapsuleGeo) { try { netCapsuleGeo = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8); } catch (e) { return null; } }
+    const mat = new THREE.MeshStandardMaterial({ color: meta.c || '#33ff66', roughness: 0.6, transparent: true, opacity: 0.92 });
+    const mesh = new THREE.Mesh(netCapsuleGeo, mat);
+    mesh.raycast = function () {};
+    const tag = netNameTag(meta.n, meta.c);
+    try { scene.add(mesh); scene.add(tag); } catch (e) { return null; }
+    r = remotes[uid] = {
+      mesh, tag, tx: pose.x, ty: pose.y, tz: pose.z, yaw: pose.yaw,
+      last: 0, name: meta.n, color: meta.c, sector: sector || null, seq: 0, state: 0
+    };
   }
-  if (typeof d.x === 'number') { r.tx = d.x; r.ty = d.y || 0; r.tz = d.z; }
-  if (typeof d.yaw === 'number') r.yaw = d.yaw;
+  r.tx = pose.x;
+  r.ty = pose.y;
+  r.tz = pose.z;
+  r.yaw = pose.yaw;
   r.last = Date.now();
+  r.seq = pose.seq;
+  r.state = pose.state;
+  if (sector) r.sector = sector;
+  if (r.name !== meta.n || r.color !== meta.c) {
+    r.name = meta.n;
+    r.color = meta.c;
+    try { r.mesh.material.color.set(meta.c); } catch (e) {}
+    netRetag(r, meta.n, meta.c);
+  }
   // Caído = casi transparente (feedback barato sin lógica de combate)
-  try { r.mesh.material.opacity = (typeof d.hp === 'number' && d.hp <= 0) ? 0.3 : 0.92; } catch (e) {}
-  if (d.n && r.name !== d.n) { r.name = d.n; netRetag(r, d.n, d.c); }
+  try { r.mesh.material.opacity = (pose.hp <= 0) ? 0.3 : 0.92; } catch (e) {}
   r.mesh.visible = true;
   r.tag.visible = true;
   return r;
@@ -170,12 +493,18 @@ function netNameTag(name, color) {
 }
 function netRetag(r, name, color) {
   try {
-      const fresh = netNameTag(name, color);
-      fresh.position.copy(r.tag.position);
-      fresh.visible = r.tag.visible;
-      scene.remove(r.tag);
-      scene.add(fresh);
-      r.tag = fresh;
+    const fresh = netNameTag(name, color);
+    fresh.position.copy(r.tag.position);
+    fresh.visible = r.tag.visible;
+    scene.remove(r.tag);
+    try {
+      if (r.tag.material) {
+        if (r.tag.material.map) r.tag.material.map.dispose();
+        r.tag.material.dispose();
+      }
+    } catch (e) {}
+    scene.add(fresh);
+    r.tag = fresh;
   } catch (e) {}
 }
 function netRemoveAvatar(uid) {
@@ -183,71 +512,119 @@ function netRemoveAvatar(uid) {
   if (!r) return;
   try { scene.remove(r.mesh); } catch (e) {}
   try { scene.remove(r.tag); } catch (e) {}
+  try { if (r.mesh && r.mesh.material) r.mesh.material.dispose(); } catch (e) {}
+  try {
+    if (r.tag && r.tag.material) {
+      if (r.tag.material.map) r.tag.material.map.dispose();
+      r.tag.material.dispose();
+    }
+  } catch (e) {}
   delete remotes[uid];
 }
 function netNeighborCount() {
   try { return Object.keys(remotes).length; } catch (e) { return 0; }
 }
-// --- Loop: publicar (8Hz si cambió, latido 2s) + interpolar + sectores ---
+// --- Loop: publicar (pose adaptativa) + interpolar + sectores ---
 function netUpdate(delta) {
   if (!netOn || !netUid) return;
   if (typeof player === 'undefined' || !player || !player.container) return;
-  // interpolar remotos siempre
+  if (typeof document !== 'undefined' && document.hidden) return;
+
+  // Interpolar remotos siempre (sólo los que están dentro del radio de interés).
   try {
-      const now = Date.now();
-      const k = Math.min(1, (delta || 0.016) * 10);
-      for (const uid in remotes) {
-          const r = remotes[uid];
-          if (typeof netGhostsVisible !== 'undefined' && !netGhostsVisible) { r.mesh.visible = false; r.tag.visible = false; continue; }
-          if (now - r.last > 6000) { r.mesh.visible = false; r.tag.visible = false; continue; }
-          r.mesh.position.x += (r.tx - r.mesh.position.x) * k;
-          r.mesh.position.z += (r.tz - r.mesh.position.z) * k;
-          r.mesh.position.y += ((r.ty + 0.9) - r.mesh.position.y) * k;
-          r.mesh.rotation.y = r.yaw;
-          r.tag.position.set(r.mesh.position.x, r.mesh.position.y + 1.5, r.mesh.position.z);
+    const now = Date.now();
+    const k = Math.min(1, (delta || 0.016) * 10);
+    const px = player.container.position.x;
+    const pz = player.container.position.z;
+    const maxDist = NET_CONFIG.interestRadius || 48;
+    const maxDist2 = maxDist * maxDist;
+    for (const uid in remotes) {
+      const r = remotes[uid];
+      if (!r) continue;
+      if (typeof netGhostsVisible !== 'undefined' && !netGhostsVisible) {
+        r.mesh.visible = false;
+        r.tag.visible = false;
+        continue;
       }
+      if (now - r.last > 6000) {
+        r.mesh.visible = false;
+        r.tag.visible = false;
+        continue;
+      }
+      const dx = r.tx - px;
+      const dz = r.tz - pz;
+      if (dx * dx + dz * dz > maxDist2) {
+        r.mesh.visible = false;
+        r.tag.visible = false;
+        continue;
+      }
+      r.mesh.visible = true;
+      r.tag.visible = true;
+      r.mesh.position.x += (r.tx - r.mesh.position.x) * k;
+      r.mesh.position.z += (r.tz - r.mesh.position.z) * k;
+      r.mesh.position.y += ((r.ty + 0.9) - r.mesh.position.y) * k;
+      r.mesh.rotation.y = r.yaw;
+      r.tag.position.set(r.mesh.position.x, r.mesh.position.y + 1.5, r.mesh.position.z);
+    }
   } catch (e) {}
-  // publicar propio (throttle)
-  if (!netLevel) return; // sin escena activa no publicamos presencia
+
+  if (!netLevel && !netRoomId) { netPresenceWrite(false); return; }
+
+  // Publicar propio con tasa adaptativa.
+  const hz = netPoseHz();
+  if (hz <= 0) { netPresenceWrite(false); return; }
   netAcc += (delta || 0.016);
-  if (netAcc < 0.125) return;
+  if (netAcc < (1 / hz)) return;
   netAcc = 0;
+
   try {
-      const p = player.container.position;
+    const p = player.container.position;
+    if (netRoomId) {
+      netRoomEnsureRefs();
+    } else {
       const sector = netSectorOf(p.x, p.z);
       if (sector !== netSector) {
-          const db = netDb();
-          if (db) {
-              if (netPlayerRef) { try { netPlayerRef.remove(); } catch (e) {} }
-              netPlayerRef = db.ref(netBase() + '/sectors/' + sector + '/players/' + netUid);
-              try { netPlayerRef.onDisconnect().remove(); } catch (e) {}
-          }
-          netSector = sector;
-          const cx = Math.floor(p.x / NET_SECTOR), cz = Math.floor(p.z / NET_SECTOR);
-          netEnsureSectors(cx, cz);
-          netEnsureChat(sector);
-          if (netPresRef) { try { netPresRef.update({ s: sector }); } catch (e) {} }
-          netLastPayload = '';
+        const db = netDb();
+        netRemovePlayerNodes();
+        if (db) {
+          netPlayerRef = db.ref(netBase() + '/sectors/' + sector + '/players/' + netUid);
+          netPlayerMetaRef = db.ref(netBase() + '/sectors/' + sector + '/playersMeta/' + netUid);
+          try { netPlayerRef.onDisconnect().remove(); } catch (e) {}
+          try { netPlayerMetaRef.onDisconnect().remove(); } catch (e) {}
+          try { netPlayerMetaRef.set({ n: netName, c: netColor }); } catch (e) {}
+        }
+        netSector = sector;
+        const s = NET_CONFIG.sectorSize || NET_SECTOR;
+        const cx = Math.floor(p.x / s);
+        const cz = Math.floor(p.z / s);
+        netEnsureSectors(cx, cz);
+        netEnsureChat(sector);
+        netPresenceWrite(true);
+        netLastPayload = '';
+        netLastSent = 0;
       }
-      const payload = JSON.stringify([
-          Math.round(p.x * 100) / 100, Math.round(p.y * 100) / 100, Math.round(p.z * 100) / 100,
-          Math.round(player.container.rotation.y * 100) / 100,
-          Math.max(0, Math.round(player.health || 0)),
-          player.currentTool || 'hands'
-      ]);
-      const nowMs = Date.now();
-      if ((payload !== netLastPayload || nowMs - netLastSent > 2000) && netPlayerRef) {
-          netLastPayload = payload;
-          netLastSent = nowMs;
-          const a = JSON.parse(payload);
-          netPlayerRef.set({
-              x: a[0], y: a[1], z: a[2], yaw: a[3], hp: a[4], w: a[5],
-              n: netName, c: netColor, t: firebase.database.ServerValue.TIMESTAMP
-          });
-          if (netPresRef) {
-              try { netPresRef.set({ n: netName, c: netColor, s: netSector, t: firebase.database.ServerValue.TIMESTAMP }); } catch (e) {}
-          }
-      }
+    }
+
+    const yaw = ((player.container.rotation.y % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const body = [
+      Math.round(p.x * 10),
+      Math.round(p.y * 10),
+      Math.round(p.z * 10),
+      Math.round((yaw / (Math.PI * 2)) * 16) % 16,
+      netPoseState(),
+      Math.max(0, Math.round(player.health || 0))
+    ];
+    const payload = JSON.stringify(body);
+    const nowMs = Date.now();
+    if ((payload !== netLastPayload || nowMs - netLastSent > NET_CONFIG.poseHeartbeatMs) && netPlayerRef) {
+      netPoseSeq++;
+      const full = [netPoseSeq].concat(body);
+      netPlayerRef.set(full);
+      netTrackOut(full, 'pose');
+      netLastPayload = payload;
+      netLastSent = nowMs;
+    }
+    netPresenceWrite(false);
   } catch (e) {}
 }
 // --- Chat de sector (liviano: últimos 25, 140 caracteres) ---
@@ -262,12 +639,16 @@ function netEnsureChat(sector) {
   const db = netDb();
   if (!db) return;
   try {
-      netChatRef = db.ref(netBase() + '/sectors/' + sector + '/chat').limitToLast(25);
-      netChatRef.on('child_added', (snap) => {
-          const d = snap.val();
-          if (!d || typeof d.m !== 'string') return;
-          netChatLine(d.n || '?', d.m, d.u === netUid);
-      });
+    const chatPath = netRoomId
+      ? ('rooms/' + netRoomId + '/chat')
+      : (netBase() + '/sectors/' + sector + '/chat');
+    netChatRef = db.ref(chatPath).limitToLast(NET_CONFIG.chatHistory || 25);
+    netChatRef.on('child_added', (snap) => {
+      const d = snap.val();
+      if (!d || typeof d.m !== 'string') return;
+      netTrackIn(d, 'event');
+      netChatLine(d.n || '?', d.m, d.u === netUid);
+    });
   } catch (e) { netChatRef = null; }
 }
 function netChatOff() {
@@ -311,9 +692,9 @@ function netEmote(text) {
   const db = netDb();
   if (!db) return;
   try {
-      db.ref(netBase() + '/sectors/' + netChatSector + '/chat').push({
-          u: netUid, n: netName, m: text, t: firebase.database.ServerValue.TIMESTAMP
-      });
+    const msg = { u: netUid, n: netName, m: text, t: firebase.database.ServerValue.TIMESTAMP };
+    netTrackOut(msg, 'event');
+    db.ref(netRoomId ? ('rooms/' + netRoomId + '/chat') : (netBase() + '/sectors/' + netChatSector + '/chat')).push(msg);
   } catch (e) {}
 }
 function netChatLine(name, msg, mine) {
@@ -323,7 +704,7 @@ function netChatLine(name, msg, mine) {
   div.className = 'rg-chatline' + (mine ? ' mine' : '');
   div.innerHTML = '<b></b><span></span>';
   div.querySelector('b').textContent = String(name).slice(0, 16) + ': ';
-  div.querySelector('span').textContent = String(msg).slice(0, 140);
+  div.querySelector('span').textContent = String(msg).slice(0, NET_CONFIG.chatMaxChars || 140);
   box.appendChild(div);
   while (box.children.length > 30) box.removeChild(box.firstChild);
   box.scrollTop = box.scrollHeight;
@@ -344,18 +725,84 @@ function netChatSend() {
   if (!netOn || !netChatSector) return;
   const input = document.getElementById('netChatInput');
   if (!input) return;
-  const text = (input.value || '').trim().slice(0, 140);
+  const text = (input.value || '').trim().slice(0, NET_CONFIG.chatMaxChars || 140);
   if (!text) return;
   const now = Date.now();
-  if (now - netChatLastSend < 2000) return;
+  if (now - netChatLastSend < NET_CONFIG.chatCooldownMs) return;
   netChatLastSend = now;
   input.value = '';
   const db = netDb();
   if (!db) return;
   try {
-      db.ref(netBase() + '/sectors/' + netChatSector + '/chat').push({
-          u: netUid, n: netName, m: text, t: firebase.database.ServerValue.TIMESTAMP
-      });
+    const msg = { u: netUid, n: netName, m: text, t: firebase.database.ServerValue.TIMESTAMP };
+    netTrackOut(msg, 'event');
+    db.ref(netRoomId ? ('rooms/' + netRoomId + '/chat') : (netBase() + '/sectors/' + netChatSector + '/chat')).push(msg);
   } catch (e) {}
 }
+
+// --- Panel de debug (F3) ---
+var netDebugEl = null;
+var netDebugVisible = false;
+function netToggleDebug(force) {
+  netDebugEnsure();
+  const show = (typeof force === 'boolean') ? force : !netDebugVisible;
+  netDebugVisible = show;
+  if (netDebugEl) netDebugEl.style.display = show ? 'block' : 'none';
+  if (show) netDebugRender();
+}
+function netDebugEnsure() {
+  if (netDebugEl || typeof document === 'undefined' || !document.body) return;
+  netDebugEl = document.createElement('div');
+  netDebugEl.id = 'netDebug';
+  netDebugEl.style.cssText = 'position:fixed;top:10px;right:10px;z-index:9999;background:rgba(0,0,0,.78);' +
+      'color:#9f9;font:12px/1.45 monospace;padding:8px 10px;border:1px solid #3f6;border-radius:6px;' +
+      'pointer-events:none;display:none;white-space:pre;max-width:320px;';
+  document.body.appendChild(netDebugEl);
+}
+function netDebugRender() {
+  if (!netDebugVisible) return;
+  netDebugEnsure();
+  if (!netDebugEl) return;
+  try {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const dt = (now - (netStats.lastSample || now)) / 1000;
+    if (dt > 0.2) {
+      netStats.outRate = (netStats.bytesOut - (netStats.lastOut || 0)) / dt;
+      netStats.inRate = (netStats.bytesIn - (netStats.lastIn || 0)) / dt;
+      netStats.lastOut = netStats.bytesOut;
+      netStats.lastIn = netStats.bytesIn;
+      netStats.lastSample = now;
+    }
+    const secs = Math.max(0, (Date.now() - netStats.sessionStart) / 1000);
+    const mm = Math.floor(secs / 60);
+    const ss = Math.floor(secs % 60);
+    netDebugEl.textContent =
+      'NET ' + (netOn ? 'ON' : 'OFF') + ' · ' + (NET_CONFIG.mode || 'auto') + '\n' +
+      'nivel: ' + (netLevel || '-') + ' · sector: ' + (netSector || '-') + '\n' +
+      'vecinos: ' + netNeighborCount() + ' · pose: ' + netPoseHz().toFixed(2) + ' Hz\n' +
+      '↑ ' + Math.round(netStats.outRate) + ' B/s · poses ' + netStats.posesOut + '\n' +
+      '↓ ' + Math.round(netStats.inRate) + ' B/s · snaps ' + netStats.snapshotsIn + '\n' +
+      'total ↑' + (netStats.bytesOut / 1024).toFixed(1) + ' KB · ↓' + (netStats.bytesIn / 1024).toFixed(1) + ' KB\n' +
+      'sesión: ' + mm + 'm ' + ss + 's' + (netError ? '\nerror: ' + netError : '');
+  } catch (e) {}
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'F3') {
+      e.preventDefault();
+      netToggleDebug();
+    }
+  });
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) {
+      netAcc = 1;
+      netLastSent = 0;
+      netLastPayload = '';
+    }
+  });
+}
+if (typeof setInterval !== 'undefined') setInterval(netDebugRender, 500);
+
 wireNetAuth();

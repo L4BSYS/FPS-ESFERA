@@ -1,4 +1,4 @@
-﻿// js/19-levels.js (part 19). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
+// js/19-levels.js (part 19). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // ============================================================
 //  Gestor de niveles / escenas
 //  - Un nivel = "celda" cuadrada cerrada por 4 muros.
@@ -14,6 +14,7 @@ var LEVEL = {
   current: null,
   working: null,         // nivel que se está editando
   transitioning: false,
+  loading: false,        // true mientras loadLevel reconstruye la escena
   menuOpen: false,
   menuView: 'home',
   menuBusy: false,
@@ -284,20 +285,16 @@ function placePlayerAt(sp) {
 function resetPlayerInventory() {
   if (typeof player === 'undefined' || !player || !player.inventory) return;
   const inv = player.inventory;
-  inv.items = [];
-  inv.equippedItem = null;
-  inv.selectedSlot = 0;
-  inv.quickSlots = [null, null, null, null, null];
-  inv.ammo = { pistol: 0, rifle: 0, shotgun: 0, energy: 0 };
-  inv.resources = { wood: 0, stone: 0, metal: 0, keys: [] };
-  inv.craftedFlags = {};
-  inv.bagTier = 0;
-  if (typeof INV_BAG_TIERS !== 'undefined' && INV_BAG_TIERS[0]) {
-      inv.maxSlots = INV_BAG_TIERS[0].slots;
-  } else {
-      inv.maxSlots = 8;
+  if (typeof inv.resetAll === 'function') inv.resetAll();
+  else {
+    inv.slots = new Array(INV_MAX_BAG_SLOTS).fill(null);
+    inv.quickSlots = [null, null, null, null, null];
+    inv.bagTier = 0;
+    inv.equippedItem = null;
+    inv.selectedSlot = 0;
+    inv.craftedFlags = {};
+    inv._keys = [];
   }
-  inv._resourceStacksReady = true; // vacío ya sincronizado
   try { player.heldItem = null; } catch (e) {}
   try { if (typeof detachOrphanToolModels === 'function') detachOrphanToolModels(); } catch (e) {}
   try { player.currentTool = TOOLS.HANDS; } catch (e) {}
@@ -308,7 +305,6 @@ function resetPlayerInventory() {
   try { inv.updateWeaponHUD(); } catch (e) {}
   try { updateResourceHUD(); } catch (e) {}
   try { updateActionButton(); } catch (e) {}
-  try { if (typeof refreshTechTreeState === 'function') refreshTechTreeState(); } catch (e) {}
 }
 
 function updateLevelHUD(def) {
@@ -343,40 +339,113 @@ function fadeLevelTransition(cb) {
   }, 340);
 }
 
+// ------------------------------------------------------------
+//  Snapshots por nivel de campaña (base, cofres y recursos)
+//  Se guardan al salir de un mundo y al cerrar la pestaña para que
+//  la base vuelva a aparecer al regresar por una puerta.
+// ------------------------------------------------------------
+function levelSnapshotKey(id) {
+  return 'lagrieta_level_snapshot_' + id;
+}
+function levelSnapshotEligible(def) {
+  return !!(def && def.kind === 'campaign' && def.id);
+}
+function saveLevelSnapshot(id) {
+  if (!id || typeof snapshotScene !== 'function') return false;
+  if (typeof tutorialDone === 'function' && !tutorialDone()) return false;
+  const def = resolveLevelDef(id);
+  if (!levelSnapshotEligible(def)) return false;
+  try {
+    const data = snapshotScene();
+    localStorage.setItem(levelSnapshotKey(id), JSON.stringify({ v: 1, ts: Date.now(), data: data }));
+    return true;
+  } catch (e) {
+    console.warn('No pude guardar el snapshot del nivel', id, e);
+    return false;
+  }
+}
+function restoreLevelSnapshot(id) {
+  if (!id || typeof applySceneData !== 'function') return false;
+  if (typeof tutorialDone === 'function' && !tutorialDone()) return false;
+  const def = resolveLevelDef(id);
+  if (!levelSnapshotEligible(def)) return false;
+  let raw = null;
+  try { raw = localStorage.getItem(levelSnapshotKey(id)); } catch (e) { return false; }
+  if (!raw) return false;
+  try {
+    const saved = JSON.parse(raw);
+    if (!saved || saved.v !== 1 || !saved.data) return false;
+    applySceneData(saved.data);
+    return true;
+  } catch (e) {
+    console.warn('No pude restaurar el snapshot del nivel', id, e);
+    return false;
+  }
+}
+function _installLevelSnapshotHooks() {
+  if (typeof window === 'undefined' || window.__lagrietaLevelSnapshotHooked) return;
+  window.__lagrietaLevelSnapshotHooked = true;
+  window.addEventListener('beforeunload', function () {
+    try {
+      if (typeof LEVEL !== 'undefined' && LEVEL && LEVEL.current) saveLevelSnapshot(LEVEL.current);
+    } catch (e) {}
+  });
+}
+
 function loadLevel(id, opts) {
   opts = opts || {};
   const def = resolveLevelDef(id);
   if (!def) { try { lvToast('No encontré el mundo: ' + id); } catch (e) {} return; }
   LEVEL.transitioning = false;
-  try { if (typeof resetDirector === 'function') resetDirector(); } catch (e) {}
-  teardownLevel();
-  buildRoom(def);
-  if (typeof def.build === 'function') {
-    try { def.build(def); } catch (e) { console.error('build level ' + def.id, e); }
-  } else if (def.content) {
-    try { applySceneData(def.content); } catch (e) { console.error('apply content ' + def.id, e); }
-  }
-  // Ambiente (cielo / luz / oscuridad) y fauna neuronal del mundo
-  try { if (typeof applyLevelAmbience === 'function') applyLevelAmbience(def); } catch (e) {}
-  // Tutorial paso 0: patio apagado — sin fauna hasta que el director la prenda.
-  if (!(def.kind === 'tutorial' || DIRECTOR.active)) {
-    try { if (typeof spawnNeuralFauna === 'function') spawnNeuralFauna(def); } catch (e) {}
-  }
-  placePlayerAt(opts.spawn || def.spawn);
-  if (def.resetInventory !== false) resetPlayerInventory();
-  LEVEL.current = def.id;
-  try { if (typeof netSetLevel === 'function') netSetLevel(def.id); } catch (e) {}
-  try { localStorage.setItem('lagrieta_last_level', def.id); } catch (e) {}
-  updateLevelHUD(def);
+  LEVEL.loading = true;
+  try {
+    // Guardamos cómo quedó el mundo anterior (base, cofres, recursos).
+    if (LEVEL.current) saveLevelSnapshot(LEVEL.current);
+    try { if (typeof resetDirector === 'function') resetDirector(); } catch (e) {}
+    teardownLevel();
+    buildRoom(def);
+    if (typeof def.build === 'function') {
+      try { def.build(def); } catch (e) { console.error('build level ' + def.id, e); }
+    } else if (def.content) {
+      try { applySceneData(def.content); } catch (e) { console.error('apply content ' + def.id, e); }
+    }
+    // Si ya visitamos este mundo de campaña, volvemos a poner lo construido.
+    // En una sala coop el mundo lo manda el host: opts.skipRestore evita mezclar la base local.
+    if (!opts.skipRestore) {
+      try { restoreLevelSnapshot(def.id); } catch (e) { console.warn('restore snapshot', e); }
+    }
+    // Ambiente (cielo / luz / oscuridad) y fauna neuronal del mundo
+    try { if (typeof applyLevelAmbience === 'function') applyLevelAmbience(def); } catch (e) {}
+    // Tutorial paso 0: patio apagado — sin fauna hasta que el director la prenda.
+    if (!(def.kind === 'tutorial' || DIRECTOR.active)) {
+      try { if (typeof spawnNeuralFauna === 'function') spawnNeuralFauna(def); } catch (e) {}
+    }
+    placePlayerAt(opts.spawn || def.spawn);
 
-  isGamePaused = false;
-  hideMainMenu();
-  try { if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none'; } catch (e) {}
-  try { if (typeof refreshBuildBarVisibility === 'function') refreshBuildBarVisibility(); } catch (e) {}
-  try { updateResourceHUD(); } catch (e) {}
-  try { lockPointer(); } catch (e) {}
-  try { lvToast('📍 ' + def.name); } catch (e) {}
+    const carryInventory = opts.preserveInventory === true;
+    if (!carryInventory && def.resetInventory !== false) resetPlayerInventory();
+    // Al recargar la página después del tutorial, recuperamos la mochila guardada.
+    if (!carryInventory && def.kind !== 'tutorial' && typeof player !== 'undefined' && player &&
+        player.inventory && typeof player.inventory.restoreProfile === 'function') {
+      try { player.inventory.restoreProfile(); } catch (e) {}
+    }
 
+    LEVEL.current = def.id;
+    try { if (typeof netSetLevel === 'function') netSetLevel(def.id); } catch (e) {}
+    try { localStorage.setItem('lagrieta_last_level', def.id); } catch (e) {}
+    updateLevelHUD(def);
+
+    isGamePaused = false;
+    hideMainMenu();
+    try { if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none'; } catch (e) {}
+    try { if (typeof refreshBuildBarVisibility === 'function') refreshBuildBarVisibility(); } catch (e) {}
+    try { updateResourceHUD(); } catch (e) {}
+    try { lockPointer(); } catch (e) {}
+    try { lvToast('📍 ' + def.name); } catch (e) {}
+  } finally {
+    LEVEL.loading = false;
+  }
+  // Recién acá la mochila queda marcada como persistente y se guarda.
   if (opts.from === 'tutorial' && def.id !== 'tutorial') markTutorialDone();
 }
 
@@ -422,7 +491,7 @@ function goThroughDoor(door) {
   const spawn = spec.spawn || arrivalSpawn(resolveLevelDef(dest), from) || null;
   try { playSound('door_open'); } catch (e) {}
   fadeLevelTransition(function () {
-    loadLevel(dest, { spawn: spawn, from: from });
+    loadLevel(dest, { spawn: spawn, from: from, preserveInventory: true });
   });
 }
 
@@ -435,6 +504,11 @@ function tutorialDone() {
 function markTutorialDone() {
   try { localStorage.setItem('lagrieta_tutorial_done', '1'); } catch (e) {}
   LEVEL.tutorialDone = true;
+  // A partir de acá la mochila y las herramientas sobreviven a los cambios de mundo.
+  try {
+    if (typeof player !== 'undefined' && player && player.inventory &&
+        typeof player.inventory.saveProfile === 'function') player.inventory.saveProfile();
+  } catch (e) {}
   setTimeout(function () { try { showTutorialReward(); } catch (e) {} }, 900);
 }
 function showTutorialReward() {
@@ -442,21 +516,22 @@ function showTutorialReward() {
   if (!m) {
     m = document.createElement('div');
     m.id = 'tutorialReward';
-    m.className = 'rg-overlay rg-cinema-center';
+    m.className = 'rg-overlay';
     document.body.appendChild(m);
   }
-  m.className = 'rg-overlay rg-cinema-center';
   m.innerHTML = '';
   const panel = document.createElement('div');
-  panel.className = 'rg-cinema-card';
+  panel.className = 'rg-panel rg-modalbox narrow';
+  panel.style.textAlign = 'center';
   const h = document.createElement('h2');
-  h.className = 'rg-home-title';
+  h.className = 'rg-title';
   h.textContent = '🎉 ¡COMPLETASTE EL TUTORIAL!';
   panel.appendChild(h);
 
   const user = currentUser();
   const p = document.createElement('div');
-  p.className = 'rg-home-session';
+  p.className = 'rg-hint';
+  p.style.margin = '10px 0';
   p.textContent = user
     ? ('Sesión: ' + (user.displayName || user.email || 'tu cuenta') + '. Elegí cómo seguir.')
     : 'Ingresá con Google para guardar y publicar tus mundos, o seguí explorando sin cuenta.';
@@ -465,45 +540,42 @@ function showTutorialReward() {
   const close = function () {
     m.style.display = 'none';
     isGamePaused = false;
-    try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
     try { lockPointer(); } catch (e) {}
   };
   const play = function (id) {
     m.style.display = 'none';
     isGamePaused = false;
-    try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
     playLevel(id);
   };
 
-  const nav = document.createElement('nav');
-  nav.className = 'rg-cinema-nav';
-  nav.setAttribute('aria-label', 'Tutorial completado');
-  nav.appendChild(lvBtn('▶ Continuar (La Grieta)', 'rg-btn-primary rg-home-cta', function () { play('mundo-1'); }));
-  nav.appendChild(lvBtn('🗺 Mis mundos', 'rg-home-link', function () {
+  const row = document.createElement('div');
+  row.className = 'rg-menubtns';
+  row.appendChild(lvBtn('▶ Continuar (La Grieta)', 'rg-btn-primary', function () { play('mundo-1'); }));
+  row.appendChild(lvBtn('🗺 Mis mundos', '', function () {
     m.style.display = 'none';
     isGamePaused = true;
     showMainMenu('mine');
   }));
-  nav.appendChild(lvBtn('➕ Crear mundo', 'rg-home-link', function () {
+  row.appendChild(lvBtn('➕ Crear mundo', '', function () {
     m.style.display = 'none';
     isGamePaused = true;
     showMainMenu('create');
   }));
-  const sep = document.createElement('div');
-  sep.className = 'rg-home-sep';
-  sep.setAttribute('aria-hidden', 'true');
-  nav.appendChild(sep);
+  panel.appendChild(row);
+
+  const row2 = document.createElement('div');
+  row2.className = 'rg-menubtns';
+  row2.style.marginTop = '10px';
   if (!user) {
-    nav.appendChild(lvBtn('Ingresar con Google', 'rg-home-link', function () { lvLogin(); }));
+    row2.appendChild(lvBtn('Ingresar con Google', 'rg-btn-primary', function () { lvLogin(); }));
   }
-  nav.appendChild(lvBtn('Seguir explorando', 'rg-home-link', close));
-  panel.appendChild(nav);
+  row2.appendChild(lvBtn('Seguir explorando', user ? '' : 'rg-btn-primary', close));
+  panel.appendChild(row2);
 
   m.appendChild(panel);
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
   m.style.display = 'flex';
-  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 
 // ------------------------------------------------------------
@@ -608,143 +680,168 @@ function mainMenuEl() {
 }
 function showMainMenu(view) {
   LEVEL.menuOpen = true;
-  // 'start' (boot) y vistas desconocidas caen en home
-  const known = { home: 1, mine: 1, community: 1, create: 1, editorial: 1 };
-  LEVEL.menuView = (view && known[view]) ? view : 'home';
+  LEVEL.menuView = view || 'home';
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
   try { if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none'; } catch (e) {}
   mainMenuEl().style.display = 'flex';
   renderMainMenu();
   refreshMenuLevels();
-  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 function hideMainMenu() {
   LEVEL.menuOpen = false;
   const m = document.getElementById('mainMenu');
   if (m) m.style.display = 'none';
-  try { if (typeof syncCursorMode === 'function') syncCursorMode(); } catch (e) {}
 }
 function renderMainMenu() {
   const m = mainMenuEl();
   m.innerHTML = '';
-  const isHome = LEVEL.menuView === 'home';
-  m.classList.toggle('rg-menu-cinematic', isHome);
-  if (isHome) {
-    renderHome(m);
-    return;
-  }
-  const panel = document.createElement('div');
-  panel.className = 'rg-panel rg-modalbox rg-menu-wrap';
-  panel.appendChild(mainMenuHeader());
+  const shell = document.createElement('div');
+  shell.className = 'rg-panel rg-shell rg-menu-shell';
+
+  // ---- Barra lateral de opciones ----
+  const rail = document.createElement('aside');
+  rail.className = 'rg-rail';
+  const brand = document.createElement('div');
+  brand.className = 'rg-rail-brand';
+  brand.textContent = 'LA GRIETA';
+  rail.appendChild(brand);
+  const sub = document.createElement('div');
+  sub.className = 'rg-rail-sub';
+  sub.textContent = 'FPS · SUPERVIVENCIA';
+  rail.appendChild(sub);
+
+  const nav = document.createElement('nav');
+  nav.className = 'rg-rail-nav';
+  [
+    ['home', '▶', 'Jugar'],
+    ['mine', '🗺', 'Mis mundos'],
+    ['community', '🌐', 'Comunidad'],
+    ['create', '➕', 'Crear mundo']
+  ].forEach(function (item) {
+    const view = item[0], icon = item[1], label = item[2];
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'rg-rail-btn' + (LEVEL.menuView === view || (view === 'home' && LEVEL.menuView === 'start') || (view === 'mine' && LEVEL.menuView === 'editorial') ? ' on' : '');
+    b.innerHTML = '<span class="rg-rail-ico">' + icon + '</span><span>' + label + '</span>';
+    b.addEventListener('click', function () {
+      LEVEL.menuView = view;
+      renderMainMenu();
+      if (view === 'mine' || view === 'community') refreshMenuLevels();
+    });
+    nav.appendChild(b);
+  });
+  rail.appendChild(nav);
+
+  const foot = document.createElement('div');
+  foot.className = 'rg-rail-foot';
+  const u = currentUser();
+  const who = document.createElement('div');
+  who.className = 'rg-rail-user';
+  who.textContent = u ? ('👤 ' + (u.displayName || u.email || u.uid)) : 'Modo invitado';
+  foot.appendChild(who);
+  const authBtn = document.createElement('button');
+  authBtn.type = 'button';
+  authBtn.className = 'rg-rail-btn' + (u ? '' : ' rg-rail-primary');
+  authBtn.innerHTML = '<span class="rg-rail-ico">' + (u ? '⎋' : '🔑') + '</span><span>' + (u ? 'Cerrar sesión' : 'Ingresar') + '</span>';
+  authBtn.addEventListener('click', function () { if (u) lvLogout(); else lvLogin(); });
+  foot.appendChild(authBtn);
+  rail.appendChild(foot);
+  shell.appendChild(rail);
+
+  // ---- Contenido ----
+  const main = document.createElement('main');
+  main.className = 'rg-shell-main';
+  main.appendChild(mainMenuHeader());
   const body = document.createElement('div');
   body.id = 'mainMenuBody';
-  panel.appendChild(body);
-  m.appendChild(panel);
+  body.className = 'rg-shell-body';
+  main.appendChild(body);
+  shell.appendChild(main);
+  m.appendChild(shell);
+
   if (LEVEL.menuView === 'mine') renderMine(body);
   else if (LEVEL.menuView === 'community') renderCommunity(body);
   else if (LEVEL.menuView === 'create') renderCreateForm(body);
   else if (LEVEL.menuView === 'editorial') renderEditorView(body);
+  else renderHome(body);
 }
 function mainMenuHeader() {
   const head = document.createElement('div');
+  head.className = 'rg-shell-head';
   const title = document.createElement('h2');
   title.className = 'rg-title';
-  const labels = { home: '🌵 LA GRIETA', mine: '🗺 Mis mundos', community: '🌐 Comunidad', create: '➕ Crear mundo', editorial: '🛠 Editar mundo' };
+  const labels = { home: 'Jugar', start: 'Jugar', mine: 'Mis mundos', community: 'Comunidad', create: 'Crear mundo', editorial: 'Editar mundo' };
   title.textContent = labels[LEVEL.menuView] || 'LA GRIETA';
   head.appendChild(title);
   const who = document.createElement('div');
   who.className = 'rg-hint';
   const u = currentUser();
-  who.textContent = u ? ('Sesión: ' + (u.displayName || u.email || u.uid)) : 'Sin sesión (podés jugar el tutorial; ingresá para crear y compartir)';
+  who.textContent = u ? ('Sesión: ' + (u.displayName || u.email || u.uid)) : 'Modo invitado · podés jugar el tutorial';
   head.appendChild(who);
   return head;
 }
-function renderHome(root) {
-  const home = document.createElement('div');
-  home.className = 'rg-home';
-  home.id = 'mainMenuBody';
-
-  const brand = document.createElement('div');
-  brand.className = 'rg-home-brand';
-  const title = document.createElement('h1');
+function renderHome(body) {
+  const hero = document.createElement('div');
+  hero.className = 'rg-home-hero';
+  const kicker = document.createElement('div');
+  kicker.className = 'rg-home-kicker';
+  kicker.textContent = 'La Grieta · FPS de supervivencia';
+  hero.appendChild(kicker);
+  const title = document.createElement('div');
   title.className = 'rg-home-title';
-  title.textContent = '🌵 LA GRIETA';
-  brand.appendChild(title);
-  const who = document.createElement('div');
-  who.className = 'rg-home-session';
-  const u = currentUser();
-  who.textContent = u
-    ? ('Sesión: ' + (u.displayName || u.email || u.uid))
-    : 'Sin sesión (podés jugar el tutorial; ingresá para crear y compartir)';
-  brand.appendChild(who);
-  home.appendChild(brand);
+  title.textContent = 'SOBREVIVÍ. CONSTRUÍ. DEFENDÉ.';
+  hero.appendChild(title);
+  const desc = document.createElement('div');
+  desc.className = 'rg-home-desc';
+  desc.textContent = 'Explorá mundos abiertos, juntá recursos, crafteá herramientas y levantá tu base antes de que caiga la noche.';
+  hero.appendChild(desc);
+
+  const actions = document.createElement('div');
+  actions.className = 'rg-home-actions';
+  actions.appendChild(lvBtn('▶ Jugar La Grieta', 'rg-btn-primary', function () { playLevel('mundo-1'); }));
+  actions.appendChild(lvBtn('🎓 Tutorial', '', function () { playLevel('tutorial'); }));
+  actions.appendChild(lvBtn('🧪 Playground', '', function () { playLevel('playground'); }));
+  hero.appendChild(actions);
+  body.appendChild(hero);
+
+  const grid = document.createElement('div');
+  grid.className = 'rg-home-grid';
 
   const last = getLastLevelId();
   const lastDef = last ? resolveLevelDef(last) : null;
-  const status = document.createElement('div');
-  status.className = 'rg-home-status';
-  status.textContent = lastDef ? ('Último mundo: ' + lastDef.name) : 'Todavía no jugaste ningún mundo.';
-  home.appendChild(status);
-
+  if (lastDef) {
+    const card = document.createElement('div');
+    card.className = 'rg-home-card';
+    card.innerHTML = '<h3>Último mundo</h3><p>' + lvEsc(lastDef.name) + '</p>';
+    grid.appendChild(card);
+  }
   if (LEVEL.working) {
     const w = LEVEL.working;
-    const edit = document.createElement('div');
-    edit.className = 'rg-home-edit';
-    edit.appendChild(lvBtn('💾 Guardar «' + (w.name || 'sin nombre') + '»', 'rg-btn-primary rg-home-edit-btn', function () { saveWorkingFromPause(false); }));
-    edit.appendChild(lvBtn('✎ Seguir editando', 'rg-home-link', function () { LEVEL.menuView = 'editorial'; renderMainMenu(); }));
-    home.appendChild(edit);
-    const st = document.createElement('div');
-    st.className = 'rg-home-hint';
-    st.id = 'levelsSaveStatus';
-    if (!currentUser()) st.textContent = 'Ingresá con Google para guardar tu mundo.';
-    home.appendChild(st);
+    const card = document.createElement('div');
+    card.className = 'rg-home-card';
+    card.innerHTML = '<h3>En edición</h3><p>' + lvEsc(w.name || 'Sin nombre') + '</p>';
+    const row = document.createElement('div');
+    row.className = 'rg-menubtns';
+    row.style.justifyContent = 'flex-start';
+    row.appendChild(lvBtn('💾 Guardar', 'rg-btn-small rg-btn-primary', function () { saveWorkingFromPause(false); }));
+    row.appendChild(lvBtn('✎ Editar', 'rg-btn-small', function () { LEVEL.menuView = 'editorial'; renderMainMenu(); }));
+    card.appendChild(row);
+    grid.appendChild(card);
   }
+  const help = document.createElement('div');
+  help.className = 'rg-home-card';
+  help.innerHTML = '<h3>Progresión</h3><p>Martillo → mesa → pico → pistola. El árbol de tecnología del menú de pausa muestra el camino completo.</p>';
+  grid.appendChild(help);
+  body.appendChild(grid);
 
-  const nav = document.createElement('nav');
-  nav.className = 'rg-home-nav';
-  nav.setAttribute('aria-label', 'Menú principal');
-
-  if (lastDef) {
-    nav.appendChild(lvBtn('⏵ Continuar', 'rg-btn-primary rg-home-cta', function () { playLevel(lastDef.id); }));
-    nav.appendChild(lvBtn('Tutorial', 'rg-home-link', function () { playLevel('tutorial'); }));
-    nav.appendChild(lvBtn('▶ Playground', 'rg-home-link', function () { playLevel('playground'); }));
-  } else {
-    nav.appendChild(lvBtn('Tutorial', 'rg-btn-primary rg-home-cta', function () { playLevel('tutorial'); }));
-    nav.appendChild(lvBtn('▶ Playground', 'rg-home-link', function () { playLevel('playground'); }));
+  if (!tutorialDone()) {
+    const note = document.createElement('div');
+    note.className = 'rg-hint';
+    note.style.marginTop = '12px';
+    note.textContent = 'Tip: el tutorial te enseña a juntar recursos, craftear y levantar tu primera base.';
+    body.appendChild(note);
   }
-
-  const sep = document.createElement('div');
-  sep.className = 'rg-home-sep';
-  sep.setAttribute('aria-hidden', 'true');
-  nav.appendChild(sep);
-
-  nav.appendChild(lvBtn('🗺 Mis mundos', 'rg-home-link', function () { LEVEL.menuView = 'mine'; renderMainMenu(); refreshMenuLevels(); }));
-  nav.appendChild(lvBtn('🌐 Comunidad', 'rg-home-link', function () { LEVEL.menuView = 'community'; renderMainMenu(); refreshMenuLevels(); }));
-  if (tutorialDone()) {
-    nav.appendChild(lvBtn('➕ Crear mundo', 'rg-home-link', function () { LEVEL.menuView = 'create'; renderMainMenu(); }));
-  } else {
-    const locked = lvBtn('🔒 Crear mundo (terminá el tutorial)', 'rg-home-link rg-home-locked', function () {});
-    locked.disabled = true;
-    nav.appendChild(locked);
-  }
-  home.appendChild(nav);
-
-  const foot = document.createElement('div');
-  foot.className = 'rg-home-foot';
-  if (currentUser()) {
-    foot.appendChild(lvBtn('Cerrar sesión (' + (currentUser().displayName || 'cuenta') + ')', 'rg-btn-small rg-home-foot-btn', function () { lvLogout(); }));
-  } else {
-    foot.appendChild(lvBtn('Ingresar con Google', 'rg-btn-small rg-home-foot-btn', function () { lvLogin(); }));
-  }
-  foot.appendChild(lvBtn('▶ Reanudar partida', 'rg-btn-small rg-home-foot-btn', function () {
-    hideMainMenu();
-    isGamePaused = false;
-    try { lockPointer(); } catch (e) {}
-  }));
-  home.appendChild(foot);
-
-  root.appendChild(home);
 }
 function renderMine(body) {
   if (!currentUser()) {
@@ -753,14 +850,12 @@ function renderMine(body) {
     h.textContent = 'Ingresá con Google para ver y guardar tus mundos.';
     body.appendChild(h);
     body.appendChild(lvBtn('Ingresar con Google', 'rg-btn-primary', function () { lvLogin(); }));
-    body.appendChild(lvBtn('Volver', '', function () { LEVEL.menuView = 'home'; renderMainMenu(); }));
     return;
   }
   const tools = document.createElement('div');
   tools.className = 'rg-menubtns';
   tools.appendChild(lvBtn('➕ Crear mundo', 'rg-btn-primary', function () { LEVEL.menuView = 'create'; renderMainMenu(); }));
   tools.appendChild(lvBtn('🔄 Actualizar', 'rg-btn-small', function () { refreshMenuLevels(true); }));
-  tools.appendChild(lvBtn('Volver', 'rg-btn-small', function () { LEVEL.menuView = 'home'; renderMainMenu(); }));
   body.appendChild(tools);
 
   const list = document.createElement('div');
@@ -795,10 +890,17 @@ function renderCommunity(body) {
     body.appendChild(h);
     return;
   }
+  if (!currentUser()) {
+    const h = document.createElement('div');
+    h.className = 'rg-hint';
+    h.textContent = 'Ingresá con Google para ver y jugar mundos de la Comunidad.';
+    body.appendChild(h);
+    body.appendChild(lvBtn('Ingresar con Google', 'rg-btn-primary', function () { lvLogin(); }));
+    return;
+  }
   const tools = document.createElement('div');
   tools.className = 'rg-menubtns';
   tools.appendChild(lvBtn('🔄 Actualizar', 'rg-btn-small', function () { refreshMenuLevels(true); }));
-  tools.appendChild(lvBtn('Volver', 'rg-btn-small', function () { LEVEL.menuView = 'home'; renderMainMenu(); }));
   body.appendChild(tools);
   const list = document.createElement('div');
   list.id = 'sharedList';
@@ -818,8 +920,10 @@ function deleteWorld(def) {
     // Si nunca se publicó, el doc no existe y la regla puede negarlo: lo ignoramos.
     fpsSharedLevelsCol().doc(def.id).delete().catch(function () {})
   ]).then(function () {
-    // Limpiar presencia/chat del mundo en Realtime Database (evita datos acumulados)
-    try { if (window.firebase && firebase.database) firebase.database().ref('levels/' + def.id).remove(); } catch (e) {}
+    // Only the owner's own player node can be removed (RTDB no longer allows wiping the level tree).
+    try {
+      if (typeof netPlayerRef !== 'undefined' && netPlayerRef && LEVEL.current === def.id) netPlayerRef.remove();
+    } catch (e) {}
     LEVEL.userLevels = LEVEL.userLevels.filter(function (l) { return l.id !== def.id; });
     LEVEL.sharedLevels = LEVEL.sharedLevels.filter(function (l) { return l.id !== def.id; });
     delete LEVEL.defs[def.id];
@@ -980,14 +1084,12 @@ function renderCreateForm(body) {
     const doors = collectDoorTargets(doorSelects);
     createNewWorldFromForm(nameIn.value.trim() || 'Mi mundo', parseInt(sizeSel.value, 10) || 100, doors, resetChk.checked, envSel.value || null, resourceSel.value || 'normal');
   }));
-  row.appendChild(lvBtn('Volver', '', function () { LEVEL.menuView = 'home'; renderMainMenu(); }));
   body.appendChild(row);
 }
 function renderEditorView(body) {
   const def = LEVEL.working;
   if (!def) {
     body.innerHTML = '<div class="rg-hint">No hay nivel en edición.</div>';
-    body.appendChild(lvBtn('Volver', '', function () { LEVEL.menuView = 'mine'; renderMainMenu(); }));
     return;
   }
   const hint = document.createElement('div');
@@ -1089,7 +1191,6 @@ function renderEditorView(body) {
         : 'Recursos automáticos quitados');
     } catch (e) {}
   }));
-  row.appendChild(lvBtn('Volver', '', function () { LEVEL.menuView = 'mine'; renderMainMenu(); }));
   body.appendChild(row);
 
   const note = document.createElement('div');
@@ -1166,8 +1267,8 @@ async function refreshMenuLevels(force) {
   LEVEL.menuBusy = true;
   if (LEVEL.menuView === 'mine' || LEVEL.menuView === 'community') renderMainMenu();
   try {
-    if (fbReady()) {
-      if (currentUser()) LEVEL.userLevels = await fsListUserLevels();
+    if (fbReady() && currentUser()) {
+      LEVEL.userLevels = await fsListUserLevels();
       if (LEVEL.menuView === 'community' || force) LEVEL.sharedLevels = await fsListSharedLevels();
     }
   } catch (e) { console.warn('No pude listar niveles', e); }
@@ -1245,6 +1346,7 @@ function saveWorkingFromPause(publish) {
 //  Init
 // ------------------------------------------------------------
 function initLevels() {
+  _installLevelSnapshotHooks();
   registerLevel({
     id: 'playground', name: 'Playground', kind: 'playground', size: 100,
     spawn: { x: 0, z: 0, rot: Math.PI }, resetInventory: true, env: 'day',
