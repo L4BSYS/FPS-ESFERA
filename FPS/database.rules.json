@@ -18,7 +18,7 @@
           ".read": "auth != null",
           ".write": "auth != null && (!data.exists() ? newData.child('host').val() == auth.uid : (data.child('host').val() == auth.uid || (newData.child('host').val() == auth.uid && root.child('rooms/' + $roomId + '/playersInfo/' + auth.uid).exists() && data.child('hostSeen').val() < now - 15000 && newData.child('hostEpoch').val() > data.child('hostEpoch').val())))",
           ".validate": "newData.hasChildren(['v','host','hostEpoch','hostSeen','levelId','seed','mode','status','maxPlayers','playerCount','createdAt','updatedAt']) && (newData.child('host').val() == auth.uid || (data.exists() && data.child('host').val() == auth.uid))",
-          "v": { ".validate": "newData.isNumber() && newData.val() == 1" },
+          "v": { ".validate": "newData.isNumber() && (newData.val() == 1 || newData.val() == 2)" },
           "host": { ".validate": "newData.isString() && newData.val().length <= 128" },
           "hostEpoch": { ".validate": "newData.isNumber() && newData.val() >= 1" },
           "hostSeen": { ".validate": "newData.isNumber()" },
@@ -94,28 +94,58 @@
             "$other": { ".validate": false }
           }
         },
+        "mobs": {
+          ".read": "auth != null && root.child('rooms/' + $roomId + '/playersInfo/' + auth.uid).exists()",
+          ".write": "auth != null && auth.uid == root.child('rooms/' + $roomId + '/meta/host').val()",
+          "$eid": {
+            ".validate": "newData.hasChildren(['0','1','2','3','4'])",
+            "0": { ".validate": "newData.isNumber() && newData.val() >= -100000 && newData.val() <= 100000" },
+            "1": { ".validate": "newData.isNumber() && newData.val() >= -100000 && newData.val() <= 100000" },
+            "2": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 15" },
+            "3": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000" },
+            "4": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 16" },
+            "5": { ".validate": "newData.isNumber() && newData.val() >= -10000 && newData.val() <= 100000" },
+            "$other": { ".validate": false }
+          }
+        },
         "actions": {
           ".read": "auth != null && auth.uid == root.child('rooms/' + $roomId + '/meta/host').val()",
           ".write": "auth != null && auth.uid == root.child('rooms/' + $roomId + '/meta/host').val()",
           "$uid": {
             "$seq": {
-              ".write": "auth != null && auth.uid == $uid && $seq.matches(/^[0-7]$/) && root.child('rooms/' + $roomId + '/playersInfo/' + $uid).exists()",
-              ".validate": "((newData.child('k').val() == 'revive' && newData.hasChildren(['k','target','at'])) || (newData.child('k').val() == 'build' && newData.hasChildren(['k','d','at']) && newData.child('d').hasChildren(['x','y','z','rm']) && (newData.child('d/rm').val() == true || (newData.child('d/t').exists() && newData.child('d/t').isString()))) || (newData.child('k').val() == 'bench' && newData.hasChildren(['k','d','at']) && newData.child('d').hasChildren(['x','y','z','rm'])))",
-              "k": { ".validate": "newData.isString() && (newData.val() == 'revive' || newData.val() == 'build' || newData.val() == 'bench')" },
+              ".write": "auth != null && auth.uid == $uid && $seq.matches(/^[0-9]$|^1[01]$/) && root.child('rooms/' + $roomId + '/playersInfo/' + $uid).exists()",
+              ".validate": "newData.hasChildren(['k','at']) && newData.child('at').isNumber() && ((newData.child('k').val() == 'revive' && newData.hasChildren(['k','target','at']) && newData.child('target').isString() && newData.child('target').val().length <= 128) || (newData.child('k').val() == 'build' && newData.hasChildren(['k','d','at']) && newData.child('d').hasChildren(['x','y','z','rm']) && (newData.child('d/rm').val() == true || (newData.child('d/t').exists() && newData.child('d/t').isString() && newData.child('d/t').val().matches(/^(wood|stone|metal)$/)))) || (newData.child('k').val() == 'bench' && newData.hasChildren(['k','d','at']) && newData.child('d').hasChildren(['x','y','z','rm'])) || (newData.child('k').val() == 'shoot' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['x','y','z','dx','dy','dz','pitch','seq'])) || (newData.child('k').val() == 'atk' && newData.hasChildren(['k','d','at','s']) && (newData.child('d/eid').exists() || newData.child('d/targetUid').exists())) || (newData.child('k').val() == 'harvest' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['nid','tool']) && newData.child('d/nid').isString() && newData.child('d/nid').val().length <= 64 && newData.child('d/tool').val().matches(/^(axe|pickaxe)$/)) || (newData.child('k').val() == 'loot' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['iid']) && newData.child('d/iid').isString() && newData.child('d/iid').val().length <= 64) || (newData.child('k').val() == 'drop' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['id','q','x','y','z']) && newData.child('d/q').isNumber() && newData.child('d/q').val() >= 1 && newData.child('d/q').val() <= 999) || (newData.child('k').val() == 'chest' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['cid','op']) && (newData.child('d/op').val() == 'take' || newData.child('d/op').val() == 'put')) || (newData.child('k').val() == 'door' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['did','open']) && newData.child('d/open').isBoolean()) || (newData.child('k').val() == 'struct' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['t','x','y','z','rm']) && newData.child('d/t').val().matches(/^(stairs|door)$/)) || (newData.child('k').val() == 'craft' && newData.hasChildren(['k','d','at','s']) && newData.child('d').hasChildren(['op','x','y','z']) && newData.child('d/op').val().matches(/^(ammo|consume)$/)))",
+              "k": { ".validate": "newData.isString() && (newData.val() == 'revive' || newData.val() == 'build' || newData.val() == 'bench' || newData.val() == 'shoot' || newData.val() == 'atk' || newData.val() == 'harvest' || newData.val() == 'loot' || newData.val() == 'drop' || newData.val() == 'chest' || newData.val() == 'door' || newData.val() == 'struct' || newData.val() == 'craft')" },
               "at": { ".validate": "newData.isNumber()" },
               "s": { ".validate": "newData.isNumber() && newData.val() >= 0" },
               "by": { ".validate": "newData.isString() && newData.val().length <= 128" },
               "target": { ".validate": "newData.isString() && newData.val().length <= 128" },
               "d": {
-                ".validate": "newData.hasChildren(['x','y','z','rm'])",
-                "x": { ".validate": "newData.isNumber() && newData.val() >= -10000 && newData.val() <= 10000" },
-                "y": { ".validate": "newData.isNumber() && newData.val() >= -1000 && newData.val() <= 1000" },
-                "z": { ".validate": "newData.isNumber() && newData.val() >= -10000 && newData.val() <= 10000" },
+                "x": { ".validate": "newData.isNumber() && newData.val() >= -100000 && newData.val() <= 100000" },
+                "y": { ".validate": "newData.isNumber() && newData.val() >= -100000 && newData.val() <= 100000" },
+                "z": { ".validate": "newData.isNumber() && newData.val() >= -100000 && newData.val() <= 100000" },
                 "rm": { ".validate": "newData.isBoolean()" },
                 "hp": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000" },
-                "t": { ".validate": "newData.isString() && newData.val().matches(/^(wood|stone|metal)$/)" },
+                "t": { ".validate": "newData.isString() && newData.val().length <= 32" },
                 "r": { ".validate": "newData.isNumber() && newData.val() >= -100 && newData.val() <= 100" },
-                "$other": { ".validate": false }
+                "dx": { ".validate": "newData.isNumber() && newData.val() >= -2000 && newData.val() <= 2000" },
+                "dy": { ".validate": "newData.isNumber() && newData.val() >= -2000 && newData.val() <= 2000" },
+                "dz": { ".validate": "newData.isNumber() && newData.val() >= -2000 && newData.val() <= 2000" },
+                "pitch": { ".validate": "newData.isNumber() && newData.val() >= -200 && newData.val() <= 200" },
+                "seq": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+                "nid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "iid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "cid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "did": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "eid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "targetUid": { ".validate": "newData.isString() && newData.val().length <= 128" },
+                "tool": { ".validate": "newData.isString() && newData.val().matches(/^(axe|pickaxe|hands|hammer)$/)" },
+                "op": { ".validate": "newData.val() == 'take' || newData.val() == 'put' || newData.val() == 'ammo' || newData.val() == 'consume'" },
+                "open": { ".validate": "newData.isBoolean()" },
+                "id": { ".validate": "newData.isString() && newData.val().length <= 64" },
+                "q": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 999" },
+                "slot": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 64" },
+                "melee": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1" }
               },
               "$other": { ".validate": false }
             }
@@ -126,8 +156,8 @@
           ".write": "auth != null && auth.uid == root.child('rooms/' + $roomId + '/meta/host').val()",
           ".indexOn": "at",
           "$eventId": {
-            ".validate": "newData.hasChildren(['k','at']) && ((newData.child('k').val() == 'wave' && newData.hasChildren(['k','w','at'])) || (newData.child('k').val() == 'base' && newData.hasChildren(['k','hp','at'])) || (newData.child('k').val() == 'revive' && newData.hasChildren(['k','target','at'])) || (newData.child('k').val() == 'bench' && newData.hasChildren(['k','x','y','z','rm','at'])))",
-            "k": { ".validate": "newData.isString() && (newData.val() == 'wave' || newData.val() == 'base' || newData.val() == 'revive' || newData.val() == 'bench')" },
+            ".validate": "newData.hasChildren(['k','at']) && ((newData.child('k').val() == 'wave' && newData.hasChildren(['k','w','at'])) || (newData.child('k').val() == 'base' && newData.hasChildren(['k','hp','at'])) || (newData.child('k').val() == 'revive' && newData.hasChildren(['k','target','at'])) || (newData.child('k').val() == 'bench' && newData.hasChildren(['k','x','y','z','rm','at'])) || (newData.child('k').val() == 'hurt' && newData.hasChildren(['k','target','hp','at']) && newData.child('target').isString() && newData.child('hp').isNumber()) || (newData.child('k').val() == 'loot' && newData.hasChildren(['k','iid','at'])) || (newData.child('k').val() == 'node' && newData.hasChildren(['k','nid','at'])) || (newData.child('k').val() == 'fx' && newData.hasChildren(['k','fk','x','y','z','at'])) || (newData.child('k').val() == 'nack' && newData.hasChildren(['k','s','at','target'])) || (newData.child('k').val() == 'chest' && newData.hasChildren(['k','cid','at'])) || (newData.child('k').val() == 'door' && newData.hasChildren(['k','did','open','at'])) || (newData.child('k').val() == 'struct' && newData.hasChildren(['k','t','x','y','z','rm','at'])) || (newData.child('k').val() == 'mobDeath' && newData.hasChildren(['k','eid','at'])) || (newData.child('k').val() == 'npcBatch' && newData.hasChildren(['k','t','p','at']) && newData.child('p').isString() && newData.child('p').val().length <= 900))",
+            "k": { ".validate": "newData.isString() && (newData.val() == 'wave' || newData.val() == 'base' || newData.val() == 'revive' || newData.val() == 'bench' || newData.val() == 'hurt' || newData.val() == 'loot' || newData.val() == 'node' || newData.val() == 'fx' || newData.val() == 'nack' || newData.val() == 'chest' || newData.val() == 'door' || newData.val() == 'struct' || newData.val() == 'mobDeath' || newData.val() == 'npcBatch')" },
             "at": { ".validate": "newData.isNumber()" },
             "by": { ".validate": "newData.isString() && newData.val().length <= 128" },
             "w": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 10000" },
@@ -138,10 +168,34 @@
             "rm": { ".validate": "newData.isBoolean()" },
             "owner": { ".validate": "newData.isString() && newData.val().length <= 128" },
             "target": { ".validate": "newData.isString() && newData.val().length <= 128" },
+            "src": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "down": { ".validate": "newData.isBoolean()" },
+            "nid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "iid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "cid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "did": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "eid": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "id": { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "fk": { ".validate": "newData.isString() && newData.val().length <= 32" },
+            "s": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+            "reason": { ".validate": "newData.isString() && newData.val().length <= 32" },
+            "amount": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 999" },
+            "q": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 999" },
+            "slot": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 64" },
+            "op": { ".validate": "newData.val() == 'take' || newData.val() == 'put'" },
+            "open": { ".validate": "newData.isBoolean()" },
+            "t": { ".validate": "newData.isString() && newData.val().length <= 32" },
+            "r": { ".validate": "newData.isNumber() && newData.val() >= -100 && newData.val() <= 100" },
+            "p": { ".validate": "newData.isString() && newData.val().length <= 900" },
             "bases": {
               "$owner": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100000" }
             },
-            "$other": { ".validate": false }
+            "gained": {
+              ".validate": "newData.hasChildren(['res','q'])",
+              "res": { ".validate": "newData.isString() && newData.val().matches(/^(wood|stone|metal)$/)" },
+              "q": { ".validate": "newData.isNumber() && newData.val() >= 1 && newData.val() <= 20" },
+              "$other": { ".validate": false }
+            }
           }
         },
         "world": {

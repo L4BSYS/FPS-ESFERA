@@ -257,7 +257,11 @@
       resolveCollisions(collidables, moveDelta) {
         const originalPos = this.container.position.clone();
         const targetPos   = originalPos.clone().add(moveDelta);
-        const objects     = [...collidables, ...placedBlocks];
+        // PR3: remote player capsules (pose-interpolated) — soft P–P collision, 0 extra bytes.
+        const remotesList = (typeof remoteColliders !== 'undefined' && remoteColliders)
+          ? remoteColliders
+          : [];
+        const objects     = [...collidables, ...placedBlocks, ...remotesList];
 
         // Temps for collision math
         const penetration = new THREE.Vector3();
@@ -452,6 +456,15 @@
           // Return precomputed box for static objects
           if (object.isStatic && object.userData.worldBoundingBox?.isEmpty() === false) {
               return object.userData.worldBoundingBox;
+          }
+
+          // Remote coop avatars: capsule ≈ r 0.4 (NET_REMOTE_COLLIDER_R)
+          if (object.userData && object.userData.isRemotePlayer && object.geometry) {
+              object.updateMatrixWorld(true);
+              const box = this._tempBox.setFromObject(object, true);
+              // Slight shrink to reduce jitter from 3–4 Hz pose interpolation
+              try { box.expandByScalar(-0.05); } catch (e) {}
+              return box;
           }
 
           // Calculate dynamic objects on the fly
@@ -1161,21 +1174,63 @@
           const origin = this.camera.getWorldPosition(new THREE.Vector3());
           const dir = this.camera.getWorldDirection(new THREE.Vector3());
           const ray = new THREE.Raycaster(origin, dir, 0, rng);
+          const guestCombat = (typeof onlineIsGuestCombat === 'function' && onlineIsGuestCombat());
           const targets = [];
           try { npcs.forEach(n => { if (n && n.health > 0 && n.mesh) targets.push(n.mesh); }); } catch (e) {}
+          // PR5b FF: host can melee remotes; guest sends atk intent.
+          try {
+              if (typeof ONLINE_CONFIG !== 'undefined' && ONLINE_CONFIG.friendlyFire &&
+                  typeof remotes !== 'undefined' && remotes &&
+                  typeof onlineCombatSync === 'function' && onlineCombatSync()) {
+                  for (const uid in remotes) {
+                      if (remotes[uid] && remotes[uid].mesh) targets.push(remotes[uid].mesh);
+                  }
+              }
+          } catch (e) {}
           const hits = targets.length ? ray.intersectObjects(targets, true) : [];
           let hitNpc = false;
           for (let i = 0; i < hits.length; i++) {
-              let p = hits[i].object, npc = null;
+              let p = hits[i].object, npc = null, remoteUid = null;
               while (p) {
                   if (p.userData && p.userData.parentCharacter instanceof NPC) {
                       npc = p.userData.parentCharacter;
                       break;
                   }
+                  if (p.userData && p.userData.isRemotePlayer && p.userData.remoteUid) {
+                      remoteUid = p.userData.remoteUid;
+                      break;
+                  }
                   p = p.parent;
               }
               if (npc && npc.health > 0) {
-                  try { npc.takeDamage(dmg); } catch (e) {}
+                  if (guestCombat) {
+                      try {
+                          if (typeof onlineSendAtkIntent === 'function') {
+                              onlineSendAtkIntent({ eid: npc.eid || null, x: origin.x, y: origin.y, z: origin.z });
+                          }
+                      } catch (e) {}
+                  } else {
+                      try { npc.takeDamage(dmg); } catch (e) {}
+                  }
+                  try { createHarvestEffect(hits[i].point); } catch (e) {}
+                  try { playSound('hit'); } catch (e) {}
+                  hitNpc = true;
+                  break;
+              }
+              if (remoteUid) {
+                  if (guestCombat) {
+                      try {
+                          if (typeof onlineSendAtkIntent === 'function') {
+                              onlineSendAtkIntent({ targetUid: remoteUid, x: origin.x, y: origin.y, z: origin.z });
+                          }
+                      } catch (e) {}
+                  } else if (typeof onlineHostDamagePlayer === 'function' &&
+                             typeof ONLINE !== 'undefined' && ONLINE.isHost) {
+                      try {
+                          const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                          onlineHostDamagePlayer(remoteUid, dmg, me ? ('player:' + me.uid) : 'env');
+                      } catch (e) {}
+                  }
                   try { createHarvestEffect(hits[i].point); } catch (e) {}
                   try { playSound('hit'); } catch (e) {}
                   hitNpc = true;
@@ -1432,6 +1487,7 @@
 
       tryOpenDoor(door) {
           if (!door.userData.isDoor) return;
+          try { if (typeof ensureDoorStableId === 'function') ensureDoorStableId(door); } catch (e) {}
 
           if (door.userData.locked) {
               // Check if player has the required key in keychain
@@ -1462,6 +1518,7 @@
                   console.log("This door is locked!");
                   playSound('door_locked');
                   showMessage("Necesitás la llave dorada para abrir esta puerta");
+                  return;
               }
           } else {
               // Toggle door open/close
@@ -1480,6 +1537,22 @@
               }
           }
 
+          // PR7: sync door open state (portals still blocked in goThroughDoor).
+          try {
+              if (typeof onlineChestsSync === 'function' && onlineChestsSync()) {
+                  const did = door.did || (door.userData && door.userData.did);
+                  if (did) {
+                      if (typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                          typeof onlinePublishDoorEvent === 'function') {
+                          const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                          onlinePublishDoorEvent(did, !!door.userData.open, me ? me.uid : null);
+                      } else if (typeof onlineSendDoorIntent === 'function') {
+                          onlineSendDoorIntent(did, !!door.userData.open);
+                      }
+                  }
+              }
+          } catch (e) {}
+
           // Puerta-portal: al abrirla, viajamos al nivel destino
           if (door.userData.open && door.userData.target && typeof goThroughDoor === 'function') {
               goThroughDoor(door);
@@ -1493,6 +1566,19 @@
               return;
           }
 
+          // PR6 guest: intent loot; bag grant + world rm llegan por event.
+          try {
+              if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                  typeof ONLINE !== 'undefined' && !ONLINE.isHost) {
+                  try { if (typeof ensureItemStableId === 'function') ensureItemStableId(item); } catch (e) {}
+                  const iid = item.iid || (item.userData && item.userData.iid);
+                  if (!iid) return;
+                  try { playSound('pickup'); } catch (e) {}
+                  if (typeof onlineSendLootIntent === 'function') onlineSendLootIntent(iid);
+                  return;
+              }
+          } catch (e) {}
+
           // Handle keys separately - add to keychain
           if (def.type === 'key') {
               if (this.inventory.addKey(def.keyId || def.id, def.name)) {
@@ -1500,6 +1586,14 @@
                   this.scene.remove(item);
                   collidableObjects.splice(collidableObjects.indexOf(item), 1);
                   playSound('key-pickup');
+                  try {
+                      if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                          typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                          typeof onlineHostPublishLootRemove === 'function') {
+                          const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                          onlineHostPublishLootRemove(item, me ? me.uid : null);
+                      }
+                  } catch (e) {}
                   // Solo la llave de salida del tótem NE (no la del vestíbulo).
                   if (item.userData && item.userData.tutorialExitKey &&
                       typeof directorOnTutorialKeyPicked === 'function') {
@@ -1519,6 +1613,14 @@
                   collidableObjects.splice(collidableObjects.indexOf(item), 1);
                   playSound('ammo-pickup');
                   this.inventory.updateAmmoUI();
+                  try {
+                      if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                          typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                          typeof onlineHostPublishLootRemove === 'function') {
+                          const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                          onlineHostPublishLootRemove(item, me ? me.uid : null);
+                      }
+                  } catch (e) {}
                   return;
               }
               return;
@@ -1543,6 +1645,14 @@
               playSound('pickup');
               try { updateResourceHUD(); } catch (e) {}
               try { showMessage('+' + added + ' ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[key]) || key)); } catch (e) {}
+              try {
+                  if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                      typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                      typeof onlineHostPublishLootRemove === 'function') {
+                      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                      onlineHostPublishLootRemove(item, me ? me.uid : null);
+                  }
+              } catch (e) {}
               return;
           }
 
@@ -1562,6 +1672,14 @@
               this.scene.remove(item);
               collidableObjects.splice(collidableObjects.indexOf(item), 1);
               playSound('pickup');
+              try {
+                  if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                      typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                      typeof onlineHostPublishLootRemove === 'function') {
+                      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                      onlineHostPublishLootRemove(item, me ? me.uid : null);
+                  }
+              } catch (e) {}
 
               // Auto-assign to first empty quick slot if weapon/tool
               if (inventoryItem.type === 'weapon' || inventoryItem.type === 'tool') {
@@ -1601,32 +1719,84 @@
 
           console.log("Dropping:", this.heldItem.name);
           const itemMesh = this.heldItem.mesh;
+          const dropDirection = this.camera.getWorldDirection(new THREE.Vector3());
+          const dropPosition = this.container.position.clone()
+              .add(new THREE.Vector3(0, this.config.height * 0.2, 0)) // Drop from chest height
+              .add(dropDirection.clone().multiplyScalar(1.0)); // Drop 1 unit in front
+
+          // PR6 guest: clear hands locally; host spawns shared world item via drop intent.
+          try {
+              if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                  typeof ONLINE !== 'undefined' && !ONLINE.isHost) {
+                  const id = (itemMesh.userData && itemMesh.userData.itemKey) ||
+                      (this.heldItem.id) || itemMesh.name || 'food';
+                  this.camera.remove(itemMesh);
+                  this.heldItem = null;
+                  this.updateToolModelVisibility();
+                  this.updateToolHUD();
+                  try {
+                      if (typeof onlineSendDropIntent === 'function') {
+                          onlineSendDropIntent({
+                              id: id,
+                              x: dropPosition.x,
+                              y: dropPosition.y,
+                              z: dropPosition.z,
+                              amount: 1
+                          });
+                      }
+                  } catch (e) {}
+                  return;
+              }
+          } catch (e) {}
 
           // Remove from camera group and add back to scene
           this.camera.remove(itemMesh);
           this.scene.add(itemMesh);
 
-          // Position in front of player
-          const dropDirection = this.camera.getWorldDirection(new THREE.Vector3());
-          const dropPosition = this.container.position.clone()
-              .add(new THREE.Vector3(0, this.config.height * 0.2, 0)) // Drop from chest height
-              .add(dropDirection.multiplyScalar(1.0)); // Drop 1 unit in front
-
           itemMesh.position.copy(dropPosition);
-          // Optional: Reset scale if changed on pickup
-          // itemMesh.scale.setScalar(1.0);
-          // Optional: Apply a small velocity/spin
           itemMesh.userData.velocity = dropDirection.clone().multiplyScalar(2); // Small forward push
           itemMesh.userData.velocity.y += 1.0; // Small upward push
 
           // Add back to collidables and mark as not collected
           itemMesh.userData.collected = false;
           collidableObjects.push(itemMesh);
+          try {
+              if (typeof worldItems !== 'undefined' && worldItems.indexOf(itemMesh) === -1) {
+                  worldItems.push(itemMesh);
+              }
+          } catch (e) {}
+          try { if (typeof ensureItemStableId === 'function') ensureItemStableId(itemMesh); } catch (e) {}
 
           this.heldItem = null; // Clear held item reference
 
           this.updateToolModelVisibility(); // Show gun/hammer if appropriate
           this.updateToolHUD();
+
+          // PR6 host: publish spawn so guests see the dropped item.
+          try {
+              if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                  typeof ONLINE !== 'undefined' && ONLINE.isHost) {
+                  ONLINE.dropSeq = (ONLINE.dropSeq || 0) + 1;
+                  const key = (itemMesh.userData && itemMesh.userData.itemKey) || itemMesh.name || 'item';
+                  const base = itemMesh.iid || key;
+                  itemMesh.iid = String(base) + '_d' + ONLINE.dropSeq;
+                  try { itemMesh.userData.iid = itemMesh.iid; } catch (e) {}
+                  if (typeof onlinePublishEvent === 'function') {
+                      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                      onlinePublishEvent({
+                          k: 'loot',
+                          iid: itemMesh.iid,
+                          id: key,
+                          x: Math.round(itemMesh.position.x * 100) / 100,
+                          y: Math.round(itemMesh.position.y * 100) / 100,
+                          z: Math.round(itemMesh.position.z * 100) / 100,
+                          amount: 1,
+                          rm: false,
+                          by: me ? me.uid : null
+                      });
+                  }
+              }
+          } catch (e) {}
       }
 
       // Use tool for resouces and personal protection
@@ -1678,6 +1848,22 @@
                   return;
               }
 
+              // PR6 guest: swing FX + harvest intent; grant vía event node.gained.
+              const lootSyncGuest = (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                  typeof ONLINE !== 'undefined' && !ONLINE.isHost);
+              if (lootSyncGuest) {
+                  try { if (typeof ensureNodeStableId === 'function') ensureNodeStableId(node); } catch (e) {}
+                  const nid = node.nid || (node.userData && node.userData.nid);
+                  createHarvestEffect(hit.point);
+                  playSoundAt('harvest', hit.point, { surface: node.type, gain: 0.9, maxDist: 30 });
+                  try {
+                      if (typeof onlineSendHarvestIntent === 'function') {
+                          onlineSendHarvestIntent(nid, this.currentTool);
+                      }
+                  } catch (e) {}
+                  break;
+              }
+
               const efficiency = this.inventory.equippedItem?.efficiency || 1;
               const gained = node.harvest(efficiency);
 
@@ -1694,6 +1880,15 @@
                   updateResourceHUD();
                   createHarvestEffect(hit.point);
                   playSoundAt('harvest', hit.point, { surface: node.type, gain: 0.9, maxDist: 30 });
+                  // PR6 host: mirror node HP/gained to guests.
+                  try {
+                      if (typeof onlineLootSync === 'function' && onlineLootSync() &&
+                          typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                          typeof onlineHostPublishNodeHit === 'function') {
+                          const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                          onlineHostPublishNodeHit(node, node.type, amount, me ? me.uid : null);
+                      }
+                  } catch (e) {}
                   if (pollinated) {
                       try { showMessage('¡Polinizado! +1 ' + ((typeof RESOURCE_ES !== 'undefined' && RESOURCE_ES[node.type]) || node.type)); } catch (e) {}
                   }
@@ -2175,8 +2370,18 @@
       }
 
       attack(target) {
+          if (!target || !target.container) return;
           const distanceToTarget = this.container.position.distanceTo(target.container.position);
           if (this.attackMode === 'melee' && distanceToTarget <= this.attackRange * 1.1) {
+              // PR5b: host NPC melee vs remote player proxy → hurt event
+              if (target.isRemoteProxy && target.remoteUid) {
+                  try {
+                      if (typeof onlineHostDamagePlayer === 'function') {
+                          onlineHostDamagePlayer(target.remoteUid, this.attackDamage || 8, 'npc:' + (this.eid || 'x'));
+                      }
+                  } catch (e) {}
+                  return;
+              }
               if (target instanceof Player) {
                   target.health -= this.attackDamage;
                   target.applyDamageEffect();
@@ -2228,8 +2433,36 @@
                   };
               }
           }
-          // Persigue al jugador, pero si tu base está mucho más cerca, va por la base
-          const toPlayer = this.container.position.distanceTo(player.container.position);
+          // Persigue al jugador (u otro remoto en host coop), pero si tu base está mucho más cerca, va por la base
+          let focusPlayer = player;
+          let toPlayer = player && player.container
+              ? this.container.position.distanceTo(player.container.position)
+              : Infinity;
+          try {
+              if (typeof onlineCombatSync === 'function' && onlineCombatSync() &&
+                  typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                  typeof remotes !== 'undefined' && remotes) {
+                  for (const uid in remotes) {
+                      const r = remotes[uid];
+                      if (!r || r.mesh == null) continue;
+                      const d = Math.hypot(
+                          r.tx - this.container.position.x,
+                          r.tz - this.container.position.z
+                      );
+                      if (d < toPlayer) {
+                          toPlayer = d;
+                          focusPlayer = {
+                              isRemoteProxy: true,
+                              remoteUid: uid,
+                              container: { position: new THREE.Vector3(r.tx, r.ty || 0, r.tz) },
+                              height: 1.7,
+                              mesh: r.mesh,
+                              collider: r.mesh
+                          };
+                      }
+                  }
+              }
+          } catch (e) {}
           let best = null, bestD = Infinity;
           try {
               for (const wb of workbenches) {
@@ -2244,7 +2477,8 @@
                   target: { container: { position: best.pos }, height: 1.4, collider: best.mesh, mesh: best.mesh }
               };
           }
-          return { kind: 'player', ref: player, pos: player.container.position, target: player };
+          const pos = focusPlayer && focusPlayer.container ? focusPlayer.container.position : player.container.position;
+          return { kind: 'player', ref: focusPlayer, pos: pos, target: focusPlayer };
       }
       attackFocus(focus) {
           if (focus.kind === 'base') {
@@ -2442,6 +2676,13 @@
           }
           this.state = 'dead';
           this.velocity.set(0, 0, 0);
+
+          // PR6: host spawns shared death loot (guests see via event loot).
+          try {
+              if (!this.isPuppet && typeof onlineHostDeathLoot === 'function') {
+                  onlineHostDeathLoot(this);
+              }
+          } catch (e) {}
           
           // Create death effect
           this.createDeathEffect(this.mesh);

@@ -192,6 +192,11 @@
       npc.updateColliderBox();
 
       npcs.push(npc);
+      // PR5a: stable eid for host mobs/{eid} publish/adopt (guest AI keeps its own eids).
+      try {
+        if (typeof onlineEnsureNpcEid === 'function') onlineEnsureNpcEid(npc);
+        else if (!npc.eid) npc.eid = 'm' + (npcs.length);
+      } catch (e) {}
       // Ensure the visual mesh is added to collidables IF bullets should hit it directly
       // If bullets hit the character collider, no need to add robotGroup here.
       // collidableObjects.push(robotGroup); // Removed this - let bullets hit the NPC collider/character logic

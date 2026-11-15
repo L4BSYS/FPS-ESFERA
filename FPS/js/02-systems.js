@@ -1051,12 +1051,35 @@ function placeStairs(pos, rotY) {
   gr.userData.isStairs = true;
   scene.add(gr);
   placedStairs.push(gr);
+  try {
+    if (typeof onlineStructSync === 'function' && onlineStructSync() &&
+        typeof ONLINE !== 'undefined' && !ONLINE.applyingRemote && !ONLINE.applyingWorld &&
+        typeof onlineBroadcastStruct === 'function') {
+      onlineBroadcastStruct({
+        t: 'stairs',
+        x: Number(pos.x), y: 0.5, z: Number(pos.z),
+        rm: false, r: Number(rotY) || 0
+      });
+    }
+  } catch (e) {}
   return gr;
 }
 function placeDoor(pos, rotY) {
   const door = createLockedDoor(new THREE.Vector3(pos.x, 2, pos.z));
   door.rotation.y = rotY || 0;
   placedDoors.push(door);
+  try { if (typeof ensureDoorStableId === 'function') ensureDoorStableId(door); } catch (e) {}
+  try {
+    if (typeof onlineStructSync === 'function' && onlineStructSync() &&
+        typeof ONLINE !== 'undefined' && !ONLINE.applyingRemote && !ONLINE.applyingWorld &&
+        typeof onlineBroadcastStruct === 'function') {
+      onlineBroadcastStruct({
+        t: 'door',
+        x: Number(pos.x), y: 2, z: Number(pos.z),
+        rm: false, r: Number(rotY) || 0
+      });
+    }
+  } catch (e) {}
   return door;
 }
 function placeEnemySpawn(pos) {
@@ -1433,6 +1456,7 @@ function placeWorldItem(key, position) {
   model.userData = Object.assign({}, model.userData, { collected: false, itemData: item, itemKey: key, creatorPlaced: true });
   if (itemDef.type === 'consumable') { model.isCollectible = true; model.type = itemDef.id; }
   if (itemDef.type === 'key' && typeof decorateGoldenKey === 'function') decorateGoldenKey(model);
+  try { if (typeof ensureItemStableId === 'function') ensureItemStableId(model); } catch (e) {}
   scene.add(model);
   collidableObjects.push(model);
   if (!worldItems.includes(model)) worldItems.push(model);
@@ -1582,6 +1606,19 @@ function serializeProps(list, isNode) {
       z: Math.round(o.position.z * 100) / 100
     };
     if (o.userData && o.userData.autoResource) d.a = 1;
+    if (isNode) {
+      try {
+        if (typeof ensureNodeStableId === 'function') ensureNodeStableId(o);
+      } catch (e) {}
+      if (o.nid) d.nid = o.nid;
+      if (typeof o.health === 'number') d.hp = Math.max(0, Math.round(o.health));
+      if (typeof o.maxHealth === 'number') d.mhp = Math.max(0, Math.round(o.maxHealth));
+    } else {
+      try {
+        if (typeof ensureItemStableId === 'function') ensureItemStableId(o);
+      } catch (e) {}
+      if (o.iid) d.iid = o.iid;
+    }
     return d;
   }).filter(d => d.k);
 }
@@ -1609,29 +1646,44 @@ function snapshotScene() {
     items: serializeProps(worldItems, false),
     nodes: serializeProps(resourceNodes, true),
     benches: benchData,
-    containers: (typeof worldContainers !== 'undefined' ? worldContainers : []).map(ref => ({
-      mode: ref.mode,
-      label: ref.label,
-      x: Math.round(ref.pos.x * 100) / 100,
-      y: Math.round(ref.pos.y * 100) / 100,
-      z: Math.round(ref.pos.z * 100) / 100,
-      rot: Math.round((ref.mesh.rotation.y || 0) * 100) / 100,
-      cooldown: ref.cooldown,
-      stock: ref.stock || null,
-      slots: Array.isArray(ref.slots) ? ref.slots.map(s => s ? Object.assign({}, s) : null) : null
-    })),
+    containers: (typeof worldContainers !== 'undefined' ? worldContainers : []).map(ref => {
+      try {
+        if (ref && !ref.cid && typeof makeContainerId === 'function' && ref.pos) {
+          ref.cid = makeContainerId(ref.pos.x, ref.pos.y, ref.pos.z, ref.mode);
+          if (ref.mesh && ref.mesh.userData) ref.mesh.userData.cid = ref.cid;
+        }
+      } catch (e) {}
+      return {
+        mode: ref.mode,
+        label: ref.label,
+        cid: ref.cid || null,
+        x: Math.round(ref.pos.x * 100) / 100,
+        y: Math.round(ref.pos.y * 100) / 100,
+        z: Math.round(ref.pos.z * 100) / 100,
+        rot: Math.round((ref.mesh.rotation.y || 0) * 100) / 100,
+        cooldown: ref.cooldown,
+        stock: ref.stock || null,
+        slots: Array.isArray(ref.slots) ? ref.slots.map(s => s ? Object.assign({}, s) : null) : null
+      };
+    }),
     stairs: placedStairs.map(gr => ({
       x: Math.round(gr.position.x * 100) / 100,
       y: Math.round(gr.position.y * 100) / 100,
       z: Math.round(gr.position.z * 100) / 100,
       rot: Math.round((gr.rotation.y || 0) * 100) / 100
     })),
-    doors: placedDoors.map(d => ({
-      x: Math.round(d.position.x * 100) / 100,
-      y: Math.round(d.position.y * 100) / 100,
-      z: Math.round(d.position.z * 100) / 100,
-      rot: Math.round((d.rotation.y || 0) * 100) / 100
-    })),
+    doors: placedDoors.map(d => {
+      try { if (typeof ensureDoorStableId === 'function') ensureDoorStableId(d); } catch (e) {}
+      return {
+        x: Math.round(d.position.x * 100) / 100,
+        y: Math.round(d.position.y * 100) / 100,
+        z: Math.round(d.position.z * 100) / 100,
+        rot: Math.round((d.rotation.y || 0) * 100) / 100,
+        did: d.did || (d.userData && d.userData.did) || null,
+        open: !!(d.userData && d.userData.open),
+        locked: !!(d.userData && d.userData.locked)
+      };
+    }),
     spawns: enemySpawns.map(sp => ({ x: sp.x, z: sp.z })),
     zones: (typeof worldZones !== 'undefined' ? worldZones : []).map(function (z) {
       return {
@@ -1693,7 +1745,8 @@ function deserializeProps(items, nodes, benches, extras) {
           cooldown: d.cooldown,
           slots: Array.isArray(d.slots) ? d.slots.length : 12,
           seed: Array.isArray(d.slots) ? d.slots : null,
-          stock: d.stock || null
+          stock: d.stock || null,
+          cid: d.cid || null
       });
   });
   clearStructures();
@@ -1703,7 +1756,28 @@ function deserializeProps(items, nodes, benches, extras) {
   });
   (Array.isArray(ex.doors) ? ex.doors : []).slice(0, 30).forEach(d => {
       if (typeof d.x !== 'number') return;
-      placeDoor(new THREE.Vector3(d.x, (typeof d.y === 'number' ? d.y : 2), d.z), d.rot || 0);
+      const door = placeDoor(new THREE.Vector3(d.x, (typeof d.y === 'number' ? d.y : 2), d.z), d.rot || 0);
+      if (!door) return;
+      try {
+          if (d.did) {
+              door.did = d.did;
+              door.userData.did = d.did;
+          } else if (typeof ensureDoorStableId === 'function') {
+              ensureDoorStableId(door);
+          }
+          if (typeof d.locked === 'boolean') door.userData.locked = d.locked;
+          if (d.open) {
+              door.userData.open = true;
+              door.userData.locked = false;
+              try {
+                  door.material.transparent = true;
+                  door.material.opacity = 0.3;
+                  door.material.color.setHex(0x00FF00);
+              } catch (e) {}
+              const di = collidableObjects.indexOf(door);
+              if (di > -1) collidableObjects.splice(di, 1);
+          }
+      } catch (e) {}
   });
   (Array.isArray(ex.spawns) ? ex.spawns : []).slice(0, 30).forEach(d => {
       if (typeof d.x !== 'number' || typeof d.z !== 'number') return;
@@ -1750,6 +1824,12 @@ function deserializeProps(items, nodes, benches, extras) {
       const item = placeWorldItem(d.k, new THREE.Vector3(d.x, d.y, d.z));
       if (item) {
           if (d.a) item.userData.autoResource = true;
+          if (d.iid) {
+              item.iid = d.iid;
+              try { item.userData.iid = d.iid; } catch (e) {}
+          } else {
+              try { if (typeof ensureItemStableId === 'function') ensureItemStableId(item); } catch (e) {}
+          }
           n++;
       }
   });
@@ -1758,6 +1838,20 @@ function deserializeProps(items, nodes, benches, extras) {
       const node = placeResourceNode(d.k, new THREE.Vector3(d.x, d.y, d.z));
       if (node) {
           if (d.a) node.userData.autoResource = true;
+          if (d.nid) {
+              node.nid = d.nid;
+              try { node.userData.nid = d.nid; } catch (e) {}
+          } else {
+              try { if (typeof ensureNodeStableId === 'function') ensureNodeStableId(node); } catch (e) {}
+          }
+          if (typeof d.mhp === 'number' && d.mhp > 0) node.maxHealth = d.mhp;
+          if (typeof d.hp === 'number') {
+              node.health = Math.max(0, d.hp);
+              if (node.health <= 0) {
+                  node.isHarvested = true;
+                  node.visible = false;
+              }
+          }
           n++;
       }
   });
@@ -2071,6 +2165,14 @@ function refreshCraftUI() {
   try { refreshTechTreeState(); } catch (e) {}
 }
 function setCreatorMode(on) {
+  if (on && typeof onlineIsActive === 'function' && onlineIsActive()) {
+    try {
+      if (typeof onlineToast === 'function') onlineToast('Modo creador no disponible en sala coop');
+      else if (typeof lvToast === 'function') lvToast('Modo creador no disponible en sala coop');
+      else if (typeof showMessage === 'function') showMessage('Modo creador no disponible en sala coop');
+    } catch (e) {}
+    return;
+  }
   creatorMode = !!on;
   if (typeof PLAYER_CONFIG !== 'undefined') {
       if (creatorMode && creatorBaseReach === null) creatorBaseReach = PLAYER_CONFIG.blockReach;

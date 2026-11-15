@@ -69,7 +69,7 @@ function containerItemLabel(entry) {
   return q > 1 ? (n + ' ×' + q) : n;
 }
 
-// opts: { mode, x, z, y?, rotY?, slots?, stock?, cooldown?, label?, seed? }
+// opts: { mode, x, z, y?, rotY?, slots?, stock?, cooldown?, label?, seed?, cid? }
 function placeWorldContainer(opts) {
   opts = opts || {};
   const mode = opts.mode === 'dispenser' ? 'dispenser' : 'storage';
@@ -90,9 +90,15 @@ function placeWorldContainer(opts) {
     mesh.userData.worldBoundingBox = new THREE.Box3().setFromObject(mesh, true);
   } catch (e) {}
 
+  let cid = opts.cid || null;
+  if (!cid && typeof makeContainerId === 'function') {
+    try { cid = makeContainerId(x, y, z, mode); } catch (e) { cid = null; }
+  }
+
   const ref = {
     mode: mode,
     label: label,
+    cid: cid,
     mesh: mesh,
     pos: new THREE.Vector3(x, y, z),
     slots: [],
@@ -100,6 +106,7 @@ function placeWorldContainer(opts) {
     cooldown: (typeof opts.cooldown === 'number') ? opts.cooldown : 1.25,
     lastTakeAt: 0
   };
+  try { mesh.userData.cid = cid; } catch (e) {}
 
   if (mode === 'storage') {
     for (let i = 0; i < slotCount; i++) ref.slots.push(null);
@@ -391,6 +398,14 @@ function containerMoveSlot(from, to) {
   const ref = currentContainer;
   if (!ref || ref.mode !== 'storage' || !ref.slots) return;
   if (from === to) return;
+  // PR7: guest no reordena el cofre canónico (usá sacar/guardar).
+  try {
+    if (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+        typeof ONLINE !== 'undefined' && !ONLINE.isHost) {
+      setContainerStatus('En coop: sacá y volvé a guardar para mover ítems');
+      return;
+    }
+  } catch (e) {}
   const a = ref.slots[from];
   if (!a) return;
   const b = ref.slots[to];
@@ -514,6 +529,22 @@ function containerDepositInv(area, idx) {
     efficiency: item.efficiency,
     stackable: !!item.stackable
   };
+  const guestChest = (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+      typeof ONLINE !== 'undefined' && !ONLINE.isHost);
+  if (guestChest) {
+    if (!ref.cid) { setContainerStatus('Cofre sin id de red'); return; }
+    inv.removeItem(item, item.stackable ? (item.quantity || 1) : 1);
+    try { playSound('pickup'); } catch (e) {}
+    setContainerStatus('Guardando…');
+    try { inv.updateInventoryUI(); inv.updateQuickSlotUI(); } catch (e) {}
+    try {
+      onlineSendChestIntent({
+        cid: ref.cid, op: 'put', id: entry.id, q: entry.quantity
+      });
+    } catch (e) {}
+    refreshContainerModal();
+    return;
+  }
   const slot = findFreeOrStackSlot(ref, entry);
   if (slot < 0) { setContainerStatus('Cofre lleno'); return; }
   if (ref.slots[slot] && ref.slots[slot].id === entry.id) {
@@ -526,6 +557,16 @@ function containerDepositInv(area, idx) {
   setContainerStatus('Guardado: ' + entry.name);
   refreshContainerModal();
   try { inv.updateInventoryUI(); inv.updateQuickSlotUI(); } catch (e) {}
+  try {
+    if (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+        typeof ONLINE !== 'undefined' && ONLINE.isHost && ref.cid) {
+      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+      onlinePublishChestEvent({
+        cid: ref.cid, op: 'put', slot: slot, id: entry.id,
+        q: ref.slots[slot].quantity || entry.quantity, by: me ? me.uid : null
+      });
+    }
+  } catch (e) {}
 }
 
 function containerDepositResource(resId) {
@@ -540,6 +581,17 @@ function containerDepositResource(resId) {
     quantity: 1,
     stackable: true
   };
+  const guestChest = (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+      typeof ONLINE !== 'undefined' && !ONLINE.isHost);
+  if (guestChest) {
+    if (!ref.cid) return;
+    inv.removeResource(resId, 1);
+    try { updateResourceHUD(); playSound('pickup'); } catch (e) {}
+    setContainerStatus('Guardando…');
+    try { onlineSendChestIntent({ cid: ref.cid, op: 'put', id: resId, q: 1 }); } catch (e) {}
+    refreshContainerModal();
+    return;
+  }
   const slot = findFreeOrStackSlot(ref, entry);
   if (slot < 0) { setContainerStatus('Cofre lleno'); return; }
   inv.removeResource(resId, 1);
@@ -551,6 +603,16 @@ function containerDepositResource(resId) {
   try { updateResourceHUD(); playSound('pickup'); } catch (e) {}
   setContainerStatus('Guardado: ' + entry.name);
   refreshContainerModal();
+  try {
+    if (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+        typeof ONLINE !== 'undefined' && ONLINE.isHost && ref.cid) {
+      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+      onlinePublishChestEvent({
+        cid: ref.cid, op: 'put', slot: slot, id: resId,
+        q: ref.slots[slot].quantity || 1, by: me ? me.uid : null
+      });
+    }
+  } catch (e) {}
 }
 
 function containerDepositAmmo(ammoType) {
@@ -569,6 +631,20 @@ function containerDepositAmmo(ammoType) {
     amount: want,
     stackable: true
   };
+  const guestChest = (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+      typeof ONLINE !== 'undefined' && !ONLINE.isHost);
+  if (guestChest) {
+    if (!ref.cid) return;
+    const take = inv.removeAmmo(ammoType, want);
+    if (take <= 0) return;
+    try { inv.updateAmmoUI(); playSound('ammo-pickup'); } catch (e) {}
+    setContainerStatus('Guardando…');
+    try {
+      onlineSendChestIntent({ cid: ref.cid, op: 'put', id: entry.id, q: take });
+    } catch (e) {}
+    refreshContainerModal();
+    return;
+  }
   const slot = findFreeOrStackSlot(ref, entry);
   if (slot < 0) { setContainerStatus('Cofre lleno'); return; }
   const take = inv.removeAmmo(ammoType, want);
@@ -582,6 +658,16 @@ function containerDepositAmmo(ammoType) {
   try { inv.updateAmmoUI(); playSound('ammo-pickup'); } catch (e) {}
   setContainerStatus('Guardadas ' + take + ' balas');
   refreshContainerModal();
+  try {
+    if (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+        typeof ONLINE !== 'undefined' && ONLINE.isHost && ref.cid) {
+      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+      onlinePublishChestEvent({
+        cid: ref.cid, op: 'put', slot: slot, id: entry.id,
+        q: ref.slots[slot].quantity || take, by: me ? me.uid : null
+      });
+    }
+  } catch (e) {}
 }
 
 function containerWithdrawSlot(idx) {
@@ -591,14 +677,42 @@ function containerWithdrawSlot(idx) {
   const slot = ref.slots[idx];
   if (!slot) return;
 
+  const guestChest = (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+      typeof ONLINE !== 'undefined' && !ONLINE.isHost);
+  if (guestChest) {
+    if (!ref.cid) return;
+    setContainerStatus('Sacando…');
+    try {
+      onlineSendChestIntent({
+        cid: ref.cid, op: 'take', slot: idx, id: slot.id, q: slot.quantity || 1
+      });
+    } catch (e) {}
+    return;
+  }
+
+  function publishHostTake(id, moved, left) {
+    try {
+      if (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+          typeof ONLINE !== 'undefined' && ONLINE.isHost && ref.cid) {
+        const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+        onlinePublishChestEvent({
+          cid: ref.cid, op: 'take', slot: idx, id: id, q: moved,
+          amount: Math.max(0, left), by: me ? me.uid : null
+        });
+      }
+    } catch (e) {}
+  }
+
   if (slot.type === 'resource') {
     const moved = inv.addResource(slot.id, slot.quantity || 1);
     if (moved <= 0) { setContainerStatus('Mochila llena'); return; }
     slot.quantity = (slot.quantity || 1) - moved;
+    const left = slot.quantity;
     if (slot.quantity <= 0) ref.slots[idx] = null;
     try { updateResourceHUD(); playSound('pickup'); } catch (e) {}
     setContainerStatus('Sacaste ' + moved + ' ' + slot.name);
     refreshContainerModal();
+    publishHostTake(slot.id || 'wood', moved, left);
     return;
   }
 
@@ -608,9 +722,12 @@ function containerWithdrawSlot(idx) {
     if (moved <= 0) { setContainerStatus('Mochila llena'); return; }
     slot.quantity = amt - moved;
     slot.amount = slot.quantity;
+    const left = slot.quantity;
+    const id = slot.id;
     if (slot.quantity <= 0) ref.slots[idx] = null;
     setContainerStatus('Sacaste munición ×' + moved);
     refreshContainerModal();
+    publishHostTake(id, moved, left);
     return;
   }
 
@@ -649,16 +766,20 @@ function containerWithdrawSlot(idx) {
     setContainerStatus('Mochila llena');
     return;
   }
+  let left = 0;
   if (entry.stackable) {
     slot.quantity = qty - moved;
+    left = slot.quantity;
     if (slot.quantity <= 0) ref.slots[idx] = null;
   } else {
     ref.slots[idx] = null;
+    left = 0;
   }
   try { playSound('pickup'); } catch (e) {}
   setContainerStatus('Sacaste ' + entry.name + (moved > 1 ? ' ×' + moved : ''));
   refreshContainerModal();
   try { inv.updateInventoryUI(); inv.updateQuickSlotUI(); } catch (e) {}
+  publishHostTake(entry.id, moved, left);
 }
 function containerDispenseOne() {
   const ref = currentContainer;
@@ -672,6 +793,19 @@ function containerDispenseOne() {
   if ((ref.stock.amount || 0) <= 0) {
     setContainerStatus('Vacío');
     refreshContainerModal();
+    return;
+  }
+  const guestChest = (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+      typeof ONLINE !== 'undefined' && !ONLINE.isHost);
+  if (guestChest) {
+    if (!ref.cid) return;
+    ref.lastTakeAt = now;
+    setContainerStatus('Tomando…');
+    try {
+      onlineSendChestIntent({
+        cid: ref.cid, op: 'take', id: ref.stock.id || 'pistol_ammo', q: 1
+      });
+    } catch (e) {}
     return;
   }
   const inv = player && player.inventory;
@@ -703,6 +837,15 @@ function containerDispenseOne() {
   try { playSound('pickup'); } catch (e) {}
   setContainerStatus('Tomaste 1 × ' + (s.name || s.id));
   refreshContainerModal();
+  try {
+    if (typeof onlineChestsSync === 'function' && onlineChestsSync() &&
+        typeof ONLINE !== 'undefined' && ONLINE.isHost && ref.cid) {
+      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+      onlinePublishChestEvent({
+        cid: ref.cid, op: 'take', id: s.id, q: 1, amount: ref.stock.amount, by: me ? me.uid : null
+      });
+    }
+  } catch (e) {}
   // Refrescar botón cuando termine el cooldown.
   try {
     setTimeout(function () {
@@ -719,6 +862,31 @@ function containerProduceAmmo() {
   if (!linked) { setContainerStatus('Este dispenser no está en el área de una mesa'); return; }
   const cost = (typeof BENCH_AMMO_COST !== 'undefined') ? BENCH_AMMO_COST : { metal: 2, wood: 1 };
   const batch = (typeof BENCH_AMMO_BATCH !== 'undefined') ? BENCH_AMMO_BATCH : 12;
+  // PR8: guest → craft intent; host consumes shared storage and syncs stock.
+  try {
+    if (typeof onlineCraftSync === 'function' && onlineCraftSync() &&
+        typeof ONLINE !== 'undefined' && !ONLINE.isHost &&
+        typeof onlineSendCraftAmmoIntent === 'function') {
+      if (onlineSendCraftAmmoIntent(linked, ref.cid)) {
+        setContainerStatus('Esperando al host para cargar el dispenser…');
+        return;
+      }
+      setContainerStatus('No se pudo pedir el craft al host');
+      return;
+    }
+    if (typeof onlineCraftSync === 'function' && onlineCraftSync() &&
+        typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+        typeof onlineHostCraftConsume === 'function') {
+      if (!onlineHostCraftConsume(linked, cost, ref)) {
+        setContainerStatus('Faltan recursos en la mesa o en los cofres asociados');
+        return;
+      }
+      setContainerStatus('Dispenser cargado: +' + batch + ' balas');
+      try { playSound('ammo-pickup'); } catch (e) {}
+      refreshContainerModal();
+      return;
+    }
+  } catch (e) {}
   if (!benchConsumeBase(linked, cost)) {
     setContainerStatus('Faltan recursos en la mesa o en los cofres asociados');
     return;

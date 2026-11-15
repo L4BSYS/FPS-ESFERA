@@ -991,6 +991,18 @@ async function refreshOnlineTab(force) {
           if (online && typeof netStats !== 'undefined' && netStats) {
               const secs = Math.max(1, (Date.now() - netStats.sessionStart) / 1000);
               st.textContent += ' · ↑' + Math.round(netStats.bytesOut / secs) + ' B/s ↓' + Math.round(netStats.bytesIn / secs) + ' B/s';
+              if (netStats.actionsOut || netStats.hurtEvents || netStats.buildRollbacks) {
+                  st.textContent += ' · act ' + (netStats.actionsOut || 0) +
+                      '/' + (netStats.actionsRejected || 0) +
+                      ' hurt ' + (netStats.hurtEvents || 0) +
+                      ' rb ' + (netStats.buildRollbacks || 0);
+              }
+              if (netStats.rttEstimate) st.textContent += ' · rtt~' + Math.round(netStats.rttEstimate) + 'ms';
+          }
+      } catch (e) {}
+      try {
+          if (typeof onlineIsActive === 'function' && onlineIsActive() && typeof onlineFlagsSummary === 'function') {
+              st.textContent += ' · ' + onlineFlagsSummary();
           }
       } catch (e) {}
       try { if (typeof netError !== 'undefined' && netError) st.textContent += ' · red: ' + netError; } catch (e) {}

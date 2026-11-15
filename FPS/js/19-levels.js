@@ -500,6 +500,15 @@ function arrivalSpawn(def, fromId) {
 
 function goThroughDoor(door) {
   if (LEVEL.transitioning) return;
+  // Coop: portales entre mundos desynclean la sala — bloqueados (PR2 / portalDoorsInCoop).
+  if (typeof onlineIsActive === 'function' && onlineIsActive() &&
+      typeof ONLINE_CONFIG !== 'undefined' && ONLINE_CONFIG.portalDoorsInCoop === false) {
+    try {
+      if (typeof onlineToast === 'function') onlineToast('En coop las puertas-portal están bloqueadas');
+      else if (typeof lvToast === 'function') lvToast('En coop las puertas-portal están bloqueadas');
+    } catch (e) {}
+    return;
+  }
   const spec = door && door.userData && door.userData.target;
   if (!spec || !spec.to) return;
   LEVEL.transitioning = true;

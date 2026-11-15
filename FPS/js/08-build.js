@@ -7,8 +7,63 @@
           blockGrid.set(key, block);
       });
   }
+  // Local blockGrid key: half-unit floats joined by '|'.
+  // RTDB uses onlineGridKey (js/28-online.js): same snap as ints joined by '_'.
+  // Bijection: getGridKey(1.5,0,2) === "1.5|0|2" ↔ onlineGridKey === "3_0_4".
+  // Keep this Map format; do not rename keys to underscore.
   function getGridKey(x, y, z) {
       return `${Math.round(x*2)/2}|${Math.round(y*2)/2}|${Math.round(z*2)/2}`;
+  }
+  // Stable coop entity ids (PR2): n_/i_/c_ + same snap ints as onlineGridKey + kind.
+  // Format: "n_3_0_4_wood" — host/guest round-trip via snapshot must match.
+  function worldEntityGridKey(x, y, z) {
+      if (typeof onlineGridKey === 'function') return onlineGridKey(x, y, z);
+      return Math.round(Number(x) * 2) + '_' + Math.round(Number(y) * 2) + '_' + Math.round(Number(z) * 2);
+  }
+  function sanitizeEntityKind(kind) {
+      const k = String(kind == null ? 'x' : kind).toLowerCase().replace(/[^a-z0-9_\-]/g, '');
+      return (k || 'x').slice(0, 32);
+  }
+  function makeStableEntityId(prefix, x, y, z, kind) {
+      return String(prefix || 'e') + '_' + worldEntityGridKey(x, y, z) + '_' + sanitizeEntityKind(kind);
+  }
+  function makeNodeId(x, y, z, type) { return makeStableEntityId('n', x, y, z, type || 'node'); }
+  function makeItemId(x, y, z, key) { return makeStableEntityId('i', x, y, z, key || 'item'); }
+  function makeContainerId(x, y, z, mode) { return makeStableEntityId('c', x, y, z, mode || 'storage'); }
+  function makeDoorId(x, y, z) { return makeStableEntityId('d', x, y, z, 'door'); }
+  function ensureDoorStableId(door) {
+      if (!door || !door.position) return null;
+      if (!door.userData) door.userData = {};
+      if (!door.userData.did && !door.did) {
+          door.userData.did = makeDoorId(door.position.x, door.position.y, door.position.z);
+      }
+      door.did = door.userData.did || door.did;
+      try { door.userData.did = door.did; } catch (e) {}
+      return door.did;
+  }
+  function ensureNodeStableId(node) {
+      if (!node || !node.position) return null;
+      const type = node.type || (node.userData && node.userData.type) || 'node';
+      if (!node.nid) {
+          node.nid = makeNodeId(node.position.x, node.position.y, node.position.z, type);
+      }
+      try {
+          node.userData = node.userData || {};
+          node.userData.nid = node.nid;
+      } catch (e) {}
+      return node.nid;
+  }
+  function ensureItemStableId(model) {
+      if (!model || !model.position) return null;
+      const key = (model.userData && model.userData.itemKey) || model.name || 'item';
+      if (!model.iid) {
+          model.iid = makeItemId(model.position.x, model.position.y, model.position.z, key);
+      }
+      try {
+          model.userData = model.userData || {};
+          model.userData.iid = model.iid;
+      } catch (e) {}
+      return model.iid;
   }
   function snapToGrid(position) {
       return new THREE.Vector3(
@@ -239,15 +294,20 @@
       scene.add(block);
       placedBlocks.push(block);
       blockGrid.set(getGridKey(blockPos.x, blockPos.y, blockPos.z), block);
+
+      // Proceed block cost with placement (before broadcast so guest pending knows cost)
+      const payCost = (typeof creatorMode === 'undefined' || !creatorMode) ? cost : 0;
+      if (payCost) player.inventory.resources[currentBlockType] -= payCost;
+      updateResourceHUD();
+
       try {
         if (typeof onlineBroadcastBlock === 'function') {
-          onlineBroadcastBlock({ x: blockPos.x, y: blockPos.y, z: blockPos.z, t: currentBlockType, r: block.rotation.y || 0 });
+          onlineBroadcastBlock(
+            { x: blockPos.x, y: blockPos.y, z: blockPos.z, t: currentBlockType, r: block.rotation.y || 0 },
+            { cost: payCost }
+          );
         }
       } catch (e) {}
-      
-      // Proceed block cost with placement
-      if (typeof creatorMode === 'undefined' || !creatorMode) player.inventory.resources[currentBlockType] -= cost;
-      updateResourceHUD();
 
       showPlacementMessage(`Bloque puesto en ${blockPos.x.toFixed(1)}, ${blockPos.y.toFixed(1)}, ${blockPos.z.toFixed(1)}`);
       updateDebugVisuals();
@@ -313,7 +373,10 @@
 
       try {
         if (typeof onlineBroadcastBlock === 'function') {
-          onlineBroadcastBlock({ x: block.position.x, y: block.position.y, z: block.position.z, rm: 1 });
+          onlineBroadcastBlock(
+            { x: block.position.x, y: block.position.y, z: block.position.z, rm: 1 },
+            { t: (block.userData && block.userData.type) || null, r: block.rotation.y || 0 }
+          );
         }
       } catch (e) {}
 
@@ -913,7 +976,9 @@
       node.type = type;
       node.isResourceNode = true;
       node.health = materialDef.resourceHealth || 50; // Fallback to 50 if not defined
+      node.maxHealth = node.health;
       node.isHarvested = false;
+      try { ensureNodeStableId(node); } catch (e) {}
       // Collider: el nodo es sólido para jugador y enemigos
       node.userData.solid = true;
       node.isStatic = true;
@@ -1243,6 +1308,7 @@
           requiredKey: 'golden_key',
           open: false
       };
+      try { ensureDoorStableId(door); } catch (e) {}
 
       door.geometry.computeBoundingBox();
       door.updateMatrixWorld(true);

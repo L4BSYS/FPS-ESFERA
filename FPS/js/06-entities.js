@@ -41,8 +41,9 @@
           this.structureDamage = 15;
           this.shooter = null;
           this.passPlayed = false;
+          this.cosmetic = false; // PR5b guest tracer: FX only, no damage
 
-          // Trail effect
+          // Trail + scene + bullets[]: single registration point (shoot()/NPC must not re-add)
           this.trail = this.createTrail();
           scene.add(this.trail);
           scene.add(this.mesh);
@@ -131,7 +132,29 @@
           } else {
               // Player bullets can hit NPCs' visual meshes
               objectsToCheck.push(...npcs.map(npc => npc.mesh).filter(mesh => mesh));
+              // PR5b FF: host player bullets can hit remote capsules
+              try {
+                  if (!this.cosmetic && typeof ONLINE_CONFIG !== 'undefined' && ONLINE_CONFIG.friendlyFire &&
+                      typeof onlineCombatSync === 'function' && onlineCombatSync() &&
+                      typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                      typeof remotes !== 'undefined' && remotes) {
+                      for (const uid in remotes) {
+                          if (remotes[uid] && remotes[uid].mesh) objectsToCheck.push(remotes[uid].mesh);
+                      }
+                  }
+              } catch (e) {}
           }
+          // PR5b: enemy bullets on host can hit remotes (damage via hurt)
+          try {
+              if (isEnemyBullet && !this.cosmetic &&
+                  typeof onlineCombatSync === 'function' && onlineCombatSync() &&
+                  typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+                  typeof remotes !== 'undefined' && remotes) {
+                  for (const uid in remotes) {
+                      if (remotes[uid] && remotes[uid].mesh) objectsToCheck.push(remotes[uid].mesh);
+                  }
+              }
+          } catch (e) {}
           objectsToCheck.push(...placedBlocks);
 
           const hits = bulletRay.intersectObjects(objectsToCheck, true); // Recursive check
@@ -189,12 +212,23 @@
            // Hits are usually child meshes of a group: walk up to find whose body this is
            let hitNPC = null;
            let hitPlayer = false;
+           let hitRemoteUid = null;
            let anc = hitObject;
            while (anc) {
                if (anc.userData && anc.userData.parentCharacter instanceof NPC) { hitNPC = anc.userData.parentCharacter; break; }
+               if (anc.userData && anc.userData.isRemotePlayer && anc.userData.remoteUid) {
+                   hitRemoteUid = anc.userData.remoteUid;
+                   break;
+               }
                if (typeof player !== 'undefined' && player &&
                    (anc === player.collider || anc === player.container || anc === player.mesh)) { hitPlayer = true; break; }
                anc = anc.parent;
+           }
+
+           // PR5b guest cosmetic tracer: sparks only, host owns damage.
+           if (this.cosmetic) {
+               this.createImpactEffect(hitObject, hitPosition);
+               return;
            }
 
            if (this.owner === 'enemy') {
@@ -203,13 +237,25 @@
                    this.hitPlayer(hitPosition);
                    return;
                }
+               if (hitRemoteUid) {
+                   this.hitRemotePlayer(hitRemoteUid, hitPosition);
+                   return;
+               }
                if (hitNPC) { // no friendly fire: spark only
                    this.createImpactEffect(hitObject, hitPosition);
                    return;
                }
            } else {
                if (hitNPC) {
+                   if (hitNPC.isPuppet) {
+                       this.createImpactEffect(hitObject, hitPosition);
+                       return;
+                   }
                    this.hitNpc(hitNPC, hitPosition);
+                   return;
+               }
+               if (hitRemoteUid) {
+                   this.hitRemotePlayer(hitRemoteUid, hitPosition);
                    return;
                }
                if (hitPlayer) {
@@ -252,6 +298,26 @@
           if (player.health <= 0) {
               showGameOver();
           }
+      }
+
+      hitRemotePlayer(uid, hitPosition) {
+          if (!uid) return;
+          try {
+              if (typeof onlineHostDamagePlayer === 'function' &&
+                  typeof ONLINE !== 'undefined' && ONLINE.isHost) {
+                  const src = (this.owner === 'enemy' && this.shooter && this.shooter.eid)
+                      ? ('npc:' + this.shooter.eid)
+                      : (function () {
+                          try {
+                              const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+                              return me ? ('player:' + me.uid) : 'env';
+                          } catch (e) { return 'env'; }
+                      })();
+                  onlineHostDamagePlayer(uid, this.damage || 15, src);
+              }
+          } catch (e) {}
+          try { playSoundAt('flesh_hit', hitPosition, { gain: 0.8, maxDist: 35 }); } catch (e) {}
+          this.createBloodEffect(hitPosition);
       }
 
       hitNpc(npc, hitPosition) {

@@ -47,10 +47,19 @@
           (Math.random() - 0.5) * spreadAngle
       )).normalize();
 
-      // Create bullet
+      // PR5b guest combat: FX local + shoot intent; host resolves hitscan.
+      // Host/offline: real damaging bullet. Guest: cosmetic tracer only.
+      const guestCombat = (typeof onlineIsGuestCombat === 'function' && onlineIsGuestCombat());
       const bullet = new Bullet(bulletOrigin, bulletDirection);
-      bullets.push(bullet);
-      scene.add(bullet.mesh);
+      if (guestCombat) {
+          bullet.cosmetic = true;
+          try {
+              const pitch = (player.targetCameraRotationX != null) ? player.targetCameraRotationX : 0;
+              if (typeof onlineSendShootIntent === 'function') {
+                  onlineSendShootIntent(bulletOrigin, bulletDirection, pitch);
+              }
+          } catch (e) {}
+      }
 
       // Effects
       playSound('gunshot');
@@ -110,8 +119,9 @@
               try { if (typeof updateHeartbeat === 'function') updateHeartbeat(delta); } catch (e) {}
           }
 
-          // Update NPCs
+          // Update NPCs (skip puppets — PR5b guest mirrors pose from mobs)
           npcs.forEach(npc => {
+              if (npc.isPuppet) return;
               if (npc.health > 0 && npc.container.parent) { // Only update living NPCs in scene
                   npc.update(delta, collidableObjects, player);
               }

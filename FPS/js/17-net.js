@@ -1,9 +1,9 @@
 // js/17-net.js (part 17). LaGrieta FPS — classic scripts share globals. LOAD ORDER MATTERS, do not reorder.
 // FASE 0: presencia + avatares remotos interpolados + chat de sector, con tráfico medido.
-// - Pose adaptativa: 3 Hz en movimiento, 0.2 Hz quieto, 0 en pestaña oculta.
+// - Pose adaptativa: 3 Hz sector / 4 Hz sala ≤3 / 2 Hz sala 4–5; 0.2 Hz quieto; 0 oculto.
 // - Payload compacto: array de enteros + metadatos (nombre/color) en un nodo aparte.
 // - Sin escritura de presencia duplicada en cada pose.
-// - Contadores netStats + panel de debug con F3.
+// - Contadores netStats (pose + actions/mobs/hurt/rollbacks) + panel F3.
 // Sin sesión no hace nada.
 
 // Cambiá a tu instancia regional cuando exista, ej:
@@ -13,9 +13,9 @@ var NET_SECTOR = 64;
 
 var NET_CONFIG = {
   mode: 'auto',                 // auto | full | eco | off
-  poseHzMoving: 3,              // 3 Hz por defecto para Spark; 4 Hz en salas de 2-3
+  poseHzMoving: 3,              // sector / sin sala; en sala usa ONLINE_CONFIG.poseHzRoom*
   poseHzIdle: 0.2,              // 1 pose cada 5 s quieto
-  poseHzEco: 1.5,               // modo ahorro
+  poseHzEco: 1.5,               // modo ahorro (NET_CONFIG.mode==='eco')
   poseHzHidden: 0,              // pestaña oculta: no publicar
   poseHeartbeatMs: 5000,        // repetir pose aunque no cambie
   interestRadius: 48,           // sólo animar remotos dentro de este radio
@@ -55,7 +55,9 @@ var netChatRef = null;
 var netChatLastSend = 0;
 var netPoseSeq = 0;
 var remotes = {}; // uid -> {mesh, tag, tx,ty,tz, yaw, last, name, color, sector, state}
+var remoteColliders = []; // meshes used by Character.resolveCollisions (PR3 P–P)
 var netCapsuleGeo = null;
+var NET_REMOTE_COLLIDER_R = 0.4; // ≈ design soft cylinder radius
 var netChatOpen = false;
 var netGhostsVisible = true;
 try { netGhostsVisible = localStorage.getItem('lagrieta_ghosts') !== '0'; } catch (e) {}
@@ -73,7 +75,14 @@ var netStats = {
   inRate: 0,
   lastOut: 0,
   lastIn: 0,
-  lastSample: 0
+  lastSample: 0,
+  // PR9 telemetry
+  actionsOut: 0,
+  actionsRejected: 0,
+  buildRollbacks: 0,
+  mobsBytes: 0,
+  hurtEvents: 0,
+  rttEstimate: 0
 };
 
 function netApplyConfig(overrides) {
@@ -221,6 +230,12 @@ function netStatsReset() {
   netStats.lastOut = 0;
   netStats.lastIn = 0;
   netStats.lastSample = 0;
+  netStats.actionsOut = 0;
+  netStats.actionsRejected = 0;
+  netStats.buildRollbacks = 0;
+  netStats.mobsBytes = 0;
+  netStats.hurtEvents = 0;
+  netStats.rttEstimate = 0;
 }
 function netTrackOut(obj, kind) {
   netStats.bytesOut += netBytes(obj);
@@ -250,6 +265,13 @@ function netPoseHz() {
   if (NET_CONFIG.mode === 'off') return 0;
   if (typeof document !== 'undefined' && document.hidden) return NET_CONFIG.poseHzHidden || 0;
   if (NET_CONFIG.mode === 'eco') return netIsMoving() ? NET_CONFIG.poseHzEco : NET_CONFIG.poseHzIdle;
+  // Sala coop: 4 Hz si ≤3 jugadores; 2 Hz si 4–5 (ONLINE_CONFIG).
+  if (netRoomId && typeof onlineEffectivePoseMovingHz === 'function') {
+    const roomHz = onlineEffectivePoseMovingHz();
+    if (roomHz != null && isFinite(roomHz)) {
+      return netIsMoving() ? roomHz : (NET_CONFIG.poseHzIdle || 0.2);
+    }
+  }
   return netIsMoving() ? NET_CONFIG.poseHzMoving : NET_CONFIG.poseHzIdle;
 }
 function wireNetAuth() {
@@ -427,18 +449,25 @@ function netAvatar(uid, d, sector) {
     if (!netCapsuleGeo) { try { netCapsuleGeo = new THREE.CapsuleGeometry(0.35, 1.0, 4, 8); } catch (e) { return null; } }
     const mat = new THREE.MeshStandardMaterial({ color: meta.c || '#33ff66', roughness: 0.6, transparent: true, opacity: 0.92 });
     const mesh = new THREE.Mesh(netCapsuleGeo, mat);
-    mesh.raycast = function () {};
+    // Keep default raycast so host hitscan/FF can hit remotes (PR5b).
+    mesh.userData = mesh.userData || {};
+    mesh.userData.solid = true;
+    mesh.userData.isRemotePlayer = true;
+    mesh.userData.remoteUid = uid;
     const tag = netNameTag(meta.n, meta.c);
     try { scene.add(mesh); scene.add(tag); } catch (e) { return null; }
     r = remotes[uid] = {
       mesh, tag, tx: pose.x, ty: pose.y, tz: pose.z, yaw: pose.yaw,
+      hp: (typeof pose.hp === 'number') ? pose.hp : 100,
       last: 0, name: meta.n, color: meta.c, sector: sector || null, seq: 0, state: 0
     };
+    if (remoteColliders.indexOf(mesh) === -1) remoteColliders.push(mesh);
   }
   r.tx = pose.x;
   r.ty = pose.y;
   r.tz = pose.z;
   r.yaw = pose.yaw;
+  r.hp = (typeof pose.hp === 'number') ? pose.hp : r.hp;
   r.last = Date.now();
   r.seq = pose.seq;
   r.state = pose.state;
@@ -494,6 +523,10 @@ function netRetag(r, name, color) {
 function netRemoveAvatar(uid) {
   const r = remotes[uid];
   if (!r) return;
+  try {
+    const i = remoteColliders.indexOf(r.mesh);
+    if (i > -1) remoteColliders.splice(i, 1);
+  } catch (e) {}
   try { scene.remove(r.mesh); } catch (e) {}
   try { scene.remove(r.tag); } catch (e) {}
   try { if (r.mesh && r.mesh.material) r.mesh.material.dispose(); } catch (e) {}
@@ -766,12 +799,27 @@ function netDebugRender() {
     const secs = Math.max(0, (Date.now() - netStats.sessionStart) / 1000);
     const mm = Math.floor(secs / 60);
     const ss = Math.floor(secs % 60);
+    let roomLine = '';
+    try {
+      if (typeof onlineIsActive === 'function' && onlineIsActive()) {
+        const pc = (typeof onlinePlayerCount === 'function') ? onlinePlayerCount() : '?';
+        const flags = (typeof onlineFlagsSummary === 'function') ? onlineFlagsSummary() : '';
+        roomLine = 'sala: ' + (typeof ONLINE !== 'undefined' && ONLINE.code ? ONLINE.code : '?') +
+          ' · p' + pc + (flags ? '\n' + flags : '') + '\n';
+      }
+    } catch (e2) {}
+    const rtt = Math.round(Number(netStats.rttEstimate) || 0);
     netDebugEl.textContent =
       'NET ' + (netOn ? 'ON' : 'OFF') + ' · ' + (NET_CONFIG.mode || 'auto') + '\n' +
       'nivel: ' + (netLevel || '-') + ' · sector: ' + (netSector || '-') + '\n' +
+      roomLine +
       'vecinos: ' + netNeighborCount() + ' · pose: ' + netPoseHz().toFixed(2) + ' Hz\n' +
       '↑ ' + Math.round(netStats.outRate) + ' B/s · poses ' + netStats.posesOut + '\n' +
       '↓ ' + Math.round(netStats.inRate) + ' B/s · snaps ' + netStats.snapshotsIn + '\n' +
+      'act ↑' + (netStats.actionsOut || 0) + ' rej ' + (netStats.actionsRejected || 0) +
+        ' rb ' + (netStats.buildRollbacks || 0) + '\n' +
+      'mobs ' + Math.round((netStats.mobsBytes || 0) / 1024) + ' KB · hurt ' + (netStats.hurtEvents || 0) +
+        ' · rtt~' + rtt + 'ms\n' +
       'total ↑' + (netStats.bytesOut / 1024).toFixed(1) + ' KB · ↓' + (netStats.bytesIn / 1024).toFixed(1) + ' KB\n' +
       'sesión: ' + mm + 'm ' + ss + 's' + (netError ? '\nerror: ' + netError : '');
   } catch (e) {}

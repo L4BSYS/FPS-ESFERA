@@ -449,6 +449,32 @@ function benchProduceAmmo(wb) {
         setCraftStatus('El dispenser está lleno (máx. ' + cap + ')');
         return;
     }
+    // PR8: guest shared craft → host consume; host publishes storage deltas.
+    try {
+        if (typeof onlineCraftSync === 'function' && onlineCraftSync() &&
+            typeof ONLINE !== 'undefined' && !ONLINE.isHost &&
+            typeof onlineSendCraftAmmoIntent === 'function') {
+            if (onlineSendCraftAmmoIntent(wb, null)) {
+                setCraftStatus('Esperando al host para cargar el dispenser…');
+                return;
+            }
+            setCraftStatus('No se pudo pedir el craft al host');
+            return;
+        }
+        if (typeof onlineCraftSync === 'function' && onlineCraftSync() &&
+            typeof ONLINE !== 'undefined' && ONLINE.isHost &&
+            typeof onlineHostCraftConsume === 'function') {
+            if (!onlineHostCraftConsume(wb, BENCH_AMMO_COST, null)) {
+                const [k] = Object.keys(BENCH_AMMO_COST).filter(key => benchStorageTotals(wb)[key] < BENCH_AMMO_COST[key]);
+                setCraftStatus('Falta ' + (RESOURCE_ES[k] || 'material') + ' en la mesa o en los cofres asociados');
+                return;
+            }
+            setCraftStatus('Dispenser cargado: +' + BENCH_AMMO_BATCH + ' balas');
+            try { playSound('ammo-pickup'); } catch (e) {}
+            renderBenchBaseUI(wb);
+            return;
+        }
+    } catch (e) {}
     if (!benchConsumeBase(wb, BENCH_AMMO_COST)) {
         const [k] = Object.keys(BENCH_AMMO_COST).filter(key => benchStorageTotals(wb)[key] < BENCH_AMMO_COST[key]);
         setCraftStatus('Falta ' + (RESOURCE_ES[k] || 'material') + ' en la mesa o en los cofres asociados');
