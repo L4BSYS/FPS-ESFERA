@@ -17,15 +17,18 @@ var NET_CONFIG = {
   poseHzIdle: 0.2,              // 1 pose cada 5 s quieto
   poseHzEco: 1.5,               // modo ahorro
   poseHzHidden: 0,              // pestaña oculta: no publicar
-  presenceHeartbeatMs: 30000,   // presencia global cada 30 s
   poseHeartbeatMs: 5000,        // repetir pose aunque no cambie
   interestRadius: 48,           // sólo animar remotos dentro de este radio
+  remoteHideMs: 12000,          // ocultar avatares sin pose (idle = 5s, margen amplio)
   sectorSize: NET_SECTOR,
   sectorRadius: 1,              // 1 = 3x3 sectores
   maxPlayers: 5,
   chatMaxChars: 140,
   chatCooldownMs: 2000,
   chatHistory: 25,
+  // La presencia/chat por sectores es legado: el multijugador ahora vive en
+  // salas. Apagado por defecto para no generar tráfico ni superficie de abuso.
+  sectorPresence: false,
   debug: false
 };
 // Override opcional para pruebas o para inyectar Remote Config antes de cargar este script.
@@ -42,7 +45,6 @@ var netSector = null;
 var netLevel = null;   // escena/nivel actual: la red se aísla por nivel
 var netPlayerRef = null;
 var netPlayerMetaRef = null;
-var netPresRef = null;
 var netSubs = {}; // sector -> { playersRef, metaRef, ... }
 var netRoomId = null;       // Fase 1: si hay sala, la pose va a rooms/{id}/players
 var netRoomSubs = null;     // suscripción única a players/playersInfo de la sala
@@ -51,7 +53,6 @@ var netMeta = {}; // uid -> { n, c }
 var netChatSector = null;
 var netChatRef = null;
 var netChatLastSend = 0;
-var netLastPresence = 0;
 var netPoseSeq = 0;
 var remotes = {}; // uid -> {mesh, tag, tx,ty,tz, yaw, last, name, color, sector, state}
 var netCapsuleGeo = null;
@@ -128,7 +129,6 @@ function netSetRoom(roomId) {
   if (netRoomId) {
     netRoomSubscribe();
     netEnsureChat('room');
-    netPresenceWrite(true);
   } else {
     netEnsureChat(null);
   }
@@ -252,21 +252,6 @@ function netPoseHz() {
   if (NET_CONFIG.mode === 'eco') return netIsMoving() ? NET_CONFIG.poseHzEco : NET_CONFIG.poseHzIdle;
   return netIsMoving() ? NET_CONFIG.poseHzMoving : NET_CONFIG.poseHzIdle;
 }
-function netPresenceWrite(force) {
-  if (!netOn || !netPresRef) return;
-  const now = Date.now();
-  if (!force && now - netLastPresence < NET_CONFIG.presenceHeartbeatMs) return;
-  netLastPresence = now;
-  try {
-    netPresRef.update({
-      n: netName,
-      c: netColor,
-      s: netRoomId ? null : (netSector || null),
-      l: netLevel || null,
-      t: firebase.database.ServerValue.TIMESTAMP
-    });
-  } catch (e) {}
-}
 function wireNetAuth() {
   if (netOn) return;
   if (!window.firebase || !firebase.auth || !firebase.database) { setTimeout(wireNetAuth, 500); return; }
@@ -279,6 +264,8 @@ function wireNetAuth() {
 }
 function netStart(user) {
   try {
+    // Idempotente: un refresh de token no debe desarmar la sala ni la presencia.
+    if (netOn && netUid === user.uid) return;
     if (netOn) netStop();
     netUid = user.uid;
     netName = String(user.displayName || (user.email ? user.email.split('@')[0] : null) || 'Jugador').slice(0, 16);
@@ -287,32 +274,28 @@ function netStart(user) {
     netSector = null;
     netMeta = {};
     netPoseSeq = 0;
-    netLastPresence = 0;
     netStatsReset();
     // Sincronizar la escena activa para publicar en la red correcta
     try { if (typeof LEVEL !== 'undefined' && LEVEL.current) netLevel = LEVEL.current; } catch (e) {}
     const db = netDb();
     if (!db) return;
-    netPresRef = db.ref('presence/' + netUid);
-    try { netPresRef.onDisconnect().remove(); } catch (e) {}
-    netPresenceWrite(true);
+    // La presencia global no la lee nadie: no escribimos presence/{uid}.
+    // La presencia real vive en levels/{nivel}/sectors/... y rooms/{id}/playersInfo.
     console.log('Net: sesión como ' + netName);
   } catch (e) { console.error(e); }
 }
 function netStop() {
   try {
     netRemovePlayerNodes();
-    if (netPresRef) { try { netPresRef.onDisconnect().cancel(); } catch (e) {} try { netPresRef.remove(); } catch (e) {} }
     for (const k in netSubs) netUnsub(k);
     netRoomOff();
     netChatOff();
     Object.keys(remotes).forEach(netRemoveAvatar);
   } catch (e) {}
-  netOn = false; netUid = null; netSector = null; netPresRef = null; netLevel = null;
+  netOn = false; netUid = null; netSector = null; netLevel = null;
   netRoomId = null;
   netMeta = {};
   netPoseSeq = 0;
-  netLastPresence = 0;
 }
 function netUnsub(k) {
   const s = netSubs[k];
@@ -334,6 +317,7 @@ function netUnsub(k) {
   delete netSubs[k];
 }
 function netEnsureSectors(cx, cz) {
+  if (!NET_CONFIG.sectorPresence) return;
   const radius = Math.max(0, NET_CONFIG.sectorRadius || 0);
   const need = {};
   for (let dx = -radius; dx <= radius; dx++) {
@@ -529,6 +513,9 @@ function netUpdate(delta) {
   if (!netOn || !netUid) return;
   if (typeof player === 'undefined' || !player || !player.container) return;
   if (typeof document !== 'undefined' && document.hidden) return;
+  // Sin tráfico mientras el juego está pausado o hay un menú abierto.
+  if (typeof isGamePaused !== 'undefined' && isGamePaused) return;
+  if (typeof LEVEL !== 'undefined' && LEVEL && LEVEL.menuOpen) return;
 
   // Interpolar remotos siempre (sólo los que están dentro del radio de interés).
   try {
@@ -546,7 +533,7 @@ function netUpdate(delta) {
         r.tag.visible = false;
         continue;
       }
-      if (now - r.last > 6000) {
+      if (now - r.last > (NET_CONFIG.remoteHideMs || 12000)) {
         r.mesh.visible = false;
         r.tag.visible = false;
         continue;
@@ -568,11 +555,13 @@ function netUpdate(delta) {
     }
   } catch (e) {}
 
-  if (!netLevel && !netRoomId) { netPresenceWrite(false); return; }
+  if (!netLevel && !netRoomId) return;
+  // Fuera de una sala no publicamos poses por sectores (legado apagado).
+  if (!netRoomId && !NET_CONFIG.sectorPresence) return;
 
   // Publicar propio con tasa adaptativa.
   const hz = netPoseHz();
-  if (hz <= 0) { netPresenceWrite(false); return; }
+  if (hz <= 0) return;
   netAcc += (delta || 0.016);
   if (netAcc < (1 / hz)) return;
   netAcc = 0;
@@ -581,7 +570,7 @@ function netUpdate(delta) {
     const p = player.container.position;
     if (netRoomId) {
       netRoomEnsureRefs();
-    } else {
+    } else if (NET_CONFIG.sectorPresence) {
       const sector = netSectorOf(p.x, p.z);
       if (sector !== netSector) {
         const db = netDb();
@@ -599,7 +588,6 @@ function netUpdate(delta) {
         const cz = Math.floor(p.z / s);
         netEnsureSectors(cx, cz);
         netEnsureChat(sector);
-        netPresenceWrite(true);
         netLastPayload = '';
         netLastSent = 0;
       }
@@ -624,7 +612,6 @@ function netUpdate(delta) {
       netLastPayload = payload;
       netLastSent = nowMs;
     }
-    netPresenceWrite(false);
   } catch (e) {}
 }
 // --- Chat de sector (liviano: últimos 25, 140 caracteres) ---
@@ -636,6 +623,7 @@ function netEnsureChat(sector) {
   const box = document.getElementById('netChatLog');
   if (box) box.innerHTML = '';
   if (!sector) return; // sin escena: solo dejamos el panel listo
+  if (sector !== 'room' && !NET_CONFIG.sectorPresence) { netChatSector = null; return; }
   const db = netDb();
   if (!db) return;
   try {
@@ -686,6 +674,7 @@ function renderNetChat() {
 // Emote rápido: mensaje corto sin gastar teclado. Barato para el servidor.
 function netEmote(text) {
   if (!netOn || !netChatSector) return;
+  if (!netRoomId && !NET_CONFIG.sectorPresence) return;
   const now = Date.now();
   if (now - netChatLastSend < 700) return;
   netChatLastSend = now;
@@ -723,6 +712,7 @@ function toggleNetChat(force) {
 }
 function netChatSend() {
   if (!netOn || !netChatSector) return;
+  if (!netRoomId && !NET_CONFIG.sectorPresence) return;
   const input = document.getElementById('netChatInput');
   if (!input) return;
   const text = (input.value || '').trim().slice(0, NET_CONFIG.chatMaxChars || 140);

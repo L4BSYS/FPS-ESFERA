@@ -72,13 +72,13 @@
   <div id="mainMenu" class="rg-overlay"></div>
 
   <div id="gameOver" class="rg-overlay">
-      <h2 class="rg-title danger">☠ MORISTE</h2>
+      <h2 id="gameOverTitle" class="rg-title danger">☠ MORISTE</h2>
       <div id="gameOverStats" class="rg-stats"></div>
       <div>
-        <button onclick="respawnPlayer()" class="rg-btn rg-btn-primary">Reaparecer</button>
+        <button id="respawnBtn" onclick="respawnPlayer()" class="rg-btn rg-btn-primary">Reaparecer</button>
         <button onclick="window.location.reload()" class="rg-btn">Reiniciar</button>
       </div>
-      <div class="rg-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
+      <div id="gameOverHint" class="rg-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
   </div>
 
   <div id="invModal" class="rg-overlay">

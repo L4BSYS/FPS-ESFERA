@@ -239,6 +239,11 @@
       scene.add(block);
       placedBlocks.push(block);
       blockGrid.set(getGridKey(blockPos.x, blockPos.y, blockPos.z), block);
+      try {
+        if (typeof onlineBroadcastBlock === 'function') {
+          onlineBroadcastBlock({ x: blockPos.x, y: blockPos.y, z: blockPos.z, t: currentBlockType, r: block.rotation.y || 0 });
+        }
+      } catch (e) {}
       
       // Proceed block cost with placement
       if (typeof creatorMode === 'undefined' || !creatorMode) player.inventory.resources[currentBlockType] -= cost;
@@ -294,7 +299,7 @@
           }
       }
   }
-  function destroyBlock(block) {
+  function destroyBlock(block, quiet) {
       // Notify supported blocks
       block.userData.supportedBlocks.forEach(supported => {
           supported.userData.supportingBlocks = supported.userData.supportingBlocks.filter(
@@ -302,9 +307,15 @@
           );
           
           if (supported.userData.supportingBlocks.length === 0) {
-              collapseBlock(supported);
+              collapseBlock(supported, quiet);
           }
       });
+
+      try {
+        if (typeof onlineBroadcastBlock === 'function') {
+          onlineBroadcastBlock({ x: block.position.x, y: block.position.y, z: block.position.z, rm: 1 });
+        }
+      } catch (e) {}
 
       // Remove from scene
       const index = placedBlocks.indexOf(block);
@@ -312,15 +323,17 @@
       scene.remove(block);
       updateSpatialPartition();
       
-      createBlockDestructionEffect(block.position, block.userData.type);
-      showPlacementMessage(`Bloque destruido en ${block.position.toArray().map(n => n.toFixed(1))}`);
+      if (!quiet) {
+          createBlockDestructionEffect(block.position, block.userData.type);
+          showPlacementMessage(`Bloque destruido en ${block.position.toArray().map(n => n.toFixed(1))}`);
+      }
   }
-  function collapseBlock(block) {
+  function collapseBlock(block, quiet) {
       if (!block.userData.isFalling) {
           block.userData.isFalling = true;
           block.userData.vy = 0;
           gravityBlocks.push(block);
-          showPlacementMessage(`Se cae el bloque en ${block.position.toArray().map(n => n.toFixed(1))}`);
+          if (!quiet) showPlacementMessage(`Se cae el bloque en ${block.position.toArray().map(n => n.toFixed(1))}`);
       }
   }
 

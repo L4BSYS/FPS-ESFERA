@@ -269,7 +269,7 @@
       const btnRefresh = document.createElement('button');
       btnRefresh.textContent = 'Actualizar';
       btnRefresh.className = 'rg-btn rg-btn-small';
-      btnRefresh.addEventListener('click', () => refreshOnlineTab());
+      btnRefresh.addEventListener('click', () => refreshOnlineTab(true));
       onlineDiv.appendChild(btnRefresh);
       const btnChat = document.createElement('button');
       btnChat.textContent = 'Abrir chat';
@@ -286,39 +286,21 @@
       roomSetup.style.marginTop = '10px';
       const roomHint = document.createElement('div');
       roomHint.className = 'rg-hint';
-      roomHint.textContent = 'Sala coop de 2 a 5 jugadores. El host simula enemigos y base.';
+      roomHint.innerHTML = 'Sala coop de 2 a 5 jugadores. El host simula enemigos y base. ' +
+        'Para crear o unirte, abrí el menú <b>Con amigos</b>.';
       roomSetup.appendChild(roomHint);
-      const roomRow = document.createElement('div');
-      roomRow.style.display = 'flex';
-      roomRow.style.gap = '6px';
-      roomRow.style.flexWrap = 'wrap';
-      roomRow.style.marginTop = '6px';
-      const joinCode = document.createElement('input');
-      joinCode.id = 'onlineJoinCode';
-      joinCode.type = 'text';
-      joinCode.maxLength = 6;
-      joinCode.placeholder = 'CÓDIGO';
-      joinCode.autocomplete = 'off';
-      joinCode.style.width = '110px';
-      joinCode.style.textTransform = 'uppercase';
-      joinCode.addEventListener('keydown', (ev) => {
-          ev.stopPropagation();
-          if (ev.key === 'Enter') { try { onlineJoinFromInput(); } catch (e) {} }
+      const btnHub = document.createElement('button');
+      btnHub.id = 'onlineMenuBtn';
+      btnHub.textContent = 'Crear o unirme a una sala';
+      btnHub.className = 'rg-btn rg-btn-small rg-btn-primary';
+      btnHub.style.marginTop = '6px';
+      btnHub.addEventListener('click', () => {
+          try {
+              if (typeof onlineOpenMenu === 'function') onlineOpenMenu();
+              else if (typeof showMainMenu === 'function') showMainMenu('online');
+          } catch (e) {}
       });
-      const btnJoin = document.createElement('button');
-      btnJoin.id = 'onlineJoinBtn';
-      btnJoin.textContent = 'Unirme';
-      btnJoin.className = 'rg-btn rg-btn-small';
-      btnJoin.addEventListener('click', () => { try { onlineJoinFromInput(); } catch (e) {} });
-      const btnCreate = document.createElement('button');
-      btnCreate.id = 'onlineCreateBtn';
-      btnCreate.textContent = 'Crear sala';
-      btnCreate.className = 'rg-btn rg-btn-small rg-btn-primary';
-      btnCreate.addEventListener('click', () => { try { onlineCreateRoom(); } catch (e) {} });
-      roomRow.appendChild(joinCode);
-      roomRow.appendChild(btnJoin);
-      roomRow.appendChild(btnCreate);
-      roomSetup.appendChild(roomRow);
+      roomSetup.appendChild(btnHub);
       onlineDiv.appendChild(roomSetup);
 
       const roomPanel = document.createElement('div');
@@ -332,10 +314,16 @@
       roomTitle.className = 'rg-stats';
       roomTitle.innerHTML = 'Sala <b id="onlineRoomCode">—</b> ';
       const btnCopy = document.createElement('button');
-      btnCopy.textContent = 'Copiar';
+      btnCopy.textContent = 'Copiar código';
       btnCopy.className = 'rg-btn rg-btn-small';
       btnCopy.addEventListener('click', () => { try { onlineCopyCode(); } catch (e) {} });
       roomTitle.appendChild(btnCopy);
+      const btnInvite = document.createElement('button');
+      btnInvite.id = 'onlineInviteBtn';
+      btnInvite.textContent = 'Copiar link';
+      btnInvite.className = 'rg-btn rg-btn-small rg-btn-primary';
+      btnInvite.addEventListener('click', () => { try { onlineCopyInvite(); } catch (e) {} });
+      roomTitle.appendChild(btnInvite);
       roomPanel.appendChild(roomTitle);
       const roomRole = document.createElement('div');
       roomRole.id = 'onlineRoomRole';

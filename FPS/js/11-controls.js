@@ -71,6 +71,7 @@
                   if (typeof tryOpenWorldContainer === 'function' && tryOpenWorldContainer()) return;
                   if (typeof tryOpenCartel === 'function' && tryOpenCartel()) return;
                   if (typeof tryOpenTotem === 'function' && tryOpenTotem()) return;
+                  if (typeof onlineTryRevive === 'function' && onlineTryRevive()) return;
                   player.interactOrPickup();
               }
           }

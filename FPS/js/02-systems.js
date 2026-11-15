@@ -592,6 +592,11 @@ function updateBenchBar(wb) {
 }
 function damageWorkbench(wb, n) {
   if (!wb || wb.hp <= 0) return;
+  // En coop la base la simula el host; los invitados reciben el HP por evento.
+  try {
+    if (typeof onlineIsActive === 'function' && onlineIsActive() &&
+        typeof ONLINE !== 'undefined' && ONLINE.meta && ONLINE.meta.status === 'playing' && !ONLINE.isHost) return;
+  } catch (e) {}
   wb.hp -= n;
   lastBenchDamageTs = performance.now();
   updateBenchBar(wb);
@@ -599,6 +604,8 @@ function damageWorkbench(wb, n) {
       wb.hp = 0;
       destroyBench(wb, false);
   }
+  // El host es la autoridad de la base en coop: replica el HP a los invitados.
+  try { if (typeof onlinePublishBaseDamage === 'function') onlinePublishBaseDamage(); } catch (e) {}
 }
 function destroyBench(wb, quiet) {
   if (!wb) return;
@@ -2093,9 +2100,15 @@ function updateWaveManager() {
   } catch (e) {}
   if (isGamePaused) return;
   if (typeof creatorMode !== 'undefined' && creatorMode) return;
-  try {
-    if (typeof player !== 'undefined' && player && player.health <= 0) return; // no respawn after game over
-  } catch (e) {}
+  const online = (typeof onlineIsActive === 'function' && onlineIsActive() &&
+      typeof ONLINE !== 'undefined' && ONLINE.meta && ONLINE.meta.status === 'playing');
+  // En coop sólo el host decide las oleadas; los invitados las reciben por evento.
+  if (online && !ONLINE.isHost) { waveRespawnAt = 0; return; }
+  if (!online) {
+    try {
+      if (typeof player !== 'undefined' && player && player.health <= 0) return; // no respawn after game over
+    } catch (e) {}
+  }
   // Sin puntos de spawn, no hay oleadas (Playground arma puntos al prender el tótem).
   if (typeof enemySpawns === 'undefined' || !enemySpawns.length) { waveRespawnAt = 0; return; }
   const alive = npcs.filter((n) => n && n.health > 0).length;
@@ -2112,6 +2125,17 @@ function updateWaveManager() {
   if (performance.now() >= waveRespawnAt) {
       waveRespawnAt = 0;
       waveNumber++;
+      if (online) {
+          // Puntos deterministas: todos los clientes generan los mismos enemigos.
+          const pts = (typeof onlineWaveSpawns === 'function') ? onlineWaveSpawns(waveNumber) : [];
+          pts.forEach(function (p) {
+              try { spawnRobot(new THREE.Vector3(p.x, 0, p.z)); } catch (e) {}
+          });
+          try { if (typeof ONLINE !== 'undefined') ONLINE.spawnedWave = waveNumber; } catch (e) {}
+          try { if (typeof onlinePublishEvent === 'function') onlinePublishEvent({ k: 'wave', w: waveNumber, n: pts.length }); } catch (e) {}
+          if (typeof showMessage === 'function') showMessage('¡Oleada ' + waveNumber + ': ' + pts.length + ' enemigos en camino!');
+          return;
+      }
       const count = Math.min(2 + waveNumber, 6);
       const pts = enemySpawns;
       for (let k = 0; k < count; k++) {

@@ -753,27 +753,43 @@ function applyPausePanels() {
 function showGameOver() {
   try { if (typeof player !== 'undefined' && player) player.health = Math.min(player.health, 0); } catch (e) {}
   try { if (typeof cancelPlacement === 'function') cancelPlacement(true); } catch (e) {}
+  const onlineDown = (typeof onlineIsActive === 'function' && onlineIsActive() &&
+      typeof ONLINE !== 'undefined' && ONLINE.meta && ONLINE.meta.status === 'playing');
+  if (onlineDown && typeof onlineMarkDown === 'function') onlineMarkDown();
   const go = document.getElementById('gameOver');
   if (go && go.style.display !== 'flex') {
       const stats = document.getElementById('gameOverStats');
       if (stats) {
-          let waveTxt = '0';
-          try { waveTxt = String(waveNumber); } catch (e) {}
-          let kills = 0;
-          try { kills = enemiesKilled; } catch (e) {}
-          let t = '0:00';
-          try { t = fmtRunTime(Date.now() - runStartTs); } catch (e) {}
-          stats.innerHTML = 'Sobreviviste ' + t + ' &middot; Bajas ' + kills +
-              ' &middot; Oleada ' + waveTxt + ' &middot; Bloques ' + placedBlocks.length;
+          if (onlineDown) {
+              stats.innerHTML = '☠ Estás caído. Un compañero puede revivirte acercándose y apretando <b>E</b>.';
+          } else {
+              let waveTxt = '0';
+              try { waveTxt = String(waveNumber); } catch (e) {}
+              let kills = 0;
+              try { kills = enemiesKilled; } catch (e) {}
+              let t = '0:00';
+              try { t = fmtRunTime(Date.now() - runStartTs); } catch (e) {}
+              stats.innerHTML = 'Sobreviviste ' + t + ' &middot; Bajas ' + kills +
+                  ' &middot; Oleada ' + waveTxt + ' &middot; Bloques ' + placedBlocks.length;
+          }
       }
       go.style.display = 'flex';
   }
+  const respawnBtn = document.getElementById('respawnBtn');
+  if (respawnBtn) respawnBtn.style.display = onlineDown ? 'none' : 'inline-block';
+  const goTitle = document.getElementById('gameOverTitle');
+  if (goTitle) goTitle.textContent = onlineDown ? '☠ ESTÁS CAÍDO' : '☠ MORISTE';
+  const goHint = document.getElementById('gameOverHint');
+  if (goHint) goHint.textContent = onlineDown
+      ? 'Un compañero puede revivirte acercándose y apretando E. Si nadie llega, te recuperás solo en 20 s.'
+      : 'Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.';
   console.log("Player defeated!");
   isGamePaused = true;
   try { document.exitPointerLock(); } catch (e) {}
 }
 function respawnPlayer() {
   if (typeof player === 'undefined' || !player) return;
+  try { if (typeof onlineClearDown === 'function') onlineClearDown(); } catch (e) {}
   try {
       player.health = player.maxHealth || 100;
       if (typeof playerSpawnPos !== 'undefined' && playerSpawnPos) player.container.position.copy(playerSpawnPos);
@@ -789,6 +805,12 @@ function respawnPlayer() {
   runStartTs = Date.now();
   const go = document.getElementById('gameOver');
   if (go) go.style.display = 'none';
+  const respawnBtn = document.getElementById('respawnBtn');
+  if (respawnBtn) respawnBtn.style.display = 'inline-block';
+  const goTitle = document.getElementById('gameOverTitle');
+  if (goTitle) goTitle.textContent = '☠ MORISTE';
+  const goHint = document.getElementById('gameOverHint');
+  if (goHint) goHint.textContent = 'Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.';
   isGamePaused = false;
   if (typeof pauseMenu !== 'undefined' && pauseMenu) pauseMenu.style.display = 'none';
   lockPointer();
@@ -917,7 +939,7 @@ async function loadSharedScene() {
       } catch (e) {}
       setPauseStatus('Compartida cargada (' + n + ' bloques, ' + m + ' objetos)');
       try { showMessage('Escena compartida cargada'); } catch (e) {}
-      refreshOnlineTab();
+      refreshOnlineTab(true);
   } catch (e) {
       console.error(e);
       setPauseStatus('No se pudo bajar: ' + ((e && e.message) || e));
@@ -941,19 +963,17 @@ async function publishSharedScene() {
           owner: user.uid,
           updatedByName: user.displayName || (user.email ? user.email.split('@')[0] : 'alguien')
       });
-      try {
-          const back = await sharedSceneDoc().get();
-          const dd = back.data();
-          if (dd && dd.updatedAt && dd.updatedAt.toMillis) localStorage.setItem('lagrieta_shared_ts', JSON.stringify({ ts: dd.updatedAt.toMillis() }));
-      } catch (e) {}
+      // Sin lectura de confirmación: ahorramos una operación por publicación.
+      _sharedInfoCache = { ts: 0, text: '' };
       setPauseStatus('¡Publicada! Otros la ven en Online.');
-      refreshOnlineTab();
+      refreshOnlineTab(true);
   } catch (e) {
       console.error(e);
       setPauseStatus('No se pudo publicar: ' + ((e && e.message) || e));
   }
 }
-async function refreshOnlineTab() {
+var _sharedInfoCache = { ts: 0, text: '' };
+async function refreshOnlineTab(force) {
   const st = document.getElementById('onlineStatus');
   const pl = document.getElementById('onlinePlayers');
   const si = document.getElementById('sharedInfo');
@@ -991,8 +1011,17 @@ async function refreshOnlineTab() {
   if (si) {
       try {
           if (!window.firebase || !firebase.firestore) { si.textContent = ''; return; }
+          const now = Date.now();
+          if (!force && _sharedInfoCache.ts && now - _sharedInfoCache.ts < 60000) {
+              si.textContent = _sharedInfoCache.text;
+              return;
+          }
           const snap = await sharedSceneDoc().get();
-          if (!snap.exists) { si.textContent = 'Aún nadie publicó escena compartida.'; return; }
+          if (!snap.exists) {
+              si.textContent = 'Aún nadie publicó escena compartida.';
+              _sharedInfoCache = { ts: Date.now(), text: si.textContent };
+              return;
+          }
           const d = snap.data();
           const when = (d.updatedAt && d.updatedAt.toDate) ? d.updatedAt.toDate() : null;
           const meta = sharedMeta();
@@ -1000,6 +1029,7 @@ async function refreshOnlineTab() {
           si.textContent = 'Compartida por ' + (d.updatedByName || '?') +
               (when ? ' el ' + when.toLocaleString() : '') +
               (fresh ? ' (ya la tenés)' : ' ¡HAY VERSIÓN NUEVA!');
+          _sharedInfoCache = { ts: Date.now(), text: si.textContent };
       } catch (e) { si.textContent = ''; }
   }
 }

@@ -15,6 +15,7 @@ var LEVEL = {
   working: null,         // nivel que se está editando
   transitioning: false,
   loading: false,        // true mientras loadLevel reconstruye la escena
+  transientWorld: false, // mundo de sala coop: nunca se guarda en el snapshot local
   menuOpen: false,
   menuView: 'home',
   menuBusy: false,
@@ -352,6 +353,8 @@ function levelSnapshotEligible(def) {
 }
 function saveLevelSnapshot(id) {
   if (!id || typeof snapshotScene !== 'function') return false;
+  // Los mundos de sala coop son efímeros: jamás deben pisar la partida local.
+  if (typeof LEVEL !== 'undefined' && LEVEL && LEVEL.transientWorld) return false;
   if (typeof tutorialDone === 'function' && !tutorialDone()) return false;
   const def = resolveLevelDef(id);
   if (!levelSnapshotEligible(def)) return false;
@@ -398,9 +401,22 @@ function loadLevel(id, opts) {
   if (!def) { try { lvToast('No encontré el mundo: ' + id); } catch (e) {} return; }
   LEVEL.transitioning = false;
   LEVEL.loading = true;
+  // Semilla determinista para salas coop: todos los clientes generan el mismo mundo.
+  const seedNum = (opts.seed != null && isFinite(Number(opts.seed))) ? (Number(opts.seed) >>> 0) : null;
+  let restoreRandom = null;
+  if (seedNum != null) {
+    const originalRandom = Math.random;
+    let s = seedNum || 1;
+    Math.random = function () {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+    restoreRandom = function () { Math.random = originalRandom; };
+  }
   try {
-    // Guardamos cómo quedó el mundo anterior (base, cofres, recursos).
-    if (LEVEL.current) saveLevelSnapshot(LEVEL.current);
+    // Guardamos cómo quedó el mundo anterior (base, cofres, recursos) sólo si era local.
+    if (LEVEL.current && !LEVEL.transientWorld) saveLevelSnapshot(LEVEL.current);
+    LEVEL.transientWorld = !!opts.transientWorld;
     try { if (typeof resetDirector === 'function') resetDirector(); } catch (e) {}
     teardownLevel();
     buildRoom(def);
@@ -444,6 +460,7 @@ function loadLevel(id, opts) {
     try { lvToast('📍 ' + def.name); } catch (e) {}
   } finally {
     LEVEL.loading = false;
+    if (restoreRandom) restoreRandom();
   }
   // Recién acá la mochila queda marcada como persistente y se guarda.
   if (opts.from === 'tutorial' && def.id !== 'tutorial') markTutorialDone();
@@ -716,6 +733,7 @@ function renderMainMenu() {
   [
     ['home', '▶', 'Jugar'],
     ['mine', '🗺', 'Mis mundos'],
+    ['online', '👥', 'Con amigos'],
     ['community', '🌐', 'Comunidad'],
     ['create', '➕', 'Crear mundo']
   ].forEach(function (item) {
@@ -761,6 +779,7 @@ function renderMainMenu() {
   m.appendChild(shell);
 
   if (LEVEL.menuView === 'mine') renderMine(body);
+  else if (LEVEL.menuView === 'online') renderOnlineMenu(body);
   else if (LEVEL.menuView === 'community') renderCommunity(body);
   else if (LEVEL.menuView === 'create') renderCreateForm(body);
   else if (LEVEL.menuView === 'editorial') renderEditorView(body);
@@ -771,7 +790,7 @@ function mainMenuHeader() {
   head.className = 'rg-shell-head';
   const title = document.createElement('h2');
   title.className = 'rg-title';
-  const labels = { home: 'Jugar', start: 'Jugar', mine: 'Mis mundos', community: 'Comunidad', create: 'Crear mundo', editorial: 'Editar mundo' };
+  const labels = { home: 'Jugar', start: 'Jugar', mine: 'Mis mundos', online: 'Jugar con amigos', community: 'Comunidad', create: 'Crear mundo', editorial: 'Editar mundo' };
   title.textContent = labels[LEVEL.menuView] || 'LA GRIETA';
   head.appendChild(title);
   const who = document.createElement('div');
@@ -799,10 +818,22 @@ function renderHome(body) {
 
   const actions = document.createElement('div');
   actions.className = 'rg-home-actions';
-  actions.appendChild(lvBtn('▶ Jugar La Grieta', 'rg-btn-primary', function () { playLevel('mundo-1'); }));
+  actions.appendChild(lvBtn('▶ Jugar solo', 'rg-btn-primary', function () { playLevel('mundo-1'); }));
+  actions.appendChild(lvBtn('👥 Jugar con amigos', 'rg-btn-primary', function () {
+    if (typeof onlineOpenMenu === 'function') onlineOpenMenu();
+    else try { lvToast('El modo online se está cargando…'); } catch (e) {}
+  }));
+  actions.appendChild(lvBtn('🗺 Mis mundos', '', function () { showMainMenu('mine'); }));
   actions.appendChild(lvBtn('🎓 Tutorial', '', function () { playLevel('tutorial'); }));
   actions.appendChild(lvBtn('🧪 Playground', '', function () { playLevel('playground'); }));
   hero.appendChild(actions);
+
+  const modeNote = document.createElement('div');
+  modeNote.className = 'rg-hint';
+  modeNote.style.marginTop = '12px';
+  modeNote.innerHTML = '<b>Jugar solo</b> usa tu partida y tus mundos guardados en este navegador. ' +
+    '<b>Jugar con amigos</b> abre una sala coop de 2 a 5 jugadores con código o link de invitación.';
+  hero.appendChild(modeNote);
   body.appendChild(hero);
 
   const grid = document.createElement('div');
@@ -843,7 +874,226 @@ function renderHome(body) {
     body.appendChild(note);
   }
 }
+// Entrada única al multijugador: crear sala, unirse por código o gestionar
+// la sala activa. Vive en el menú principal (no en el menú de pausa) para que
+// "Jugar con amigos" sea un destino claro y no un truco de pausa.
+function renderOnlineMenu(body) {
+  const hero = document.createElement('div');
+  hero.className = 'rg-home-hero';
+  const kicker = document.createElement('div');
+  kicker.className = 'rg-home-kicker';
+  kicker.textContent = 'Multijugador cooperativo';
+  hero.appendChild(kicker);
+  const title = document.createElement('div');
+  title.className = 'rg-home-title';
+  title.textContent = 'JUGÁ CON AMIGOS';
+  hero.appendChild(title);
+  const desc = document.createElement('div');
+  desc.className = 'rg-home-desc';
+  desc.innerHTML = 'Creá una sala y compartí el <b>código</b> o el <b>link</b>. ' +
+    'La partida corre en el mundo del host y se sincroniza por Firebase: no hace falta servidor dedicado. ' +
+    'Para jugar solo, volvé a <b>Jugar</b> o <b>Mis mundos</b>.';
+  hero.appendChild(desc);
+  body.appendChild(hero);
+
+  // --- Estado de sesión ---
+  const auth = document.createElement('div');
+  auth.id = 'mmOnlineAuth';
+  auth.className = 'rg-section';
+  auth.style.marginTop = '12px';
+  const authHint = document.createElement('div');
+  authHint.id = 'mmOnlineAuthHint';
+  authHint.className = 'rg-hint';
+  auth.appendChild(authHint);
+  const authBtn = document.createElement('button');
+  authBtn.id = 'mmOnlineLoginBtn';
+  authBtn.type = 'button';
+  authBtn.className = 'rg-btn rg-btn-small rg-btn-primary';
+  authBtn.textContent = 'Ingresar con Google';
+  authBtn.addEventListener('click', function () { lvLogin(); });
+  auth.appendChild(authBtn);
+  body.appendChild(auth);
+
+  // --- Crear / unirse ---
+  const setup = document.createElement('div');
+  setup.id = 'mmOnlineSetup';
+  setup.className = 'rg-home-grid';
+  setup.style.marginTop = '14px';
+
+  const createCard = document.createElement('div');
+  createCard.className = 'rg-home-card';
+  const createTitle = document.createElement('h3');
+  createTitle.textContent = 'Crear sala';
+  createCard.appendChild(createTitle);
+  const createDesc = document.createElement('p');
+  createDesc.textContent = 'Vos sos el host. Elegí el mundo, creá la sala y pasale el código a tus amigos.';
+  createCard.appendChild(createDesc);
+  const levelRow = document.createElement('div');
+  levelRow.className = 'rg-menubtns';
+  levelRow.style.justifyContent = 'flex-start';
+  levelRow.style.marginTop = '8px';
+  const levelSel = document.createElement('select');
+  levelSel.id = 'mmOnlineLevel';
+  levelSel.className = 'rg-select';
+  const defs = (typeof LEVEL !== 'undefined' && LEVEL.defs) ? LEVEL.defs : {};
+  Object.keys(defs).forEach(function (id) {
+    const def = defs[id];
+    if (!def || def.kind === 'user' || def.shared || def.kind === 'tutorial') return;
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = def.name || id;
+    levelSel.appendChild(o);
+  });
+  if (!levelSel.options.length) {
+    const o = document.createElement('option');
+    o.value = 'mundo-1';
+    o.textContent = 'La Grieta';
+    levelSel.appendChild(o);
+  }
+  levelSel.value = 'mundo-1';
+  levelRow.appendChild(levelSel);
+  createCard.appendChild(levelRow);
+  const createRow = document.createElement('div');
+  createRow.className = 'rg-menubtns';
+  createRow.style.justifyContent = 'flex-start';
+  const createBtn = document.createElement('button');
+  createBtn.id = 'mmOnlineCreateBtn';
+  createBtn.type = 'button';
+  createBtn.className = 'rg-btn rg-btn-small rg-btn-primary';
+  createBtn.textContent = 'Crear sala';
+  createBtn.addEventListener('click', function () {
+    const id = levelSel.value || 'mundo-1';
+    try { onlineCreateRoom({ levelId: id }); } catch (e) {}
+  });
+  createRow.appendChild(createBtn);
+  createCard.appendChild(createRow);
+  setup.appendChild(createCard);
+
+  const joinCard = document.createElement('div');
+  joinCard.className = 'rg-home-card';
+  const joinTitle = document.createElement('h3');
+  joinTitle.textContent = 'Unirme a una sala';
+  joinCard.appendChild(joinTitle);
+  const joinDesc = document.createElement('p');
+  joinDesc.textContent = 'Pegá el código de 6 caracteres que te pasó el host, o abrí el link de invitación.';
+  joinCard.appendChild(joinDesc);
+  const joinRow = document.createElement('div');
+  joinRow.className = 'rg-menubtns';
+  joinRow.style.justifyContent = 'flex-start';
+  joinRow.style.marginTop = '8px';
+  const joinInput = document.createElement('input');
+  joinInput.id = 'mmOnlineJoinCode';
+  joinInput.type = 'text';
+  joinInput.maxLength = 6;
+  joinInput.placeholder = 'CÓDIGO';
+  joinInput.autocomplete = 'off';
+  joinInput.className = 'rg-select';
+  joinInput.style.width = '130px';
+  joinInput.style.textTransform = 'uppercase';
+  joinInput.addEventListener('keydown', function (ev) {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') { try { onlineJoinFromMenuInput(); } catch (e) {} }
+  });
+  const joinBtn = document.createElement('button');
+  joinBtn.id = 'mmOnlineJoinBtn';
+  joinBtn.type = 'button';
+  joinBtn.className = 'rg-btn rg-btn-small';
+  joinBtn.textContent = 'Unirme';
+  joinBtn.addEventListener('click', function () { try { onlineJoinFromMenuInput(); } catch (e) {} });
+  joinRow.appendChild(joinInput);
+  joinRow.appendChild(joinBtn);
+  joinCard.appendChild(joinRow);
+  setup.appendChild(joinCard);
+  body.appendChild(setup);
+
+  // --- Sala activa ---
+  const panel = document.createElement('div');
+  panel.id = 'mmOnlinePanel';
+  panel.className = 'rg-home-card';
+  panel.style.display = 'none';
+  panel.style.marginTop = '14px';
+  const panelTitle = document.createElement('h3');
+  panelTitle.textContent = 'Tu sala';
+  panel.appendChild(panelTitle);
+  const codeRow = document.createElement('div');
+  codeRow.className = 'rg-stats';
+  codeRow.innerHTML = 'Código: <b id="mmOnlineCode">—</b> ';
+  const copyCode = document.createElement('button');
+  copyCode.type = 'button';
+  copyCode.className = 'rg-btn rg-btn-small';
+  copyCode.textContent = 'Copiar código';
+  copyCode.addEventListener('click', function () { try { onlineCopyCode(); } catch (e) {} });
+  codeRow.appendChild(copyCode);
+  const copyInvite = document.createElement('button');
+  copyInvite.type = 'button';
+  copyInvite.className = 'rg-btn rg-btn-small rg-btn-primary';
+  copyInvite.textContent = 'Copiar link';
+  copyInvite.addEventListener('click', function () { try { onlineCopyInvite(); } catch (e) {} });
+  codeRow.appendChild(copyInvite);
+  panel.appendChild(codeRow);
+  const roleEl = document.createElement('div');
+  roleEl.id = 'mmOnlineRole';
+  roleEl.className = 'rg-hint';
+  panel.appendChild(roleEl);
+  const stateEl = document.createElement('div');
+  stateEl.id = 'mmOnlineState';
+  stateEl.className = 'rg-stats';
+  panel.appendChild(stateEl);
+  const playersEl = document.createElement('div');
+  playersEl.id = 'mmOnlinePlayers';
+  playersEl.className = 'rg-hint';
+  panel.appendChild(playersEl);
+  const actionsRow = document.createElement('div');
+  actionsRow.className = 'rg-menubtns';
+  actionsRow.style.justifyContent = 'flex-start';
+  actionsRow.style.marginTop = '10px';
+  const readyBtn = document.createElement('button');
+  readyBtn.id = 'mmOnlineReadyBtn';
+  readyBtn.type = 'button';
+  readyBtn.className = 'rg-btn rg-btn-small';
+  readyBtn.textContent = 'Estoy listo';
+  readyBtn.addEventListener('click', function () { try { onlineSetReady(); } catch (e) {} });
+  const startBtn = document.createElement('button');
+  startBtn.id = 'mmOnlineStartBtn';
+  startBtn.type = 'button';
+  startBtn.className = 'rg-btn rg-btn-small rg-btn-primary';
+  startBtn.textContent = 'Iniciar partida';
+  startBtn.addEventListener('click', function () { try { onlineStartGame(); } catch (e) {} });
+  const enterBtn = document.createElement('button');
+  enterBtn.id = 'mmOnlineEnterBtn';
+  enterBtn.type = 'button';
+  enterBtn.className = 'rg-btn rg-btn-small rg-btn-primary';
+  enterBtn.textContent = 'Volver al juego';
+  enterBtn.style.display = 'none';
+  enterBtn.addEventListener('click', function () { try { onlineEnterGame(); } catch (e) {} });
+  const leaveBtn = document.createElement('button');
+  leaveBtn.id = 'mmOnlineLeaveBtn';
+  leaveBtn.type = 'button';
+  leaveBtn.className = 'rg-btn rg-btn-small rg-btn-danger';
+  leaveBtn.textContent = 'Salir de la sala';
+  leaveBtn.addEventListener('click', function () { try { onlineLeaveRoom(); } catch (e) {} });
+  actionsRow.appendChild(readyBtn);
+  actionsRow.appendChild(startBtn);
+  actionsRow.appendChild(enterBtn);
+  actionsRow.appendChild(leaveBtn);
+  panel.appendChild(actionsRow);
+  body.appendChild(panel);
+
+  const footNote = document.createElement('div');
+  footNote.className = 'rg-hint';
+  footNote.style.marginTop = '12px';
+  footNote.textContent = 'Mientras esperás en el lobby podés seguir en el menú. Cuando el host inicia, todos entran juntos al mismo mundo.';
+  body.appendChild(footNote);
+
+  setTimeout(function () { try { onlineRefreshUI(); } catch (e) {} }, 60);
+}
+
 function renderMine(body) {
+  const localHint = document.createElement('div');
+  localHint.className = 'rg-hint';
+  localHint.style.marginBottom = '8px';
+  localHint.innerHTML = 'Tus mundos guardados para jugar solo. Para una sala coop en vivo, usá <b>Con amigos</b>.';
+  body.appendChild(localHint);
   if (!currentUser()) {
     const h = document.createElement('div');
     h.className = 'rg-hint';
@@ -883,6 +1133,11 @@ function renderMine(body) {
   if (!hasAny) list.innerHTML = '<div class="rg-hint">Todavía no tenés mundos. Creá uno.</div>';
 }
 function renderCommunity(body) {
+  const communityHint = document.createElement('div');
+  communityHint.className = 'rg-hint';
+  communityHint.style.marginBottom = '8px';
+  communityHint.innerHTML = 'Mundos publicados para jugar cuando quieras. Para salas coop en vivo, usá <b>Con amigos</b>.';
+  body.appendChild(communityHint);
   if (!fbReady()) {
     const h = document.createElement('div');
     h.className = 'rg-hint';
