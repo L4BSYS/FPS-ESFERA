@@ -1,0 +1,174 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    // Create must stamp owner; updates cannot steal or reassign a published world.
+    // Docs without owner (legacy) can be claimed once by setting owner = uid.
+    function fpsOwnedCreate() {
+      return signedIn() && request.resource.data.owner == request.auth.uid;
+    }
+    function fpsOwnedUpdate() {
+      return signedIn()
+             && request.resource.data.owner == request.auth.uid
+             && (!('owner' in resource.data) || resource.data.owner == request.auth.uid);
+    }
+    function fpsOwnedDelete() {
+      return signedIn() && resource.data.owner == request.auth.uid;
+    }
+
+    // 'users' collection
+    match /users/{userId} {
+      // Users can read their own documents; admins can read all
+      allow read: if request.auth != null && (request.auth.uid == userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+      // Users can create their own doc but cannot set privileged fields
+      allow create: if request.auth != null && request.auth.uid == userId
+                    && !('isAdmin' in request.resource.data)
+                    && !('role' in request.resource.data)
+                    && !('credits' in request.resource.data)
+                    && !('wallet' in request.resource.data)
+                    && !('paymentMethods' in request.resource.data);
+      // Users can update only safe fields
+      allow update: if request.auth != null && request.auth.uid == userId
+                    && !(('isAdmin' in request.resource.data && request.resource.data.isAdmin != resource.data.isAdmin))
+                    && !(('role' in request.resource.data && request.resource.data.role != resource.data.role))
+                    && !('credits' in request.resource.data)
+                    && !('wallet' in request.resource.data)
+                    && !('paymentMethods' in request.resource.data)
+                    && !('mainCurrency' in request.resource.data);
+      // Admins can update/delete
+      allow update, delete: if request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;      
+
+      // 'transactions' subcollection
+      match /transactions/{transactionId} {
+        // Users can read their own transactions
+        allow read: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // 'payments' subcollection
+      match /payments/{paymentId} {
+        // Users can read their own payments
+        allow read: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // 'merchant_orders' subcollection
+      match /merchant_orders/{orderId} {
+        // Users can read their own merchant_orders
+        allow read: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // 'subscriptions' subcollection
+      match /subscriptions/{subscriptionId} {
+        // Users can read their own subscriptions
+        allow read: if request.auth != null && request.auth.uid == userId;
+      }
+    
+    }
+
+    // 'configuration/credits/currencies/Soberanos' document
+    match /configuration/credits/currencies/Soberanos {
+      // All authenticated users can read this document
+      allow read: if request.auth != null;
+      // Admins can read and write all documents
+      allow read, write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+
+    }
+
+    // 'cashflow' collection
+    match /cashflow/{document=**} {
+      // Admins can read all documents
+      allow read: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // 'notifications' collection
+    match /notifications/{document=**} {
+      allow write: if false;
+      // Admins can read all documents
+      allow read: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // 'configuration' collection
+    match /configuration/products/currencies/{currencyId} {
+      // All authenticated users can read
+      allow read: if request.auth != null;
+      // Admins can read and write all documents
+      allow read, write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+    
+    match /configuration/products/categories/{categoryId} {
+      // All authenticated users can read
+      allow read: if request.auth != null;
+      // Admins can read and write all documents
+      allow read, write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // 'products' collection
+    match /products/shop/items/{document=**} {
+      // All authenticated users can read
+      allow read: if request.auth != null;
+      // Admins can read and write all documents
+      allow read, write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+    // 'subscriptions' collection
+    match /products/subscriptions/mecenas/{document=**} {
+      // All authenticated users can read
+      allow read: if request.auth != null;
+      // Admins can read and write all documents
+      allow read, write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // FPS scenes - users own their scenes
+    match /fps/scenes/{userId}/{sceneId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // FPS worlds/levels - users own their worlds, stored under fps/levels/{uid}/{levelId}
+    match /fps/levels/{userId}/{levelId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // FPS shared worlds — signed-in players can browse; only the owner can change their publish
+    match /fpsSharedLevels/{levelId} {
+      allow read: if signedIn();
+      allow create: if fpsOwnedCreate();
+      allow update: if fpsOwnedUpdate();
+      allow delete: if fpsOwnedDelete();
+    }
+
+    // FPS shared scene (legacy single-doc publish)
+    match /fpsShared/{docId} {
+      allow read: if signedIn();
+      allow create: if fpsOwnedCreate();
+      allow update: if fpsOwnedUpdate();
+      allow delete: if fpsOwnedDelete();
+    }
+
+
+    // Updated rules for the "game" collection
+    match /game/intro/scores/{uid} {
+      // Allow any authenticated user to read the scoreboard list
+      allow read: if request.auth != null;
+      // Allow users to write their own scores with safe fields
+      allow create, update: if request.auth != null && request.auth.uid == uid
+                            && request.resource.data.keys().hasOnly(['score','level','time','updatedAt','name','avatar'])
+                            && (!('score' in request.resource.data) || (request.resource.data.score is number && request.resource.data.score >= 0));
+      allow delete: if request.auth != null && (request.auth.uid == uid || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true);
+      allow read, write: if get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+  }  
+}
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Matches any file in the `user-files` folder with a path that starts with the
+    // authenticated user's Firebase UID.
+    match /user-files/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

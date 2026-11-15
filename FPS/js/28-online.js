@@ -35,6 +35,7 @@ var ONLINE_CONFIG = {
   maxChatMessages: 200,
   actionRetentionMs: 20000,
   buildActionMaxPerSec: 8,
+  maxBenchesPerPlayer: 4,
   staleRoomMs: 900000 // 15 min sin latido: sala abandonada
 };
 
@@ -53,6 +54,7 @@ var ONLINE = {
   worldLoading: false,
   tick: 0,
   lastHostBeat: 0,
+  lastHostMetaAt: 0,
   lastSnapshot: 0,
   lastSeen: 0,
   lastClaim: 0,
@@ -67,6 +69,9 @@ var ONLINE = {
   buildReady: false,
   buildQueue: {},
   applyingRemote: false,
+  applyingWorld: false,
+  applyingRemoteBench: false,
+  lastBenchSync: 0,
   pendingWave: 0,
   spawnedWave: 0,
   eventSince: 0,
@@ -458,6 +463,7 @@ async function onlineAttach(opts) {
   ONLINE.error = '';
   ONLINE.tick = 0;
   ONLINE.lastHostBeat = 0;
+  ONLINE.lastHostMetaAt = opts.meta ? Date.now() : 0;
   ONLINE.lastSnapshot = 0;
   ONLINE.lastSeen = 0;
   ONLINE.lastClaim = 0;
@@ -487,6 +493,9 @@ async function onlineAttach(opts) {
   ONLINE.buildRate = {};
   ONLINE.lastActionPrune = 0;
   ONLINE.lastChatPrune = 0;
+  ONLINE.applyingWorld = false;
+  ONLINE.applyingRemoteBench = false;
+  ONLINE.lastBenchSync = 0;
   onlineStopActions();
 
   const db = onlineDb();
@@ -554,6 +563,7 @@ function onlineListen() {
     }
     const m = snap.val() || {};
     ONLINE.meta = m;
+    ONLINE.lastHostMetaAt = Date.now();
     ONLINE.roomLevel = onlineSafeLevelId(m.levelId || ONLINE.roomLevel);
     if (m.seed) ONLINE.seed = Number(m.seed) >>> 0;
     const uid = onlineUser() && onlineUser().uid;
@@ -575,7 +585,10 @@ function onlineListen() {
   };
   const onInfo = function (snap) {
     if (!snap.exists()) { delete ONLINE.info[snap.key]; onlineRefreshUI(); return; }
+    const isNew = !ONLINE.info[snap.key];
     ONLINE.info[snap.key] = snap.val() || {};
+    // Si entró alguien nuevo, el host reemite las mesas actuales.
+    if (isNew && ONLINE.isHost) onlineRebroadcastBenches();
     const uid = onlineUser() && onlineUser().uid;
     if (snap.key === uid) {
       ONLINE.ready = !!(ONLINE.info[snap.key].ready);
@@ -595,7 +608,7 @@ function onlineListen() {
     if (!ONLINE.state) return;
     if (!ONLINE.isHost) {
       const hp = Number(ONLINE.state.hp);
-      if (isFinite(hp)) onlineApplyBaseHp(hp);
+      if (isFinite(hp)) onlineApplyBaseHp(hp, ONLINE.state.bases);
       const w = Number(ONLINE.state.w);
       if (isFinite(w) && w > (typeof waveNumber !== 'undefined' ? waveNumber : 0)) {
         try { waveNumber = w; } catch (e) {}
@@ -685,6 +698,7 @@ function onlineDetach() {
   ONLINE.down = false;
   ONLINE.downAt = 0;
   ONLINE.lastBaseEvent = 0;
+  ONLINE.lastHostMetaAt = 0;
   ONLINE.connected = null;
   ONLINE.disconnectedAt = 0;
   ONLINE.lastWorldTry = 0;
@@ -693,6 +707,9 @@ function onlineDetach() {
   ONLINE.buildRate = {};
   ONLINE.lastActionPrune = 0;
   ONLINE.lastChatPrune = 0;
+  ONLINE.applyingWorld = false;
+  ONLINE.applyingRemoteBench = false;
+  ONLINE.lastBenchSync = 0;
   onlineSetBanner('');
   try { if (typeof netSetRoom === 'function') netSetRoom(null); } catch (e) {}
 }
@@ -740,6 +757,7 @@ function onlineHandleAction(a, fromUid) {
     return;
   }
   if (a.k === 'build') onlineHandleBuildAction(a, fromUid);
+  else if (a.k === 'bench') onlineHandleBenchAction(a, fromUid);
 }
 // El host valida y escribe los bloques que piden los invitados. Así un
 // invitado no puede inundar rooms/{id}/build ni colocar tipos arbitrarios.
@@ -843,7 +861,8 @@ function onlinePruneChat() {
 }
 function onlineApplyEvent(ev) {
   if (!ev || !ev.k) return;
-  if (ev.at && ONLINE.eventSince && Number(ev.at) < ONLINE.eventSince) return;
+  // Las mesas se reemiten al entrar: no descartarlas por antigüedad.
+  if (ev.k !== 'bench' && ev.at && ONLINE.eventSince && Number(ev.at) < ONLINE.eventSince) return;
   const me = onlineUser();
   const mine = !!(me && ev.by === me.uid);
   if (ev.k === 'wave') {
@@ -860,7 +879,11 @@ function onlineApplyEvent(ev) {
   }
   if (ev.k === 'base') {
     if (mine) return;
-    onlineApplyBaseHp(Number(ev.hp));
+    onlineApplyBaseHp(Number(ev.hp), ev.bases);
+    return;
+  }
+  if (ev.k === 'bench') {
+    onlineApplyBenchEvent(ev);
     return;
   }
   if (ev.k === 'revive') {
@@ -874,19 +897,45 @@ function onlinePublishBaseDamage() {
   // Throttle: como máximo 2 eventos/s, salvo que la base llegue a 0.
   if (hp > 0 && now - ONLINE.lastBaseEvent < 500) return;
   ONLINE.lastBaseEvent = now;
-  onlinePublishEvent({ k: 'base', hp: hp });
+  onlinePublishEvent({ k: 'base', hp: hp, bases: onlineBaseHpMap() });
 }
-function onlineApplyBaseHp(hp) {
-  if (!isFinite(hp)) return;
+// Aplica el HP por mesa. Nunca usa el HP agregado del host para borrar las
+// mesas de otros jugadores (ese era el bug de la mesa que desaparecía).
+function onlineApplyBaseHp(hp, bases) {
   let list = [];
   try { list = (typeof workbenches !== 'undefined' && workbenches) ? workbenches.slice() : []; } catch (e) {}
   if (!list.length) return;
+  const map = (bases && typeof bases === 'object') ? bases : null;
+  if (map) {
+    for (const w of list) {
+      if (!w || !w.pos) continue;
+      const key = onlineBlockKey(w.pos.x, w.pos.y, w.pos.z);
+      if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+      const max = Number(w.maxHp) || 300;
+      const next = Math.max(0, Math.min(max, Number(map[key]) || 0));
+      if (next <= 0) {
+        onlineRemoveBenchAt(w.pos.x, w.pos.y, w.pos.z);
+        continue;
+      }
+      w.hp = next;
+      try { if (typeof updateBenchBar === 'function') updateBenchBar(w); } catch (e) {}
+    }
+    return;
+  }
+  // Compatibilidad con salas viejas: sólo tocamos mesas del host o sin dueño.
+  if (!isFinite(hp)) return;
+  const hostUid = (ONLINE.meta && ONLINE.meta.host) || null;
   if (hp <= 0) {
-    list.forEach(function (w) { try { if (typeof destroyBench === 'function') destroyBench(w, true); } catch (e) {} });
+    list.forEach(function (w) {
+      if (!w.ownerUid || w.ownerUid === hostUid) {
+        onlineRemoveBenchAt(w.pos.x, w.pos.y, w.pos.z);
+      }
+    });
     return;
   }
   let remaining = hp;
   for (const w of list) {
+    if (w.ownerUid && w.ownerUid !== hostUid) continue;
     const max = Number(w.maxHp) || 300;
     w.hp = Math.max(0, Math.min(max, remaining));
     remaining -= w.hp;
@@ -940,6 +989,146 @@ function onlineApplyBlockDelta(d, force) {
     ONLINE.applyingRemote = false;
   }
 }
+// --- Mesas de trabajo compartidas ---
+// Cada jugador es dueño de su mesa. Las mesas se replican como eventos para
+// que todos vean las bases de los demás y el host pueda simular su HP.
+function onlineBenchAt(x, y, z) {
+  try {
+    const list = (typeof workbenches !== 'undefined' && workbenches) ? workbenches : [];
+    for (const w of list) {
+      if (!w || !w.pos) continue;
+      const dx = w.pos.x - x, dy = w.pos.y - y, dz = w.pos.z - z;
+      if (dx * dx + dy * dy + dz * dz < 2.25) return w;
+    }
+  } catch (e) {}
+  return null;
+}
+function onlineRemoveBenchAt(x, y, z) {
+  const wb = onlineBenchAt(x, y, z);
+  if (!wb) return false;
+  try {
+    scene.remove(wb.mesh);
+    (wb.solids || []).forEach(function (m) {
+      const i = collidableObjects.indexOf(m);
+      if (i > -1) collidableObjects.splice(i, 1);
+    });
+    const j = workbenches.indexOf(wb);
+    if (j > -1) workbenches.splice(j, 1);
+    if (typeof currentBench !== 'undefined' && currentBench === wb) {
+      currentBench = null;
+      if (typeof benchOpen !== 'undefined' && benchOpen) toggleBench(false);
+    }
+  } catch (e) { return false; }
+  return true;
+}
+function onlineBaseHpMap() {
+  const map = {};
+  try {
+    const list = (typeof workbenches !== 'undefined' && workbenches) ? workbenches : [];
+    for (const w of list) {
+      if (!w || !w.pos) continue;
+      const key = onlineBlockKey(w.pos.x, w.pos.y, w.pos.z);
+      map[key] = Math.max(0, Number(w.hp || 0));
+    }
+  } catch (e) {}
+  return map;
+}
+// Host escribe el evento; invitado manda la acción al host.
+function onlinePublishBench(delta) {
+  if (!delta || !ONLINE.roomId || !ONLINE.meta || ONLINE.meta.status !== 'playing') return false;
+  if (ONLINE.applyingWorld || ONLINE.applyingRemoteBench) return false;
+  const x = Number(delta.x), y = Number(delta.y), z = Number(delta.z);
+  if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return false;
+  const rm = !!delta.rm;
+  const hp = rm ? 0 : Math.max(1, Math.min(300, Number(delta.hp) || 300));
+  if (!ONLINE.isHost) {
+    return onlineSendAction({ k: 'bench', d: { x: x, y: y, z: z, hp: hp, rm: rm } });
+  }
+  const owner = delta.owner || (onlineUser() && onlineUser().uid) || (ONLINE.meta && ONLINE.meta.host) || '';
+  if (!owner) return false;
+  return onlinePublishEvent({
+    k: 'bench', x: x, y: y, z: z, rm: rm, hp: hp,
+    owner: owner
+  });
+}
+function onlineHandleBenchAction(a, fromUid) {
+  if (!ONLINE.isHost || !ONLINE.refs || !ONLINE.refs.events) return;
+  const d = a && a.d;
+  if (!d) return;
+  const x = Number(d.x), y = Number(d.y), z = Number(d.z);
+  if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+  if (x < -10000 || x > 10000 || y < -1000 || y > 1000 || z < -10000 || z > 10000) return;
+  const existing = onlineBenchAt(x, y, z);
+  if (d.rm) {
+    // Sólo podés retirar tu propia mesa.
+    if (!existing) return;
+    if (!existing.ownerUid || existing.ownerUid !== fromUid) return;
+  } else {
+    if (existing) return;
+    if (!onlineAllowBuild(fromUid)) return;
+    let owned = 0;
+    try {
+      const list = (typeof workbenches !== 'undefined' && workbenches) ? workbenches : [];
+      for (const w of list) if (w && w.ownerUid === fromUid) owned++;
+    } catch (e) {}
+    if (owned >= ONLINE_CONFIG.maxBenchesPerPlayer) return;
+  }
+  const hp = d.rm ? 0 : Math.max(1, Math.min(300, Number(d.hp) || 300));
+  onlinePublishEvent({ k: 'bench', x: x, y: y, z: z, rm: !!d.rm, hp: hp, owner: fromUid });
+}
+function onlineApplyBenchEvent(ev) {
+  if (!ev) return;
+  const x = Number(ev.x), y = Number(ev.y), z = Number(ev.z);
+  if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
+  const existing = onlineBenchAt(x, y, z);
+  if (ev.rm) {
+    if (!existing) return;
+    onlineRemoveBenchAt(x, y, z);
+    return;
+  }
+  if (existing) {
+    const hp = Number(ev.hp);
+    if (isFinite(hp)) {
+      existing.hp = Math.max(0, Math.min(Number(existing.maxHp) || 300, hp));
+      try { if (typeof updateBenchBar === 'function') updateBenchBar(existing); } catch (e) {}
+    }
+    return;
+  }
+  ONLINE.applyingRemoteBench = true;
+  try {
+    const wb = placeWorkbench(new THREE.Vector3(x, y, z), { remote: true, ownerUid: ev.owner || ev.by || null });
+    if (wb) {
+      const hp = Number(ev.hp);
+      if (isFinite(hp)) wb.hp = Math.max(1, Math.min(Number(wb.maxHp) || 300, hp));
+      try { if (typeof updateBenchBar === 'function') updateBenchBar(wb); } catch (e) {}
+    }
+  } catch (e) {
+    console.warn('onlineApplyBenchEvent', e);
+  } finally {
+    ONLINE.applyingRemoteBench = false;
+  }
+}
+// Cuando entra alguien nuevo, el host reemite las mesas actuales para que
+// aparezcan aunque hayan sido colocadas hace más de la retención de eventos.
+function onlineRebroadcastBenches() {
+  if (!ONLINE.isHost || !onlineIsActive() || !ONLINE.meta || ONLINE.meta.status !== 'playing') return;
+  const now = Date.now();
+  if (now - ONLINE.lastBenchSync < 5000) return;
+  ONLINE.lastBenchSync = now;
+  try {
+    const list = (typeof workbenches !== 'undefined' && workbenches) ? workbenches.slice(0, 40) : [];
+    for (const wb of list) {
+      if (!wb || !wb.pos) continue;
+      const owner = wb.ownerUid || (ONLINE.meta && ONLINE.meta.host) || null;
+      if (!owner) continue;
+      onlinePublishEvent({
+        k: 'bench', x: wb.pos.x, y: wb.pos.y, z: wb.pos.z,
+        rm: false, hp: Math.max(1, Number(wb.hp) || 300), owner: owner
+      });
+    }
+  } catch (e) {}
+}
+
 async function onlineApplyBuildDeltas() {
   if (!ONLINE.refs || !ONLINE.refs.build) { ONLINE.buildReady = true; return; }
   ONLINE.buildReady = false;
@@ -1181,8 +1370,21 @@ async function onlineLoadWorld(force) {
     if (!force && ONLINE.worldStamp === stamp) return null;
     if (typeof applySceneData !== 'function') return null;
     ONLINE.buildReady = false;
-    const res = applySceneData(w.snapshot);
+    ONLINE.applyingWorld = true;
+    let res = null;
+    try {
+      res = applySceneData(w.snapshot);
+    } finally {
+      ONLINE.applyingWorld = false;
+    }
     ONLINE.worldStamp = stamp;
+    // Las mesas que vienen del snapshot sin dueño pertenecen al host.
+    try {
+      const hostUid = (ONLINE.meta && ONLINE.meta.host) || null;
+      if (hostUid && typeof workbenches !== 'undefined' && workbenches) {
+        for (const w of workbenches) { if (w && !w.ownerUid) w.ownerUid = hostUid; }
+      }
+    } catch (e) {}
     await onlineApplyBuildDeltas();
     if (ONLINE.pendingWave) {
       const wv = ONLINE.pendingWave;
@@ -1216,11 +1418,14 @@ function onlineEnsureLevel(levelId) {
   ONLINE.buildQueue = {};
   ONLINE.pendingWave = 0;
   try {
+    ONLINE.applyingWorld = true;
     playLevel(id, { preserveInventory: true, skipRestore: true, seed: onlineSeed(), transientWorld: true });
   } catch (e) {
     ONLINE.loadedLevel = null;
     console.warn('onlineEnsureLevel', e);
     return;
+  } finally {
+    ONLINE.applyingWorld = false;
   }
   if (typeof LEVEL !== 'undefined' && LEVEL.current !== id) {
     ONLINE.loadedLevel = null;
@@ -1258,7 +1463,10 @@ function onlineHeartbeat() {
   }
   if (ONLINE.connected === false) return;
   const hostSeen = Number((ONLINE.meta && ONLINE.meta.hostSeen) || 0);
-  if (hostSeen && onlineServerNowMs() - hostSeen > ONLINE_CONFIG.hostTimeoutMs) {
+  const sinceHost = ONLINE.lastHostMetaAt
+    ? (now - ONLINE.lastHostMetaAt)
+    : (hostSeen ? onlineServerNowMs() - hostSeen : 0);
+  if (sinceHost > ONLINE_CONFIG.hostTimeoutMs) {
     if (now - ONLINE.lastClaim > ONLINE_CONFIG.hostClaimCooldownMs) {
       ONLINE.lastClaim = now;
       onlineSetBanner('El host no responde. Intentando tomar el control…', 'warn');
@@ -1287,6 +1495,7 @@ function onlineHostSnapshot(now) {
   const st = {
     t: ++ONLINE.tick,
     hp: onlineBaseHp(),
+    bases: onlineBaseHpMap(),
     w: (typeof waveNumber !== 'undefined') ? waveNumber : 0,
     left: alive,
     timer: ONLINE.startedAt ? Math.max(0, Math.round((now - ONLINE.startedAt) / 1000)) : 0,
@@ -1298,6 +1507,15 @@ async function onlineTryClaimHost() {
   if (!ONLINE.roomId || !ONLINE.refs || !onlineUser()) return false;
   const user = onlineUser();
   const ref = ONLINE.refs.meta;
+  try {
+    // Leer primero evita lanzar una transacción (y su warning de permisos)
+    // cuando el host está vivo y las reglas no nos dejarían escribir.
+    const snap = await ref.get();
+    const cur = snap.val();
+    if (!cur || cur.host === user.uid) return false;
+    const seen = Number(cur.hostSeen || 0);
+    if (seen && onlineServerNowMs() - seen < ONLINE_CONFIG.hostTimeoutMs) return false;
+  } catch (e) { return false; }
   try {
     const res = await ref.transaction(function (cur) {
       if (!cur) return cur;

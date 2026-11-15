@@ -493,10 +493,11 @@ function isInAnyClaim(pos) {
   }
   return false;
 }
-function placeWorkbench(pos) {
+function placeWorkbench(pos, opts) {
+  opts = opts || {};
   // Tutorial paso 4: soft gate — solo cuenta / permite en el círculo marcado (SO).
   try {
-    if (typeof DIRECTOR !== 'undefined' && DIRECTOR.active &&
+    if (!opts.remote && typeof DIRECTOR !== 'undefined' && DIRECTOR.active &&
         DIRECTOR.step4Revealed && !DIRECTOR.step4Done && DIRECTOR.benchSpot) {
       const dx = pos.x - DIRECTOR.benchSpot.x;
       const dz = pos.z - DIRECTOR.benchSpot.z;
@@ -580,8 +581,27 @@ function placeWorkbench(pos) {
   wb.solids.forEach(m => { if (!collidableObjects.includes(m)) collidableObjects.push(m); });
   if (!workbenches.includes(wb)) workbenches.push(wb);
   updateBenchBar(wb);
-  try { cancelZoneDecay(g.position.x, g.position.z); } catch (e) {}
-  try { if (typeof directorOnWorkbenchPlaced === 'function') directorOnWorkbenchPlaced(wb); } catch (e) {}
+  // En coop la mesa pertenece a quien la colocó: así el HP de una base no
+  // borra las mesas de los demás.
+  if (opts.ownerUid) wb.ownerUid = opts.ownerUid;
+  else {
+    try {
+      if (typeof onlineIsActive === 'function' && onlineIsActive() && typeof onlineUser === 'function') {
+        const me = onlineUser();
+        if (me && me.uid) wb.ownerUid = me.uid;
+      }
+    } catch (e) {}
+  }
+  if (!opts.remote) {
+    try { cancelZoneDecay(g.position.x, g.position.z); } catch (e) {}
+    try { if (typeof directorOnWorkbenchPlaced === 'function') directorOnWorkbenchPlaced(wb); } catch (e) {}
+    try {
+      if (typeof onlinePublishBench === 'function' && typeof onlineIsActive === 'function' && onlineIsActive() &&
+          typeof ONLINE !== 'undefined' && ONLINE.meta && ONLINE.meta.status === 'playing' && !ONLINE.applyingWorld) {
+        onlinePublishBench({ x: wb.pos.x, y: wb.pos.y, z: wb.pos.z, hp: wb.hp, rm: false, owner: wb.ownerUid || null });
+      }
+    } catch (e) {}
+  }
   return wb;
 }
 function updateBenchBar(wb) {
@@ -609,6 +629,10 @@ function damageWorkbench(wb, n) {
 }
 function destroyBench(wb, quiet) {
   if (!wb) return;
+  const benchX = wb.pos ? wb.pos.x : 0;
+  const benchY = wb.pos ? wb.pos.y : 0;
+  const benchZ = wb.pos ? wb.pos.z : 0;
+  const benchOwner = wb.ownerUid || null;
   try {
       scene.remove(wb.mesh);
       (wb.solids || []).forEach(m => {
@@ -629,6 +653,17 @@ function destroyBench(wb, quiet) {
   } else {
       showPlacementMessage('Saqué: mesa de trabajo');
   }
+  // En coop avisamos a los demás para que la mesa desaparezca también ahí.
+  try {
+    if (typeof onlinePublishBench === 'function' && typeof onlineIsActive === 'function' && onlineIsActive() &&
+        typeof ONLINE !== 'undefined' && ONLINE.meta && ONLINE.meta.status === 'playing' &&
+        !ONLINE.applyingWorld && !ONLINE.applyingRemoteBench) {
+      const me = (typeof onlineUser === 'function') ? onlineUser() : null;
+      if (ONLINE.isHost || !benchOwner || (me && benchOwner === me.uid)) {
+        onlinePublishBench({ x: benchX, y: benchY, z: benchZ, hp: 0, rm: true, owner: benchOwner });
+      }
+    }
+  } catch (e) {}
 }
 function refreshBenchModal() {
   const wb = (typeof currentBench !== 'undefined') ? currentBench : null;
@@ -1566,6 +1601,7 @@ function snapshotScene() {
     y: Math.round(w.pos.y * 100) / 100,
     z: Math.round(w.pos.z * 100) / 100,
     hp: Math.round(w.hp),
+    owner: w.ownerUid || null,
     bench: (typeof serializedBenchUpgrades === 'function') ? serializedBenchUpgrades(w) : null
   }));
   return {
@@ -1641,7 +1677,7 @@ function deserializeProps(items, nodes, benches, extras) {
   [...workbenches].forEach(w => destroyBench(w, true));
   (Array.isArray(benches) ? benches : []).slice(0, 20).forEach(d => {
       if (typeof d.x !== 'number' || typeof d.y !== 'number' || typeof d.z !== 'number') return;
-      const wb = placeWorkbench(new THREE.Vector3(d.x, d.y, d.z));
+      const wb = placeWorkbench(new THREE.Vector3(d.x, d.y, d.z), { remote: true, ownerUid: d.owner || null });
       if (wb && typeof d.hp === 'number') { wb.hp = Math.max(1, Math.min(wb.maxHp, d.hp)); updateBenchBar(wb); }
       if (wb && d.bench && typeof applyBenchUpgradeData === 'function') applyBenchUpgradeData(wb, d.bench);
   });
