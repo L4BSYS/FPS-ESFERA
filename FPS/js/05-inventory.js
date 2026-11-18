@@ -146,6 +146,10 @@ class Inventory {
         if (typeof LEVEL !== 'undefined' && LEVEL && LEVEL.loading) return false;
         if (typeof tutorialDone === 'function' && !tutorialDone()) return false;
         if (typeof LEVEL !== 'undefined' && LEVEL && LEVEL.current === 'tutorial') return false;
+        // Combat Lab: fixed loadout — never write the persistent backpack profile.
+        if (typeof isCombatLabActive === 'function' && isCombatLabActive()) return false;
+        if (typeof LAB !== 'undefined' && LAB && LAB.active && LAB.persistInventory === false) return false;
+        if (typeof LEVEL !== 'undefined' && LEVEL && (LEVEL.current === 'combat_lab' || (LEVEL.defs && LEVEL.defs[LEVEL.current] && LEVEL.defs[LEVEL.current].kind === 'lab'))) return false;
         try {
             localStorage.setItem(INV_PROFILE_KEY, JSON.stringify(this.serializeProfile()));
             return true;
@@ -588,7 +592,11 @@ class Inventory {
     }
 
     unequipItem() {
-        if (this.equippedItem?.model) this.equippedItem.model.visible = false;
+        // Don't force-hide: holster path (syncBodyToolMount) may keep pistol visible on hip_R.
+        if (this.equippedItem?.model &&
+            !(this.equippedItem.model.userData && this.equippedItem.model.userData._bodyHolstered)) {
+            this.equippedItem.model.visible = false;
+        }
         this.equippedItem = null;
         this._changed();
     }
@@ -647,6 +655,13 @@ class Inventory {
         try { playSound('ammo-pickup'); } catch (e) {}
         this.updateAmmoUI();
         try { if (typeof shootCooldown !== 'undefined') shootCooldown = Math.max(shootCooldown || 0, 0.55); } catch (e) {}
+        // Fase C: reload pose on body
+        try {
+            if (typeof player !== 'undefined' && player && player.body) {
+                if (typeof player.body.playReload === 'function') player.body.playReload();
+                else if (typeof player.body.setAction === 'function') player.body.setAction('reload');
+            }
+        } catch (e) {}
         this._changed();
         return true;
     }

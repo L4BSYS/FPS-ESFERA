@@ -34,7 +34,7 @@ var ONLINE_CONFIG = {
   // Límites anti-abuso. El host es la única autoridad que escribe build/events.
   maxBuildDeltas: 2000,
   maxActionsPerUser: 20,
-  actionSlots: 12, // MUST match rules $seq /^[0-9]$|^1[01]$/ (0..11)
+  actionSlots: 12, // MUST match rules $seq /^([0-9]|1[01])$/ (0..11)
   reliableActionSlots: 6, // 0–5
   lossyActionSlot: 6,     // shoot/atk coalesce here (2P)
   maxChatMessages: 200,

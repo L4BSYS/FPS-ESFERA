@@ -287,13 +287,30 @@
 
       hitPlayer(hitPosition) {
           if (!player || player.health <= 0) return;
-          player.health -= (this.damage || 8);
+          const base = this.damage || 8;
+          let dmgAmt = base;
+          let zone = null;
           try {
-              player.applyDamageEffect();
+              if (hitPosition && typeof scaleDamageByHit === 'function') {
+                  const scaled = scaleDamageByHit(base, player, hitPosition.y);
+                  dmgAmt = scaled.damage;
+                  zone = scaled.zone;
+              }
+          } catch (e) {}
+          player.health -= dmgAmt;
+          if (player.health < 0) player.health = 0;
+          try {
+              const heavyHit = zone === 'head' || dmgAmt >= 12 ||
+                  (player.maxHealth > 0 && player.health <= player.maxHealth * 0.35);
+              player.applyDamageEffect({ heavy: heavyHit });
               player.updateStatsHUD();
+              if (player.body && typeof player.body.emit === 'function') {
+                  if (zone) player.body.emit('hit', zone);
+                  player.body.playHit({ heavy: heavyHit });
+              }
           } catch (e) {}
           try { playSound('damage-taken'); } catch (e) {}
-          try { playSoundAt('flesh_hit', hitPosition, { gain: 0.8, maxDist: 35 }); } catch (e) {}
+          try { playSoundAt('flesh_hit', hitPosition, { gain: zone === 'head' ? 1.0 : 0.8, maxDist: 35 }); } catch (e) {}
           this.createBloodEffect(hitPosition);
           if (player.health <= 0) {
               showGameOver();
@@ -323,17 +340,36 @@
       hitNpc(npc, hitPosition) {
           if (!npc || npc.health <= 0) return;
 
-          const damage = 15; // Base bullet damage
-          npc.takeDamage(damage); // This should call the NPC's takeDamage method
+          const base = (this.damage != null) ? this.damage : 15;
+          let damage = base;
+          let zone = null;
+          try {
+              if (hitPosition && typeof scaleDamageByHit === 'function') {
+                  const scaled = scaleDamageByHit(base, npc, hitPosition.y);
+                  damage = scaled.damage;
+                  zone = scaled.zone;
+              } else if (hitPosition && typeof classifyHitOnCharacter === 'function') {
+                  zone = classifyHitOnCharacter(npc, hitPosition.y);
+              }
+          } catch (e) {}
+          npc.takeDamage(damage, {
+              zone: zone,
+              hitY: hitPosition ? hitPosition.y : null,
+              preScaled: true,
+              heavy: zone === 'head' || damage >= 25
+          });
           
           // Create blood effect
           this.createBloodEffect(hitPosition);
-          try { playSoundAt('flesh_hit', hitPosition, { gain: 0.9, maxDist: 35 }); } catch (e) {}
+          try {
+              const gain = zone === 'head' ? 1.05 : 0.9;
+              playSoundAt('flesh_hit', hitPosition, { gain: gain, maxDist: 35 });
+          } catch (e) {}
           
           // Visual feedback on mesh
           if (npc.mesh && npc.mesh.material) {
               const originalColor = npc.mesh.material.color.clone();
-              npc.mesh.material.color.setHex(0xff0000); // Flash red
+              npc.mesh.material.color.setHex(zone === 'head' ? 0xff4400 : 0xff0000);
               
               setTimeout(() => {
                   if (npc.mesh && npc.mesh.material) {

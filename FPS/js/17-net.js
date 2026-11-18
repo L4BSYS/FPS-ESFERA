@@ -255,8 +255,19 @@ function netIsMoving() {
   } catch (e) { return true; }
 }
 function netPoseState() {
+  // Compact poseId → int for array poses (backward compatible 0–3; 4+ = crouch family).
+  // 0 idle · 1 walk · 2 sprint · 3 jump/fall · 4 crouch · 5 crouch_walk
   try {
-    if (player && player.isOnGround === false) return 3; // jump/fall
+    if (player && typeof player.getPoseId === 'function') {
+      const id = player.getPoseId();
+      if (id === 'crouch_walk') return 5;
+      if (id === 'crouch') return 4;
+      if (id === 'jump' || id === 'fall') return 3;
+      if (id === 'sprint') return 2;
+      if (id === 'walk') return 1;
+      return 0;
+    }
+    if (player && player.isOnGround === false) return 3;
     if (netIsMoving()) return (player && player.isSprinting) ? 2 : 1;
   } catch (e) {}
   return 0;
@@ -436,6 +447,21 @@ function netApplyMeta(uid, meta) {
   }
 }
 function netAvatar(uid, d, sector) {
+  // ONLINE_BODY_PLACEHOLDER — Fase F freeze.
+  // Remotes stay CapsuleGeometry. Do NOT mount createBody here until a dedicated online-body
+  // plan replaces this block AND sets PLAYER_CONFIG.onlineBody = true.
+  // Checklist when that lands:
+  //   1) createBody({ mode:'npc', mountOnCharacter:true }) parented under remote root
+  //   2) each tick: body.update(dt, flags from r.poseId / crouch ints; optional hasGun)
+  //   3) optional tool/holster in payload — bump net schema only with compat notes
+  //   4) keep netPoseState ints 0–5 backward-compatible (idle/walk/sprint/fall/crouch/crouch_walk)
+  // See BODY_DEF.portNotes.deferred.onlineBody.
+  if (typeof PLAYER_CONFIG !== 'undefined' && PLAYER_CONFIG.onlineBody && !netAvatar._onlineBodyWarned) {
+    netAvatar._onlineBodyWarned = true;
+    try {
+      console.warn('[netAvatar] PLAYER_CONFIG.onlineBody=true but ONLINE_BODY_PLACEHOLDER is still active — remotes stay capsules.');
+    } catch (e) {}
+  }
   const pose = netUnpackPose(d);
   if (!pose || typeof player === 'undefined') return null;
   // Compatibilidad con clientes viejos que mandaban n/c dentro del payload.
@@ -467,6 +493,9 @@ function netAvatar(uid, d, sector) {
   r.ty = pose.y;
   r.tz = pose.z;
   r.yaw = pose.yaw;
+  r.state = pose.state || 0;
+  // poseId hint for future remote bodies (0 idle … 5 crouch_walk)
+  r.poseId = ({ 0: 'idle', 1: 'walk', 2: 'sprint', 3: 'fall', 4: 'crouch', 5: 'crouch_walk' })[r.state] || 'idle';
   r.hp = (typeof pose.hp === 'number') ? pose.hp : r.hp;
   r.last = Date.now();
   r.seq = pose.seq;

@@ -77,10 +77,20 @@
         player.updateToolModelVisibility();
         player.updateToolHUD();
 
-      // --- Levels: registra built-ins y carga el playground bajo el menú ---
+      // --- Levels: registra built-ins y arranca directo en "Jugar solo" ---
       try { if (typeof initLevels === 'function') initLevels(); } catch (e) { console.error('initLevels', e); }
-      try { if (typeof loadLevel === 'function') loadLevel('playground'); } catch (e) { console.error('loadLevel', e); }
-      try { if (typeof showMainMenu === 'function') showMainMenu('start'); } catch (e) { console.error('showMainMenu', e); }
+      try {
+        if (typeof fpsAutoStartSolo === 'function') {
+          fpsAutoStartSolo();
+        } else {
+          if (typeof loadLevel === 'function') loadLevel('playground');
+          if (typeof showMainMenu === 'function') showMainMenu('start');
+        }
+      } catch (e) {
+        console.error('auto start', e);
+        try { if (typeof loadLevel === 'function') loadLevel('playground'); } catch (e2) {}
+        try { if (typeof showMainMenu === 'function') showMainMenu('start'); } catch (e3) {}
+      }
 
       console.log("Initial block count:", placedBlocks.length);
       runStartTs = Date.now();

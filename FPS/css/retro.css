@@ -112,6 +112,30 @@ body, html {
   pointer-events: none;
   z-index: 100;
 }
+/* Aviso: el mouse todavía no está capturado */
+.rg-pointer-hint {
+  position: fixed;
+  bottom: 22%; left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 18px;
+  background: rgba(0, 0, 0, 0.78);
+  border: 2px solid var(--rg-green-dim);
+  border-radius: 6px;
+  color: var(--rg-ink);
+  font-family: 'Press Start 2P', monospace;
+  font-size: 9px;
+  letter-spacing: 1px;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+  z-index: 1002;
+  animation: rg-pointer-pulse 1.4s ease-in-out infinite;
+}
+.rg-pointer-hint[hidden] { display: none; }
+@keyframes rg-pointer-pulse {
+  0%, 100% { opacity: 0.65; }
+  50% { opacity: 1; }
+}
 #weaponInfo {
   font-family: 'Press Start 2P', monospace;
   font-size: 11px;
@@ -1503,6 +1527,15 @@ input[type="range"] {
   color: #eaffea;
 }
 .rg-rail-btn.rg-rail-primary:hover { background: #145426; color: #fff; }
+.rg-rail-btn.rg-rail-exit {
+  color: #ff9b8a;
+  border-color: rgba(255, 90, 70, 0.35);
+}
+.rg-rail-btn.rg-rail-exit:hover {
+  background: #3a0d0d;
+  border-left-color: #ff5a46;
+  color: #ffffff;
+}
 .rg-rail-ico { font-size: 16px; line-height: 1; }
 .rg-rail-foot {
   margin-top: auto;
@@ -1582,12 +1615,67 @@ input[type="range"] {
   line-height: 1.35;
 }
 .rg-home-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
   margin-top: 18px;
+  max-width: 720px;
 }
 .rg-home-actions .rg-btn { font-size: 11px; padding: 14px 20px; }
+
+/* Icon-first mode tiles (home) */
+.rg-mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 108px;
+  margin: 0;
+  padding: 16px 10px 14px;
+  cursor: pointer;
+  color: var(--rg-ink);
+  background: #1c241c;
+  border: 3px solid #3a4a3a;
+  border-radius: 6px;
+  box-shadow: 0 4px 0 #000;
+  transition: transform 0.05s, box-shadow 0.05s, border-color 0.05s;
+  font-family: 'Press Start 2P', monospace;
+}
+.rg-mode-btn:hover {
+  border-color: var(--rg-green-dim);
+}
+.rg-mode-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #000;
+}
+.rg-mode-btn.rg-mode-primary {
+  background: #0e3a1a;
+  border-color: var(--rg-green);
+  color: #eaffea;
+  box-shadow: 0 4px 0 #05240d, 0 0 12px rgba(51, 255, 102, 0.35);
+}
+.rg-mode-ico {
+  font-size: 36px;
+  line-height: 1;
+  font-family: system-ui, 'Segoe UI Emoji', 'Apple Color Emoji', sans-serif;
+  filter: drop-shadow(2px 2px 0 #000);
+}
+.rg-mode-label {
+  font-size: 8px;
+  letter-spacing: 1px;
+  text-align: center;
+  line-height: 1.35;
+  color: inherit;
+  opacity: 0.92;
+}
+@media (max-width: 720px) {
+  .rg-home-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: none;
+  }
+  .rg-mode-ico { font-size: 30px; }
+}
 .rg-home-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1613,6 +1701,59 @@ input[type="range"] {
   color: var(--rg-dim);
   margin: 0;
   line-height: 1.35;
+}
+
+/* --- Progresión: rango y desbloqueos --- */
+.rg-progress-card {
+  border-color: rgba(51, 255, 102, 0.35);
+  background:
+    radial-gradient(circle at 100% 0%, rgba(51, 255, 102, 0.10), transparent 60%),
+    #0a0d0a;
+}
+.rg-rank-name {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--rg-green);
+  margin-bottom: 6px;
+  text-shadow: 2px 2px 0 #000;
+}
+.rg-rank-blurb {
+  font-size: 17px !important;
+  color: var(--rg-dim);
+  line-height: 1.35;
+  margin: 0 0 10px !important;
+}
+.rg-progress-bar {
+  height: 10px;
+  margin-bottom: 9px;
+  border: 1px solid var(--rg-line);
+  border-radius: 999px;
+  background: #060906;
+  overflow: hidden;
+}
+.rg-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #1e8f3a, #51ff66);
+  box-shadow: 0 0 10px rgba(51, 255, 102, 0.5);
+  transition: width 0.4s ease;
+}
+.rg-rank-time {
+  font-size: 16px !important;
+  color: var(--rg-ink) !important;
+  margin: 0 0 4px !important;
+}
+.rg-rank-unlock {
+  font-size: 15px !important;
+  color: var(--rg-amber) !important;
+  margin: 0 !important;
+}
+.rg-rank-influence {
+  margin-top: 8px !important;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rg-line);
+  font-size: 15px !important;
+  color: var(--rg-green) !important;
 }
 
 /* ============================================================

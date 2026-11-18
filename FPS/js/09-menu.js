@@ -23,7 +23,14 @@
       const nav = document.createElement('nav');
       nav.className = 'rg-rail-nav';
       pauseUI.tabs = {};
-      [['play', '🗺', 'Mundo'], ['craft', '🧪', 'Tecnología'], ['build', '🧱', 'Crear'], ['account', '👥', 'Online'], ['settings', '⚙️', 'Ajustes']].forEach(([key, icon, label]) => {
+      const pauseTabs = [
+        ['play', '🗺', 'Mundo'],
+        ['craft', '🧪', 'Tecnología'],
+        ['build', '🧱', 'Crear'],
+        ['account', '👥', 'Cuenta'],
+        ['settings', '⚙️', 'Ajustes']
+      ];
+      pauseTabs.forEach(([key, icon, label]) => {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'rg-rail-btn';
@@ -53,6 +60,16 @@
         if (typeof showMainMenu === 'function') showMainMenu('home');
       });
       railFoot.appendChild(menuBtn);
+      const exitBtn = document.createElement('button');
+      exitBtn.type = 'button';
+      exitBtn.className = 'rg-rail-btn rg-rail-exit';
+      exitBtn.innerHTML = '<span class="rg-rail-ico">🚪</span><span>Salir al sitio</span>';
+      exitBtn.title = 'Cerrar el juego y volver a la página de La Grieta.';
+      exitBtn.addEventListener('click', () => {
+        if (pauseMenu) pauseMenu.style.display = 'none';
+        if (typeof fpsExitToSite === 'function') fpsExitToSite();
+      });
+      railFoot.appendChild(exitBtn);
       rail.appendChild(railFoot);
       pauseDiv.appendChild(rail);
 
@@ -114,6 +131,13 @@
       });
       authDiv.appendChild(logoutBtn);
       pauseUI.logoutBtn = logoutBtn;
+      const lockedHint = document.createElement('div');
+      lockedHint.className = 'rg-hint';
+      lockedHint.style.marginTop = '8px';
+      lockedHint.style.display = 'none';
+      lockedHint.textContent = 'Jugá 60 min para desbloquear el coop con amigos.';
+      authDiv.appendChild(lockedHint);
+      pauseUI.lockedHint = lockedHint;
       body.appendChild(authDiv);
       pauseUI.userInfo = userInfo;
 
@@ -384,6 +408,7 @@
       ghostRow.appendChild(ghostChk);
       ghostRow.appendChild(ghostLab);
       onlineDiv.appendChild(ghostRow);
+      pauseUI.onlineDiv = onlineDiv;
       body.appendChild(onlineDiv);
 
       // --- Audio section ---
@@ -529,7 +554,11 @@
       console.log("Game Paused:", isGamePaused);
       if (isGamePaused) {
           document.exitPointerLock();
+          try { if (typeof fpsProgressFlush === 'function') fpsProgressFlush(); } catch (e) {}
+          try { if (typeof fpsInfluenceReport === 'function') fpsInfluenceReport(true); } catch (e) {}
           pauseMenu.style.display = 'flex';
+          try { if (window.__updatePointerHint) window.__updatePointerHint(); } catch (e) {}
+          try { if (typeof applyPauseUnlocks === 'function') applyPauseUnlocks(); } catch (e) {}
           refreshPauseStats();
           try { refreshCraftUI(); } catch (e) {}
           // Si estás creando un mundo, abrir directo "Jugar" (tiene el botón Guardar)
@@ -545,5 +574,6 @@
           if (document.hasFocus()) {
                lockPointer();
           }
+          try { if (window.__updatePointerHint) window.__updatePointerHint(); } catch (e) {}
       }
   }

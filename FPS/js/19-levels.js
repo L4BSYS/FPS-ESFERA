@@ -42,6 +42,18 @@ function lvBtn(label, cls, onClick) {
   b.addEventListener('click', onClick);
   return b;
 }
+
+/** Home mode tile: big icon + small subtitle (icon-first). */
+function lvModeBtn(icon, label, cls, onClick) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'rg-mode-btn' + (cls ? (' ' + cls) : '');
+  b.innerHTML =
+    '<span class="rg-mode-ico" aria-hidden="true">' + icon + '</span>' +
+    '<span class="rg-mode-label">' + label + '</span>';
+  b.addEventListener('click', onClick);
+  return b;
+}
 // Aviso flotante autónomo (showMessage del loop es local, no siempre disponible).
 function lvToast(text) {
   try {
@@ -53,6 +65,19 @@ function lvToast(text) {
     hud.appendChild(msg);
     setTimeout(function () { msg.remove(); }, 2200);
   } catch (e) {}
+}
+
+// Desbloqueos por tiempo jugado (29-progress.js). Si el módulo no cargó,
+// todo queda habilitado para no romper el menú.
+function fpsFeatureUnlocked(feature) {
+  try {
+    if (typeof fpsProgressUnlocked === 'function') return fpsProgressUnlocked(feature);
+  } catch (e) {}
+  return true;
+}
+function fpsUnlockLabel(feature) {
+  const minutes = { mine: 10, playground: 30, online: 60, community: 60, create: 60 }[feature];
+  return minutes ? ('Se desbloquea a los ' + minutes + ' min jugados.') : '';
 }
 
 // ------------------------------------------------------------
@@ -232,6 +257,7 @@ function buildWorldLevel(def) {
 //  Limpieza / carga de niveles
 // ------------------------------------------------------------
 function teardownLevel() {
+  try { if (typeof deactivateCombatLab === 'function') deactivateCombatLab(); } catch (e) {}
   try { if (typeof clearWorldContainers === 'function') clearWorldContainers(); } catch (e) {}
   try { if (typeof clearWorldZones === 'function') clearWorldZones(); } catch (e) {}
   try { if (typeof clearNeuralFauna === 'function') clearNeuralFauna(); } catch (e) {}
@@ -432,16 +458,22 @@ function loadLevel(id, opts) {
     }
     // Ambiente (cielo / luz / oscuridad) y fauna neuronal del mundo
     try { if (typeof applyLevelAmbience === 'function') applyLevelAmbience(def); } catch (e) {}
-    // Tutorial paso 0: patio apagado — sin fauna hasta que el director la prenda.
-    if (!(def.kind === 'tutorial' || DIRECTOR.active)) {
+    // Tutorial paso 0 / lab: sin fauna neuronal (jaula controlada).
+    if (!(def.kind === 'tutorial' || def.kind === 'lab' || DIRECTOR.active)) {
       try { if (typeof spawnNeuralFauna === 'function') spawnNeuralFauna(def); } catch (e) {}
     }
     placePlayerAt(opts.spawn || def.spawn);
 
     const carryInventory = opts.preserveInventory === true;
+    const isLab = def.kind === 'lab' || def.id === 'combat_lab';
+    // Leaving / entering: clear lab flag unless this load is the lab itself.
+    try {
+      if (!isLab && typeof deactivateCombatLab === 'function') deactivateCombatLab();
+    } catch (e) {}
     if (!carryInventory && def.resetInventory !== false) resetPlayerInventory();
     // Al recargar la página después del tutorial, recuperamos la mochila guardada.
-    if (!carryInventory && def.kind !== 'tutorial' && typeof player !== 'undefined' && player &&
+    // Lab never restores the persistent profile (fixed loadout).
+    if (!carryInventory && !isLab && def.kind !== 'tutorial' && typeof player !== 'undefined' && player &&
         player.inventory && typeof player.inventory.restoreProfile === 'function') {
       try { player.inventory.restoreProfile(); } catch (e) {}
     }
@@ -458,6 +490,10 @@ function loadLevel(id, opts) {
     try { updateResourceHUD(); } catch (e) {}
     try { lockPointer(); } catch (e) {}
     try { lvToast('📍 ' + def.name); } catch (e) {}
+
+    if (isLab && typeof onCombatLabLoaded === 'function') {
+      try { onCombatLabLoaded(def); } catch (e) { console.error('combat lab load', e); }
+    }
   } finally {
     LEVEL.loading = false;
     if (restoreRandom) restoreRandom();
@@ -740,13 +776,15 @@ function renderMainMenu() {
   const nav = document.createElement('nav');
   nav.className = 'rg-rail-nav';
   [
-    ['home', '▶', 'Jugar'],
-    ['mine', '🗺', 'Mis mundos'],
-    ['online', '👥', 'Con amigos'],
-    ['community', '🌐', 'Comunidad'],
-    ['create', '➕', 'Crear mundo']
+    ['home', '▶', 'Jugar', null],
+    ['mine', '🗺', 'Mis mundos', 'mine'],
+    ['online', '👥', 'Con amigos', 'online'],
+    ['community', '🌐', 'Comunidad', 'community'],
+    ['create', '➕', 'Crear mundo', 'create']
   ].forEach(function (item) {
-    const view = item[0], icon = item[1], label = item[2];
+    const view = item[0], icon = item[1], label = item[2], feature = item[3];
+    // Progresión: lo avanzado aparece recién con minutos jugados.
+    if (feature && !fpsFeatureUnlocked(feature)) return;
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'rg-rail-btn' + (LEVEL.menuView === view || (view === 'home' && LEVEL.menuView === 'start') || (view === 'mine' && LEVEL.menuView === 'editorial') ? ' on' : '');
@@ -773,6 +811,16 @@ function renderMainMenu() {
   authBtn.innerHTML = '<span class="rg-rail-ico">' + (u ? '⎋' : '🔑') + '</span><span>' + (u ? 'Cerrar sesión' : 'Ingresar') + '</span>';
   authBtn.addEventListener('click', function () { if (u) lvLogout(); else lvLogin(); });
   foot.appendChild(authBtn);
+  const exitBtn = document.createElement('button');
+  exitBtn.type = 'button';
+  exitBtn.className = 'rg-rail-btn rg-rail-exit';
+  exitBtn.innerHTML = '<span class="rg-rail-ico">🚪</span><span>Salir al sitio</span>';
+  exitBtn.title = 'Cerrar el juego y volver a la página de La Grieta.';
+  exitBtn.addEventListener('click', function () {
+    try { if (typeof hideMainMenu === 'function') hideMainMenu(); } catch (e) {}
+    if (typeof fpsExitToSite === 'function') fpsExitToSite();
+  });
+  foot.appendChild(exitBtn);
   rail.appendChild(foot);
   shell.appendChild(rail);
 
@@ -825,23 +873,28 @@ function renderHome(body) {
   desc.textContent = 'Explorá mundos abiertos, juntá recursos, crafteá herramientas y levantá tu base antes de que caiga la noche.';
   hero.appendChild(desc);
 
+  // Centro: 4 entradas icon-first. Amigos / Mis mundos viven en el rail izquierdo.
   const actions = document.createElement('div');
   actions.className = 'rg-home-actions';
-  actions.appendChild(lvBtn('▶ Jugar solo', 'rg-btn-primary', function () { playLevel('mundo-1'); }));
-  actions.appendChild(lvBtn('👥 Jugar con amigos', 'rg-btn-primary', function () {
-    if (typeof onlineOpenMenu === 'function') onlineOpenMenu();
-    else try { lvToast('El modo online se está cargando…'); } catch (e) {}
-  }));
-  actions.appendChild(lvBtn('🗺 Mis mundos', '', function () { showMainMenu('mine'); }));
-  actions.appendChild(lvBtn('🎓 Tutorial', '', function () { playLevel('tutorial'); }));
-  actions.appendChild(lvBtn('🧪 Playground', '', function () { playLevel('playground'); }));
+  actions.appendChild(lvModeBtn('▶', 'Jugar solo', 'rg-mode-primary', function () { playLevel(soloStartLevelId()); }));
+  actions.appendChild(lvModeBtn('🎓', 'Tutorial', '', function () { playLevel('tutorial'); }));
+  if (fpsFeatureUnlocked('playground')) {
+    actions.appendChild(lvModeBtn('🧪', 'Playground', '', function () { playLevel('playground'); }));
+  }
+  actions.appendChild(lvModeBtn('⚔', 'Combat Lab', '', function () { playLevel('combat_lab'); }));
   hero.appendChild(actions);
 
   const modeNote = document.createElement('div');
   modeNote.className = 'rg-hint';
   modeNote.style.marginTop = '12px';
-  modeNote.innerHTML = '<b>Jugar solo</b> usa tu partida y tus mundos guardados en este navegador. ' +
-    '<b>Jugar con amigos</b> abre una sala coop de 2 a 5 jugadores con código o link de invitación.';
+  const nextUnlock = (typeof fpsProgressNextUnlock === 'function') ? fpsProgressNextUnlock() : null;
+  modeNote.innerHTML =
+    '<b>Jugar solo</b> retoma la campaña en este navegador. ' +
+    '<b>Tutorial / Combat Lab</b> son modos de práctica. ' +
+    (nextUnlock
+      ? ('<br>Próximo desbloqueo: <b>' + lvEsc(nextUnlock.label) + '</b> a los ' +
+         nextUnlock.minutes + ' min jugados.')
+      : '<br>Tenés todo el menú desbloqueado.');
   hero.appendChild(modeNote);
   body.appendChild(hero);
 
@@ -869,9 +922,12 @@ function renderHome(body) {
     card.appendChild(row);
     grid.appendChild(card);
   }
+  try {
+    if (typeof fpsProgressRenderCard === 'function') grid.appendChild(fpsProgressRenderCard());
+  } catch (e) { console.warn('progress card', e); }
   const help = document.createElement('div');
   help.className = 'rg-home-card';
-  help.innerHTML = '<h3>Progresión</h3><p>Martillo → mesa → pico → pistola. El árbol de tecnología del menú de pausa muestra el camino completo.</p>';
+  help.innerHTML = '<h3>Tecnología</h3><p>Martillo → mesa → pico → pistola. El árbol de tecnología del menú de pausa muestra el camino completo.</p>';
   grid.appendChild(help);
   body.appendChild(grid);
 
@@ -1543,6 +1599,44 @@ function getLastLevelId() {
   try { return localStorage.getItem('lagrieta_last_level'); } catch (e) { return null; }
 }
 
+// Nivel de campaña donde retomar. Ignora tutorial/playground/lab y mundos
+// de usuario para que "Jugar solo" siempre caiga en la campaña.
+function soloStartLevelId() {
+  const last = getLastLevelId();
+  const def = last ? resolveLevelDef(last) : null;
+  if (def && def.kind === 'campaign') return last;
+  return 'mundo-1';
+}
+
+// Arranque directo del FPS: el jugador entra al mundo, no al menú.
+function fpsAutoStartSolo() {
+  try {
+    playLevel(soloStartLevelId());
+  } catch (e) {
+    console.error('No se pudo iniciar Jugar solo:', e);
+    try { showMainMenu('start'); } catch (e2) {}
+  }
+}
+
+// Salir del FPS y volver al sitio. Es una acción deliberada del menú:
+// no hay botón flotante ni atajo de teclado que lo haga por accidente.
+function fpsExitToSite() {
+  try { if (typeof fpsInfluenceReport === 'function') fpsInfluenceReport(true); } catch (e) {}
+  try { if (typeof fpsProgressFlush === 'function') fpsProgressFlush(true); } catch (e) {}
+  try { if (typeof isGamePaused !== 'undefined') isGamePaused = true; } catch (e) {}
+  try { document.exitPointerLock(); } catch (e) {}
+  try {
+    if (window.parent && window.parent !== window &&
+        window.parent.LaGrietaApp &&
+        typeof window.parent.LaGrietaApp.closeFps === 'function') {
+      window.parent.LaGrietaApp.closeFps();
+      return;
+    }
+  } catch (e) {}
+  // FPS abierto solo (sin el sitio alrededor): volvemos a la home.
+  try { window.location.href = '../../index.html'; } catch (e) {}
+}
+
 // ------------------------------------------------------------
 //  Panel compacto dentro del menú de pausa (pestaña Niveles)
 // ------------------------------------------------------------
@@ -1623,6 +1717,12 @@ function initLevels() {
     spawn: { x: 0, z: 0, rot: Math.PI }, resetInventory: true, env: 'day',
     doors: { south: { to: 'mundo-1', locked: true, key: 'golden_key' } },
     build: buildTutorialLevel
+  });
+  registerLevel({
+    id: 'combat_lab', name: 'Combat Lab', kind: 'lab', size: 40,
+    spawn: { x: 0, z: 0, rot: Math.PI }, resetInventory: true, env: 'day',
+    doors: {},
+    build: typeof buildCombatLabLevel === 'function' ? buildCombatLabLevel : function () {}
   });
   registerLevel({
     id: 'mundo-1', name: 'La Grieta', kind: 'campaign', size: 160,

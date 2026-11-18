@@ -719,6 +719,7 @@ function showPauseTab(name) {
     pauseUI.title.textContent = titles[name] || 'PAUSA';
   }
   applyPausePanels();
+  applyPauseUnlocks();
   if (name === 'craft') {
       try { renderTechTree(); } catch (e) { console.warn('tech tree', e); }
       try { renderMaterialChips(document.getElementById('techFoot')); } catch (e) {}
@@ -730,6 +731,29 @@ function showPauseTab(name) {
     if (pauseUI.tabs[k]) pauseUI.tabs[k].classList.toggle('on', k === name);
   }
 }
+// Muestra u oculta las pestañas avanzadas según el tiempo jugado.
+// Se llama al abrir la pausa y cuando llega la progresión desde Firestore.
+function applyPauseUnlocks() {
+  if (typeof pauseUI === 'undefined' || !pauseUI) return;
+  const canBuild = (typeof fpsProgressUnlocked !== 'function') || fpsProgressUnlocked('build');
+  const canOnline = (typeof fpsProgressUnlocked !== 'function') || fpsProgressUnlocked('online');
+  if (pauseUI.tabs && pauseUI.tabs.build) {
+    pauseUI.tabs.build.style.display = canBuild ? '' : 'none';
+  }
+  if (pauseUI.tabs && pauseUI.tabs.account) {
+    const spans = pauseUI.tabs.account.querySelectorAll('span');
+    if (spans && spans[1]) spans[1].textContent = canOnline ? 'Online' : 'Cuenta';
+  }
+  if (pauseUI.onlineDiv) {
+    const showOnline = canOnline && pauseUI.activeTab === 'account';
+    pauseUI.onlineDiv.style.display = showOnline ? 'block' : 'none';
+  }
+  if (pauseUI.lockedHint) pauseUI.lockedHint.style.display = canOnline ? 'none' : 'block';
+  if (!canBuild && pauseUI.activeTab === 'build') showPauseTab('play');
+}
+document.addEventListener('lagrieta:fps-progress', function () {
+  try { applyPauseUnlocks(); } catch (e) {}
+});
 function refreshCreatorHint() {
   try {
       const h = document.getElementById('creatorKeysHint');
@@ -770,9 +794,13 @@ function showGameOver() {
               let t = '0:00';
               try { t = fmtRunTime(Date.now() - runStartTs); } catch (e) {}
               stats.innerHTML = 'Sobreviviste ' + t + ' &middot; Bajas ' + kills +
-                  ' &middot; Oleada ' + waveTxt + ' &middot; Bloques ' + placedBlocks.length;
+                  ' &middot; Oleada ' + waveTxt + ' &middot; Bloques ' + placedBlocks.length +
+                  (typeof fpsInfluenceScoreText === 'function'
+                    ? '<br>Aporte a la grieta: <b>' + fpsInfluenceScoreText() + '</b>'
+                    : '');
           }
       }
+      try { if (typeof fpsInfluenceReport === 'function') fpsInfluenceReport(true); } catch (e) {}
       go.style.display = 'flex';
   }
   const respawnBtn = document.getElementById('respawnBtn');
@@ -835,7 +863,20 @@ function refreshPauseStats() {
   try { if (typeof waveNumber !== 'undefined') waveTxt = '  |  Oleada: ' + waveNumber; } catch (e) {}
   let netTxt = '';
   try { if (typeof netNeighborCount === 'function') { const nb = netNeighborCount(); if (nb > 0) netTxt = '  |  Vecinos: ' + nb; } } catch (e) {}
-  pauseUI.stats.textContent = 'Vida: ' + hp + '  |  Bloques: ' + placedBlocks.length + '  |  Enemigos: ' + alive + waveTxt + netTxt;
+  let rankTxt = '';
+  try {
+    if (typeof fpsProgressRank === 'function') {
+      const rank = fpsProgressRank().current;
+      if (rank && rank.name) rankTxt = '  |  Rango: ' + rank.name;
+    }
+  } catch (e) {}
+  let influenceTxt = '';
+  try {
+    if (typeof fpsInfluenceScoreText === 'function') {
+      influenceTxt = '  |  Aporte: ' + fpsInfluenceScoreText();
+    }
+  } catch (e) {}
+  pauseUI.stats.textContent = 'Vida: ' + hp + '  |  Bloques: ' + placedBlocks.length + '  |  Enemigos: ' + alive + waveTxt + netTxt + rankTxt + influenceTxt;
 }
 function updatePauseAuthUI(user) {
   const name = user ? (user.displayName || user.email || user.uid) : null;

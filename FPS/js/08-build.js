@@ -236,6 +236,10 @@
   }
 
   function placeBlock() {
+      if (typeof combatLabBlocksCraft === 'function' && combatLabBlocksCraft()) {
+          showPlacementMessage('Combat Lab: craft OFF');
+          return;
+      }
       if (!blockPreview || !blockPreview.userData.canPlace) {
           showPlacementMessage(`No se puede poner: ${lastInvalidReason}`);
           return;
@@ -294,6 +298,8 @@
       scene.add(block);
       placedBlocks.push(block);
       blockGrid.set(getGridKey(blockPos.x, blockPos.y, blockPos.z), block);
+      // Aporte a la grieta: sólo cuenta si no es creador/tutorial/playground.
+      try { if (typeof fpsInfluenceBlockPlaced === 'function') fpsInfluenceBlockPlaced(); } catch (e) {}
 
       // Proceed block cost with placement (before broadcast so guest pending knows cost)
       const payCost = (typeof creatorMode === 'undefined' || !creatorMode) ? cost : 0;
@@ -898,7 +904,8 @@
   function refreshBuildBarVisibility() {
       const bar = document.getElementById('buildBar');
       if (!bar) return;
-      const show = !isGamePaused && !(typeof creatorMode !== 'undefined' && creatorMode) &&
+      const labCraftOff = (typeof combatLabBlocksCraft === 'function' && combatLabBlocksCraft());
+      const show = !isGamePaused && !labCraftOff && !(typeof creatorMode !== 'undefined' && creatorMode) &&
           typeof player !== 'undefined' && player && player.currentTool === TOOLS.HAMMER;
       bar.style.display = show ? 'flex' : 'none';
   }

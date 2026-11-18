@@ -6,7 +6,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="css/retro.css">
+    <link rel="stylesheet" href="css/retro.css?v=6">
   <title>FPS La Grieta — Jugando en La Grieta</title>
 </head>
 <body>
@@ -68,6 +68,9 @@
 
   <div id="interactionPrompt" class="interaction-prompt"></div>
 
+  <!-- Aviso mientras el mouse no está capturado (clic para jugar) -->
+  <div id="pointerHint" class="rg-pointer-hint" hidden>Clic para capturar el mouse</div>
+
   <!-- Gestor de niveles (se rellena por JS: 19-levels.js) -->
   <div id="mainMenu" class="rg-overlay"></div>
 
@@ -77,6 +80,7 @@
       <div>
         <button id="respawnBtn" onclick="respawnPlayer()" class="rg-btn rg-btn-primary">Reaparecer</button>
         <button onclick="window.location.reload()" class="rg-btn">Reiniciar</button>
+        <button onclick="fpsExitToSite()" class="rg-btn rg-btn-danger">🚪 Salir al sitio</button>
       </div>
       <div id="gameOverHint" class="rg-hint">Reaparecer mantiene tu mundo, tus cosas y la oleada. Reiniciar borra todo.</div>
   </div>
@@ -192,6 +196,7 @@
   <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-firestore.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.6.1/firebase-functions.js"></script>
   <script>
     // Jugando en La Grieta Firebase config (same project as authService.js).
     // Initialized synchronously so game code can use firebase.auth()/firestore() immediately.
@@ -211,39 +216,45 @@
       }
     } catch (e) { console.error('Firebase init failed:', e); }
   </script>
+  <script src="../../js/influenceClient.js?v=6"></script>
   <script src="https://www.gstatic.com/firebasejs/ui/4.8.0/firebase-ui-auth__es.js"></script>
   <script type="module" src="../../js/authService.js"></script>
 
 
   <!-- Your main game logic -->
   <!-- LaGrieta FPS: logic split by system. Classic scripts share globals: LOAD ORDER MATTERS. -->
-  <script src="js/01-config.js"></script>
-  <script src="js/02-systems.js"></script>
-  <script src="js/03-worlddata.js"></script>
-  <script src="js/04-character.js"></script>
-  <script src="js/05-inventory.js"></script>
-  <script src="js/06-entities.js"></script>
-  <script src="js/07-spawns.js"></script>
-  <script src="js/08-build.js"></script>
-  <script src="js/09-menu.js"></script>
-  <script src="js/10-init.js"></script>
-  <script src="js/11-controls.js"></script>
-  <script src="js/12-loop.js"></script>
-  <script src="js/13-audio.js"></script>
-  <script src="js/14-serialize.js"></script>
-  <script src="js/15-ui.js"></script>
-  <script src="js/17-net.js"></script>
-  <script src="js/18-trial.js"></script>
-  <script src="js/19-levels.js"></script>
-  <script src="js/20-neuralnet.js"></script>
-  <script src="js/21-ambience.js"></script>
-  <script src="js/22-neural-fauna.js"></script>
-  <script src="js/23-world-container.js"></script>
-  <script src="js/24-world-zone.js"></script>
-  <script src="js/26-tutorial-director.js"></script>
-  <script src="js/27-tech.js"></script>
-  <script src="js/28-online.js"></script>
-  <script src="js/25-playground.js"></script>
-  <script src="js/16-boot.js"></script>
+  <script src="js/01-config.js?v=6"></script>
+  <script src="js/02-systems.js?v=6"></script>
+  <script src="js/03-worlddata.js?v=6"></script>
+  <script src="js/bodyRig.js?v=6"></script>
+  <script src="js/meleeCombat.js?v=6"></script>
+  <script src="js/04-character.js?v=6"></script>
+  <script src="js/05-inventory.js?v=6"></script>
+  <script src="js/06-entities.js?v=6"></script>
+  <script src="js/07-spawns.js?v=6"></script>
+  <script src="js/08-build.js?v=6"></script>
+  <script src="js/09-menu.js?v=6"></script>
+  <script src="js/10-init.js?v=6"></script>
+  <script src="js/11-controls.js?v=6"></script>
+  <script src="js/12-loop.js?v=6"></script>
+  <script src="js/13-audio.js?v=6"></script>
+  <script src="js/14-serialize.js?v=6"></script>
+  <script src="js/15-ui.js?v=6"></script>
+  <script src="js/17-net.js?v=6"></script>
+  <script src="js/18-trial.js?v=6"></script>
+  <script src="js/19-levels.js?v=6"></script>
+  <script src="js/20-neuralnet.js?v=6"></script>
+  <script src="js/21-ambience.js?v=6"></script>
+  <script src="js/22-neural-fauna.js?v=6"></script>
+  <script src="js/23-world-container.js?v=6"></script>
+  <script src="js/24-world-zone.js?v=6"></script>
+  <script src="js/26-tutorial-director.js?v=6"></script>
+  <script src="js/27-tech.js?v=6"></script>
+  <script src="js/28-online.js?v=6"></script>
+  <script src="js/25-playground.js?v=6"></script>
+  <script src="js/29-combat-lab.js?v=6"></script>
+  <script src="js/29-progress.js?v=6"></script>
+  <script src="js/30-influence.js?v=6"></script>
+  <script src="js/16-boot.js?v=6"></script>
 </body>
 </html>

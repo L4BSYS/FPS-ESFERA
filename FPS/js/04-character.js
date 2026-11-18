@@ -45,6 +45,19 @@
           this.height = this.config.height;
           this.radius = this.config.radius;
           this.halfHeight = this.height / 2;
+          this.standHeight = this.height;
+          this.crouched = false;
+          this._flinchT = 0;
+          this.body = null;
+
+          // Fists / guard (symmetric combat). guard = future shield; strike = future weapon.
+          this.fistsCombat = false;
+          this.isGuarding = false;
+          this.nextHand = 1; // +1 right, -1 left — alternates on strike
+          this._strikeCooldown = 0;
+          this._meleePending = null;
+          this._guardAiT = 0;
+          this._staggerT = 0;
 
           // Input State
           this.input = { forward: 0, backward: 0, left: 0, right: 0 };
@@ -144,8 +157,532 @@
           }
       }
 
+      /** Pose flags for bodyRig driver (shared Player/NPC). */
+      getBodyFlags() {
+          const hx = this.velocity.x;
+          const hz = this.velocity.z;
+          const speedH = Math.hypot(hx, hz);
+          const moving = speedH > 0.45 || !!(this.input && (this.input.forward || this.input.backward || this.input.left || this.input.right));
+          return {
+              moving: moving,
+              onGround: !!this.isOnGround,
+              crouched: !!this.crouched,
+              sprint: !!this.isSprinting && !this.crouched,
+              velY: this.velocity.y,
+              speedH: speedH,
+              hasGun: this.currentTool === (typeof TOOLS !== 'undefined' ? TOOLS.GUN : 'gun'),
+              fp: false,
+              pitch: 0,
+              guarding: !!this.isGuarding,
+              down: (this.body && this.body.down) || (this.state === 'dead' ? 'dead' : null)
+          };
+      }
+
+      getPoseId() {
+          if (this.body && this.body.driver) return this.body.driver.poseId;
+          if (!this.isOnGround) return this.velocity.y > 0.3 ? 'jump' : 'fall';
+          if (this.crouched) return (this.getBodyFlags().moving ? 'crouch_walk' : 'crouch');
+          if (this.getBodyFlags().moving) return this.isSprinting ? 'sprint' : 'walk';
+          return 'idle';
+      }
+
+      setCrouched(on) {
+          if (!(this.config && this.config.crouchEnabled !== false)) return;
+          on = !!on;
+          if (on === this.crouched) return;
+          const factor = (this.config.crouchHeightFactor != null)
+              ? this.config.crouchHeightFactor
+              : ((typeof BODY_DEF !== 'undefined' && BODY_DEF.crouchPolicy) ? BODY_DEF.crouchPolicy.heightFactor : 0.65);
+          const oldHalf = this.halfHeight;
+          this.crouched = on;
+          if (on) this.isSprinting = false;
+          this.height = on ? this.standHeight * factor : this.standHeight;
+          this.halfHeight = this.height / 2;
+          // Keep feet planted: center moves with halfHeight delta.
+          this.container.position.y += (this.halfHeight - oldHalf);
+          this.rebuildColliderGeometry();
+          this.updateColliderBox();
+      }
+
+      rebuildColliderGeometry() {
+          if (!this.collider) return;
+          const keepMat = this.collider.children[0] && this.collider.children[0].material
+              ? this.collider.children[0].material
+              : new THREE.MeshBasicMaterial({ wireframe: true, color: 0xffff00, depth: false, transparent: true, opacity: 0.7, visible: !!debugMode });
+          while (this.collider.children.length) {
+              const ch = this.collider.children[0];
+              this.collider.remove(ch);
+              if (ch.geometry) ch.geometry.dispose();
+          }
+          const cylinderHeight = this.height - 2 * this.radius;
+          if (cylinderHeight > 0) {
+              const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(this.radius, this.radius, cylinderHeight, 16), keepMat.clone());
+              cylinder.position.y = 0;
+              this.collider.add(cylinder);
+              const sphereGeo = new THREE.SphereGeometry(this.radius, 16, 8);
+              const topSphere = new THREE.Mesh(sphereGeo, keepMat.clone());
+              topSphere.position.y = cylinderHeight / 2;
+              this.collider.add(topSphere);
+              const bottomSphere = new THREE.Mesh(sphereGeo, keepMat.clone());
+              bottomSphere.position.y = -cylinderHeight / 2;
+              this.collider.add(bottomSphere);
+          }
+      }
+
+      updateBodyRig(delta, extraFlags) {
+          if (!this.body || typeof this.body.update !== 'function') return;
+          const flags = Object.assign(this.getBodyFlags(), extraFlags || {});
+          if (this._flinchT > 0) this._flinchT -= delta;
+          this.body.update(delta, flags);
+      }
+
+      /** Hit feedback on shared body (flinch + flash). Optional world knockback dir. */
+      playBodyHit(fromPos, heavy) {
+          if (!this.body) return;
+          let side = Math.random() < 0.5 ? -1 : 1;
+          try {
+              if (fromPos && this.container) {
+                  const to = new THREE.Vector3().subVectors(this.container.position, fromPos);
+                  const forward = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.container.rotation.y);
+                  // Cross Y: sign says left/right of facing
+                  side = Math.sign(forward.x * to.z - forward.z * to.x) || side;
+              }
+          } catch (e) {}
+          if (typeof this.body.playHit === 'function') this.body.playHit({ side: side, heavy: !!heavy });
+          else if (this.body.setAction) this.body.setAction('flinch');
+          this._flinchT = heavy ? 0.55 : 0.38;
+      }
+
+      getFistsStats() {
+          const f = (typeof MELEE_FISTS !== 'undefined') ? MELEE_FISTS : null;
+          const band = (f && f.rangeBand) || 'short';
+          let reach = (typeof meleeReachFor === 'function')
+              ? meleeReachFor(band)
+              : ((f && f.reach) || 1.35);
+          if (f && f.reach != null && !(typeof meleeReachFor === 'function')) reach = f.reach;
+          return {
+              damage: (f && f.damage) || 7,
+              rangeBand: band,
+              reach: reach,
+              peak: (f && f.peak) || 0.12,
+              duration: (f && f.duration) || 0.28,
+              cooldown: (f && f.cooldown) || 0.32,
+              stagger: (f && f.stagger) || 0.14,
+              guardDamageMult: (f && f.guardDamageMult) || 0.18,
+              forgive: (f && f.forgive != null) ? f.forgive : 0.08,
+              clashWindowMs: (f && f.clashWindowMs != null) ? f.clashWindowMs : 140,
+              punchCost: (f && f.punchCost != null) ? f.punchCost : 9,
+              guardDrainPerSec: (f && f.guardDrainPerSec != null) ? f.guardDrainPerSec : 12,
+              blockHitCost: (f && f.blockHitCost != null) ? f.blockHitCost : 4,
+              guardTiredBelow: (f && f.guardTiredBelow != null) ? f.guardTiredBelow : 15,
+              guardTiredMult: (f && f.guardTiredMult != null) ? f.guardTiredMult : 0.45,
+              softDamageMult: (f && f.softDamageMult != null) ? f.softDamageMult : 0.5,
+              softCooldownMult: (f && f.softCooldownMult != null) ? f.softCooldownMult : 1.4
+          };
+      }
+
+      /** Lab fists: spend Aguante; resets regen delay. */
+      spendFistsStamina(amount) {
+          if (!(amount > 0)) return;
+          this.stamina = Math.max(0, (this.stamina || 0) - amount);
+          this._staminaRestTimer = 0;
+          if (this.stamina <= 0.5) {
+              this.stamina = 0;
+              this.staminaExhausted = true;
+              this.isSprinting = false;
+          }
+      }
+
+      fistsStaminaSoft() {
+          if (!this.usesFistsCombat()) return false;
+          const fs = this.getFistsStats();
+          return !!(this.staminaExhausted || (this.stamina || 0) < fs.punchCost);
+      }
+
+      usesFistsCombat() {
+          if (this.fistsCombat) return true;
+          try {
+              if (typeof isCombatLabActive === 'function' && isCombatLabActive() &&
+                  typeof LAB !== 'undefined' && LAB && LAB.layer === 'fists') return true;
+          } catch (e) {}
+          return false;
+      }
+
+      /** Guard = future shield hook. Hold on; cancels pending strike + punch pose. */
+      setGuard(on) {
+          const want = !!on;
+          // S1 Soft: exhausted → cannot raise guard
+          if (want && this.usesFistsCombat() && this.staminaExhausted) {
+              return this.isGuarding;
+          }
+          if (want && this.usesFistsCombat() && (this.stamina || 0) <= 0) {
+              return this.isGuarding;
+          }
+          if (want === this.isGuarding) {
+              if (want && this.body && typeof this.body.setGuard === 'function') {
+                  try { this.body.setGuard(true); } catch (e) {}
+              }
+              return this.isGuarding;
+          }
+          this.isGuarding = want;
+          if (want) {
+              this._meleePending = null;
+              try {
+                  if (this.body && this.body.driver) {
+                      this.body.driver.punchT = 0;
+                      this.body.driver.punchW = 0;
+                  }
+              } catch (e) {}
+          }
+          try {
+              if (this.body && typeof this.body.setGuard === 'function') this.body.setGuard(want);
+          } catch (e) {}
+          return this.isGuarding;
+      }
+
+      /** Strike = future weapon hook. Fists alternate L/R. No strike while guarding. */
+      startStrike(opts) {
+          opts = opts || {};
+          if (this.isGuarding) return false;
+          if (this.state === 'dead' || this.health <= 0) return false;
+          if (this._staggerT > 0) return false;
+          if (this._strikeCooldown > 0) return false;
+          if (this._meleePending && !this._meleePending.resolved) return false;
+
+          const fists = this.usesFistsCombat() || !!opts.fists;
+          let stats;
+          if (fists) stats = this.getFistsStats();
+          else if (typeof this.getMeleeStatsForTool === 'function') stats = this.getMeleeStatsForTool(opts.tool || this.currentTool);
+          else stats = { damage: 5, reach: (typeof meleeShortReach === 'function' ? meleeShortReach() : 1.35), peak: 0.14, duration: 0.34, cooldown: 0.36, stagger: 0.1 };
+
+          let dmg = opts.damage != null ? opts.damage : stats.damage;
+          const rng = opts.reach != null ? opts.reach : stats.reach;
+          const dur = stats.duration || 0.28;
+          const peak = Math.min(stats.peak || 0.12, Math.max(0.05, dur * 0.85));
+          let cd = stats.cooldown || 0.32;
+          const hand = (opts.hand != null) ? opts.hand : this.nextHand;
+          this.nextHand = -hand;
+
+          // S1 Soft Aguante: always spend; soft punch if low/exhausted
+          let soft = false;
+          if (fists) {
+              const cost = stats.punchCost != null ? stats.punchCost : 9;
+              soft = this.fistsStaminaSoft();
+              if (soft) {
+                  dmg = Math.max(1, Math.round(dmg * (stats.softDamageMult != null ? stats.softDamageMult : 0.5)));
+                  cd *= (stats.softCooldownMult != null ? stats.softCooldownMult : 1.4);
+              }
+              this.spendFistsStamina(cost);
+          }
+
+          try {
+              if (this.body) {
+                  if (fists && typeof this.body.playPunch === 'function') {
+                      this.body.playPunch({ side: hand, duration: dur });
+                  } else if (typeof this.body.playSwing === 'function') {
+                      this.body.playSwing({ duration: dur, side: hand });
+                  } else if (typeof this.body.setAction === 'function') {
+                      this.body.setAction('swing');
+                  }
+              }
+          } catch (e) {}
+
+          const now = performance.now();
+          let aimPos = null;
+          try {
+              if (opts.aimPos) aimPos = opts.aimPos.clone ? opts.aimPos.clone() : opts.aimPos;
+              else if (opts.aimAt && opts.aimAt.container) aimPos = opts.aimAt.container.position.clone();
+              else if (this._combatAimPos) aimPos = this._combatAimPos.clone();
+              else if (this.target && this.target.container) aimPos = this.target.container.position.clone();
+          } catch (e) {}
+          this._meleePending = {
+              damage: dmg,
+              reach: rng,
+              forgive: (stats.forgive != null) ? stats.forgive : 0.08,
+              stagger: stats.stagger || 0.14,
+              tool: fists ? 'fists' : (this.currentTool || 'hands'),
+              hand: hand,
+              fists: !!fists,
+              soft: soft,
+              startAt: now,
+              clashWindowMs: stats.clashWindowMs != null ? stats.clashWindowMs : 140,
+              fromPlayer: !!this.camera,
+              aimPos: aimPos,
+              aimNpc: (opts.aimAt instanceof NPC) ? opts.aimAt : null,
+              peakAt: now + peak * 1000,
+              expireAt: now + dur * 1000,
+              resolved: false,
+              cancelled: false
+          };
+          this._strikeCooldown = cd;
+
+          try {
+              if (this.camera && typeof meleeCooldown !== 'undefined') meleeCooldown = this._strikeCooldown;
+          } catch (e) {}
+          try {
+              if (this.camera && typeof isCombatLabActive === 'function' && isCombatLabActive() &&
+                  typeof LAB !== 'undefined' && LAB && LAB.stats) {
+                  LAB.stats.swings++;
+                  if (typeof updateCombatLabHud === 'function') updateCombatLabHud();
+              }
+          } catch (e) {}
+          try { if (typeof this.applyRecoil === 'function') this.applyRecoil(soft ? 0.04 : 0.07); } catch (e) {}
+          return true;
+      }
+
+      /**
+       * Character facing in XZ. BodyRig + NPC chase use local +Z
+       * (input.forward=-1 → wishDir +Z; BODY_MOUNT.yawNpc=0).
+       * Player walk/look uses camera −Z; getStrikeRay uses the camera for that.
+       */
+      getForwardDir(out) {
+          const d = out || new THREE.Vector3();
+          const yaw = this.container ? this.container.rotation.y : 0;
+          // local +Z after Y rotation
+          d.set(Math.sin(yaw), 0, Math.cos(yaw));
+          return d;
+      }
+
+      /** Combat Lab: NPCs may fight each other (nearest-threat). Only while lab active. */
+      allowsNpcFights() {
+          try {
+              if (typeof isCombatLabActive !== 'function' || !isCombatLabActive()) return false;
+              const ep = (typeof COMBAT_LAB !== 'undefined' && COMBAT_LAB && COMBAT_LAB.enemyPolicy)
+                  ? COMBAT_LAB.enemyPolicy : null;
+              if (ep && ep.npcFights === false) return false;
+              return true;
+          } catch (e) {}
+          return false;
+      }
+
+      getStrikeRay() {
+          const origin = new THREE.Vector3();
+          const dir = new THREE.Vector3();
+          if (this.camera) {
+              this.camera.getWorldPosition(origin);
+              this.camera.getWorldDirection(dir);
+          } else {
+              origin.copy(this.container.position);
+              origin.y += (this.halfHeight || 0.8) * 0.55;
+              let aimed = false;
+              try {
+                  let to = null;
+                  if (typeof meleeLiveAimPos === 'function') {
+                      to = meleeLiveAimPos(this._meleePending, this.target);
+                  }
+                  if (!to && this._combatAimPos) to = this._combatAimPos;
+                  if (!to && this.target && this.target.container) to = this.target.container.position;
+                  if (!to && typeof player !== 'undefined' && player && player.health > 0 && player.container) {
+                      to = player.container.position;
+                  }
+                  if (to) {
+                      dir.set(to.x - origin.x, 0, to.z - origin.z);
+                      if (dir.lengthSq() > 1e-6) {
+                          dir.normalize();
+                          dir.y = 0.08;
+                          dir.normalize();
+                          aimed = true;
+                      }
+                  }
+              } catch (e) {}
+              if (!aimed) this.getForwardDir(dir);
+          }
+          return { origin: origin, dir: dir };
+      }
+
+      resolveMeleeSwing() {
+          const p = this._meleePending;
+          if (!p) return;
+          if (p.cancelled) {
+              this._meleePending = null;
+              return;
+          }
+          const now = performance.now();
+          if (!p.resolved && now >= p.peakAt) {
+              p.resolved = true;
+              this._resolveMeleeHit(p);
+          }
+          if (now >= p.expireAt || p.cancelled) this._meleePending = null;
+      }
+
+      _resolveMeleeHit(p) {
+          const rayInfo = this.getStrikeRay();
+          const origin = rayInfo.origin;
+          const dir = rayInfo.dir;
+          const ray = new THREE.Raycaster(origin, dir, 0, p.reach);
+          const isPlayerAtk = !!this.camera;
+          const targets = [];
+
+          // Symmetric NPC proxies (mesh + collider) for player and lab NPC↔NPC
+          if (isPlayerAtk || (typeof this.allowsNpcFights === 'function' && this.allowsNpcFights())) {
+              if (typeof meleeCollectNpcTargets === 'function') meleeCollectNpcTargets(this, targets);
+              else {
+                  try {
+                      npcs.forEach(n => {
+                          if (n && n !== this && n.health > 0 && n.mesh) targets.push(n.mesh);
+                      });
+                  } catch (e) {}
+              }
+          }
+          if (isPlayerAtk) {
+              try {
+                  if (typeof ONLINE_CONFIG !== 'undefined' && ONLINE_CONFIG.friendlyFire &&
+                      typeof remotes !== 'undefined' && remotes) {
+                      for (const uid in remotes) {
+                          if (remotes[uid] && remotes[uid].mesh) targets.push(remotes[uid].mesh);
+                      }
+                  }
+              } catch (e) {}
+          } else if (typeof meleeCollectPlayerTargets === 'function') {
+              meleeCollectPlayerTargets(targets);
+          }
+
+          const hits = targets.length ? ray.intersectObjects(targets, true) : [];
+          let hitSomething = false;
+          for (let i = 0; i < hits.length; i++) {
+              const id = (typeof meleeIdentifyHit === 'function')
+                  ? meleeIdentifyHit(hits[i].object, this, NPC)
+                  : { npc: null, hitPlayer: false };
+              let npc = id.npc;
+              let hitPlayer = id.hitPlayer;
+              if (!npc && !hitPlayer) {
+                  // Fallback walk if helper missing / pre-NPC-class edge
+                  let obj = hits[i].object;
+                  while (obj) {
+                      if (obj.userData && obj.userData.parentCharacter instanceof NPC) {
+                          npc = obj.userData.parentCharacter;
+                          break;
+                      }
+                      if (typeof player !== 'undefined' && player &&
+                          (obj === player.collider || obj === player.container || obj === player.mesh ||
+                           (player.body && obj === player.body.root) ||
+                           (obj.userData && obj.userData.isPlayerHitProxy))) {
+                          hitPlayer = true;
+                          break;
+                      }
+                      obj = obj.parent;
+                  }
+                  if (npc === this) npc = null;
+              }
+
+              if (isPlayerAtk && npc && npc.health > 0) {
+                  this._applyStrikeToTarget(npc, hits[i].point, p);
+                  hitSomething = true;
+                  break;
+              }
+              if (!isPlayerAtk && hitPlayer && player && player.health > 0) {
+                  this._applyStrikeToTarget(player, hits[i].point, p);
+                  hitSomething = true;
+                  break;
+              }
+              if (!isPlayerAtk && npc && npc.health > 0) {
+                  this._applyStrikeToTarget(npc, hits[i].point, p);
+                  hitSomething = true;
+                  break;
+              }
+          }
+
+          // Shared forgiveness (player + NPC) — short band needs this for feel
+          if (!hitSomething && typeof meleeForgivenessHit === 'function') {
+              let forgiveTarget = null;
+              if (p.aimNpc && p.aimNpc.health > 0) forgiveTarget = p.aimNpc;
+              else if (isPlayerAtk) {
+                  try {
+                      let best = null, bestD = Infinity;
+                      if (typeof npcs !== 'undefined' && npcs) {
+                          for (let i = 0; i < npcs.length; i++) {
+                              const n = npcs[i];
+                              if (!n || n.health <= 0 || !n.container) continue;
+                              const d = origin.distanceTo(n.container.position);
+                              if (d < bestD) { bestD = d; best = n; }
+                          }
+                      }
+                      forgiveTarget = best;
+                  } catch (e) {}
+              } else if (this.target && this.target.health > 0 && this.target.container) {
+                  forgiveTarget = this.target;
+              } else if (typeof player !== 'undefined' && player && player.health > 0) {
+                  forgiveTarget = player;
+              }
+              const slack = (p.forgive != null) ? p.forgive
+                  : ((typeof this.getFistsStats === 'function') ? this.getFistsStats().forgive : 0.08);
+              const forg = meleeForgivenessHit(origin, dir, p.reach, slack, forgiveTarget);
+              if (forg) {
+                  this._applyStrikeToTarget(forg.target, forg.point, p);
+                  hitSomething = true;
+              }
+          }
+
+          if (!hitSomething && isPlayerAtk) {
+              try { playSound('weapon_empty'); } catch (e) {}
+          }
+          return hitSomething;
+      }
+
+      _applyStrikeToTarget(target, hitPoint, p) {
+          if (!p || p.cancelled) return false;
+          // S1 Strict: if both swinging in clash window, earlier startAt wins
+          if (p.fists && target && typeof meleeClashVerdict === 'function') {
+              const verdict = meleeClashVerdict(p, target);
+              if (verdict === 'lose') {
+                  try {
+                      if (typeof noteCombatLabClash === 'function') noteCombatLabClash('lose');
+                  } catch (e) {}
+                  try { playSound('weapon_empty'); } catch (e) {}
+                  return false;
+              }
+              if (verdict === 'win') {
+                  try {
+                      if (typeof meleeCancelPending === 'function') meleeCancelPending(target, 'clash_lose');
+                  } catch (e) {}
+                  try {
+                      if (typeof noteCombatLabClash === 'function') noteCombatLabClash('win');
+                  } catch (e) {}
+              }
+          }
+          const hitY = hitPoint ? hitPoint.y : null;
+          let finalDmg = p.damage;
+          let zone = null;
+          try {
+              if (hitY != null && typeof scaleDamageByHit === 'function') {
+                  const scaled = scaleDamageByHit(p.damage, target, hitY);
+                  finalDmg = scaled.damage;
+                  zone = scaled.zone;
+              }
+          } catch (e) {}
+          try {
+              if (typeof target.takeDamage === 'function') {
+                  target.takeDamage(finalDmg, {
+                      zone: zone,
+                      hitY: hitY,
+                      preScaled: true,
+                      heavy: zone === 'head' || finalDmg >= 18,
+                      stagger: p.stagger,
+                      from: this.container ? this.container.position : null,
+                      fromNpc: (this instanceof NPC) ? this : null
+                  });
+              }
+          } catch (e) {}
+          try {
+              if (hitPoint && typeof createHarvestEffect === 'function') createHarvestEffect(hitPoint);
+          } catch (e) {}
+          try {
+              if (hitPoint) playSoundAt('flesh_hit', hitPoint, { gain: 0.95, maxDist: 30 });
+              else playSound('hit');
+          } catch (e) {}
+          try {
+              if (this.camera && typeof noteCombatLabMeleeHit === 'function') {
+                  noteCombatLabMeleeHit({ zone: zone, damage: finalDmg, tool: p.tool, hand: p.hand });
+              }
+          } catch (e) {}
+      }
+
       update(delta, collidables) {
           if (isGamePaused) return;
+
+          if (this._strikeCooldown > 0) this._strikeCooldown = Math.max(0, this._strikeCooldown - delta);
+          if (this._guardAiT > 0) this._guardAiT = Math.max(0, this._guardAiT - delta);
+          try { this.resolveMeleeSwing(); } catch (e) {}
           
           this._previousPosition.copy(this.container.position);
           const wasOnGround = this.isOnGround;
@@ -154,17 +691,32 @@
           this.checkGround(collidables);
           this.processMovement(delta, collidables);
 
-          // Aguante: drena por segundo mientras esprintás y regenera al descansar.
-          // (Antes se restaba por frame, lo que vaciaba la barra casi al instante.)
+          // Aguante: sprint + fists guard drain; regen after rest delay.
+          let staminaBusy = false;
           if (this.isSprinting && this.isOnGround && !this.staminaExhausted && this.stamina > 0) {
               this.stamina = Math.max(0, this.stamina - this.staminaSprintDrain * delta);
-              this._staminaRestTimer = 0;
+              staminaBusy = true;
               if (this.stamina <= 0.5) {
                   this.stamina = 0;
                   this.staminaExhausted = true;
                   this.isSprinting = false;
                   try { if (typeof lvToast === 'function') lvToast('Sin aguante: caminá un poco para recuperarlo'); } catch (e) {}
               }
+          }
+          // S1 Soft: holding guard drains Aguante (lab fists)
+          if (this.isGuarding && typeof this.usesFistsCombat === 'function' && this.usesFistsCombat()) {
+              const fs = this.getFistsStats();
+              const drain = fs.guardDrainPerSec != null ? fs.guardDrainPerSec : 12;
+              this.stamina = Math.max(0, (this.stamina || 0) - drain * delta);
+              staminaBusy = true;
+              if (this.stamina <= 0.5) {
+                  this.stamina = 0;
+                  this.staminaExhausted = true;
+                  this.setGuard(false);
+              }
+          }
+          if (staminaBusy) {
+              this._staminaRestTimer = 0;
           } else {
               this._staminaRestTimer = (this._staminaRestTimer || 0) + delta;
               if (this._staminaRestTimer >= this.staminaRegenDelay) {
@@ -206,9 +758,11 @@
               new THREE.Euler(0, this.container.rotation.y, 0, 'YXZ')
           );
 
-          // Apply movement speed with sprint modifier
+          // Apply movement speed with sprint / crouch modifiers
           let currentSpeed = this.config.speed;
-          if (this.isSprinting && this.isOnGround && this.stamina > 0) {
+          if (this.crouched) {
+              currentSpeed *= (this.config.crouchSpeedFactor != null) ? this.config.crouchSpeedFactor : 0.5;
+          } else if (this.isSprinting && this.isOnGround && this.stamina > 0) {
               currentSpeed *= this.config.sprintMultiplier;
           }
 
@@ -790,6 +1344,14 @@
           // Position camera at eye level within the container
           this.camera.position.set(0, this.config.height * 0.5, 0); // e.g., 10% below 
 
+          // NPC melee rays hit this capsule (player has no .mesh)
+          try {
+              if (this.collider) {
+                  this.collider.userData = this.collider.userData || {};
+                  this.collider.userData.isPlayerHitProxy = true;
+              }
+          } catch (e) {}
+
           // Player-specific Input State
           this.keys = {}; // Tracks currently pressed keys
           this.touchMoveStartX = 0;
@@ -822,6 +1384,21 @@
           // Initialize inventory with empty hands
           this.inventory = new Inventory(this);
 
+          // PR3: 1P body (box-doll). Camera stays sibling under container; head joint drives eye pos.
+          if (this.config.useBodyRig !== false && typeof createBody === 'function') {
+              this.body = createBody({
+                  mode: 'player',
+                  bodyTypeId: 'normie',
+                  showGunStub: false,
+                  mountOnCharacter: true
+              });
+              const feetY = (typeof BODY_MOUNT !== 'undefined' && BODY_MOUNT.feetYFromHalfHeight)
+                  ? BODY_MOUNT.feetYFromHalfHeight(this.halfHeight)
+                  : -this.halfHeight;
+              this.body.root.position.y = feetY;
+              this.container.add(this.body.root);
+          }
+
           this.updateToolModelVisibility(); // Set initial visibility
           this.updateToolHUD(); // Set initial HUD
           this.updateStatsHUD(); // Set initial stats HUD
@@ -851,14 +1428,362 @@
 
           if (!wasGrounded && this.isOnGround && fallSpeed > 3) {
               try { playSound('land', { gain: Math.min(1, fallSpeed / 14) }); } catch (e) {}
+              try {
+                  if (this.body) {
+                      if (typeof this.body.playLand === 'function') this.body.playLand(fallSpeed);
+                      if (typeof this.body.emit === 'function') {
+                          this.body.emit('landed', +fallSpeed.toFixed(1));
+                      }
+                  }
+              } catch (e) {}
           }
           this.updateFootsteps(delta, isMovingHorizontally);
+
+          const pitch = this.camera ? this.camera.rotation.x : 0;
+          const yaw = this.container ? this.container.rotation.y : 0;
+          const dtLook = Math.max(delta, 1e-4);
+          let lookYaw = 0;
+          let lookPitch = 0;
+          if (this._prevLookYaw == null) {
+              this._prevLookYaw = yaw;
+              this._prevLookPitch = pitch;
+          } else {
+              lookYaw = (yaw - this._prevLookYaw) / dtLook;
+              lookPitch = (pitch - this._prevLookPitch) / dtLook;
+              this._prevLookYaw = yaw;
+              this._prevLookPitch = pitch;
+          }
+          this._lookYawRate = lookYaw;
+          this._lookPitchRate = lookPitch;
+          this.updateBodyRig(delta, {
+              fp: true,
+              hasGun: this.currentTool === TOOLS.GUN,
+              pitch: pitch,
+              lookYaw: lookYaw,
+              lookPitch: lookPitch
+          });
+          this._bodyToolDt = delta;
+          this.syncBodyToolMount();
+          this.updateBodyHeadCamera(delta, isMovingHorizontally);
           
           this.updateInteractionRaycast();
-          this.updateHeadBob(delta, isMovingHorizontally);
+          if (!(this.body && this.config.useBodyHeadCamera)) {
+              this.updateHeadBob(delta, isMovingHorizontally);
+          }
           this.updateToolSwayAndBob(delta); // Unified sway/bob for current tool/item
           this.updateCameraRotation(delta);
           this.updateStatsHUD(); // Update HUD display
+          try {
+              if (typeof document !== 'undefined' && document.documentElement) {
+                  document.documentElement.dataset.fpsPose = this.getPoseId();
+              }
+          } catch (e) {}
+      }
+
+      /** Eye at head joint (+ optional −Z nudge). Keeps camera as container child (look yaw/pitch unchanged). */
+      updateBodyHeadCamera(delta, isMoving) {
+          if (!this.body || !this.body.headJoint || !this.config.useBodyHeadCamera) return;
+          if (!this._headCamLocal) this._headCamLocal = new THREE.Vector3();
+          this.body.headJoint.getWorldPosition(this._headCamLocal);
+          this.container.worldToLocal(this._headCamLocal);
+          // Nudge along camera look (−Z local of camera ≈ walk forward for player).
+          const nudge = this.config.bodyHeadForwardNudge != null ? this.config.bodyHeadForwardNudge : 0.08;
+          this._headCamLocal.z -= nudge;
+          if (this.crouched) {
+              // head joint already drops with crouch pose; tiny settle
+          }
+          this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, this._headCamLocal.x, Math.min(1, delta * 18));
+          this.camera.position.y = THREE.MathUtils.lerp(this.camera.position.y, this._headCamLocal.y, Math.min(1, delta * 18));
+          this.camera.position.z = THREE.MathUtils.lerp(this.camera.position.z, this._headCamLocal.z, Math.min(1, delta * 18));
+      }
+
+      /** Tools that should live on wrist_R (body integration). */
+      wantsBodyToolMount(tool) {
+          if (!this.body || !this.body.toolMount) return false;
+          if (this.config.gunOnBodyMount === false && this.config.bodyToolsOnMount === false) return false;
+          const t = tool || this.currentTool;
+          if (t === TOOLS.GUN) return this.config.gunOnBodyMount !== false;
+          if (this.config.bodyToolsOnMount === false) return false;
+          const list = (typeof BODY_DEF !== 'undefined' && BODY_DEF.bodyMountToolTypes)
+              ? BODY_DEF.bodyMountToolTypes
+              : ['gun', 'hammer', 'axe', 'pickaxe', 'torch'];
+          return list.indexOf(t) >= 0;
+      }
+
+      getBodyGripSpec(itemId) {
+          const grips = (typeof BODY_DEF !== 'undefined' && BODY_DEF.grips) ? BODY_DEF.grips : {};
+          return grips[itemId] || grips.pistol || {
+              local: [0, -0.18, 0.14], palm: [0.018, 0.022, 0.018],
+              mode: 'hold', holdEuler: [0.20, 0.04, 0.10], lookFollow: 0.16, smooth: 11
+          };
+      }
+
+      findInventoryPistol() {
+          if (!this.inventory || !this.inventory.items) return null;
+          for (let i = 0; i < this.inventory.items.length; i++) {
+              const it = this.inventory.items[i];
+              if (!it) continue;
+              if (it.id === 'pistol' || it.toolType === TOOLS.GUN) return it;
+          }
+          return null;
+      }
+
+      /**
+       * Fase A/B/D: equipped tool on wrist; pistol holsters on hip_R when not in hand.
+       */
+      syncBodyToolMount() {
+          if (!this.body || !this.body.toolMount) return;
+          if (!this._bodyMountedModels) this._bodyMountedModels = new Set();
+
+          const wrist = this.body.toolMount;
+          const hip = (this.body.sockets && this.body.sockets.hip_R) || null;
+          const equipped = this.inventory && this.inventory.equippedItem;
+          const wantWrist = equipped && equipped.model && this.wantsBodyToolMount(this.currentTool);
+          const pistolItem = this.findInventoryPistol();
+          const holsterOn = this.config.holsterGun !== false && hip && pistolItem && pistolItem.model &&
+              !(wantWrist && equipped === pistolItem);
+
+          // Clear wrist mounts that shouldn't be there
+          this._bodyMountedModels.forEach((m) => {
+              if (!m) return;
+              const isHolstered = m.userData && m.userData._bodyHolstered;
+              if (isHolstered) return;
+              if (!wantWrist || m !== equipped.model) {
+                  // If it's the pistol and we want holster, move to hip instead of camera
+                  if (holsterOn && pistolItem && m === pistolItem.model) {
+                      this.mountPistolHolster(pistolItem.model, hip);
+                      return;
+                  }
+                  this.unmountViewmodelToCamera(m);
+                  this._bodyMountedModels.delete(m);
+              }
+          });
+
+          if (wantWrist) {
+              const model = equipped.model;
+              // Leaving holster → wrist
+              if (model.userData && model.userData._bodyHolstered) {
+                  delete model.userData._bodyHolstered;
+                  try {
+                      if (this.body.setAction) this.body.setAction('use'); // short draw flash
+                  } catch (e) {}
+              }
+              const itemId = equipped.id || 'pistol';
+              const grip = this.getBodyGripSpec(itemId);
+              this.mountViewmodelOnSocket(model, wrist, { itemId: itemId, grip: grip, holster: false });
+              this._bodyMountedModels.add(model);
+          }
+
+          if (holsterOn) {
+              // Ensure mesh exists (pistol may never have been equipped this session)
+              if (!pistolItem.model) {
+                  try {
+                      const d = (typeof ITEM_DEFINITIONS !== 'undefined') &&
+                          (ITEM_DEFINITIONS.pistol || ITEM_DEFINITIONS[pistolItem.id]);
+                      if (d && d.createModel) pistolItem.model = d.createModel();
+                  } catch (e) {}
+              }
+              if (pistolItem.model) {
+                  this.mountPistolHolster(pistolItem.model, hip);
+                  this._bodyMountedModels.add(pistolItem.model);
+              }
+          } else if (pistolItem && pistolItem.model && pistolItem.model.userData &&
+                     pistolItem.model.userData._bodyHolstered && wantWrist && equipped === pistolItem) {
+              // drawn — holster flag cleared above
+          } else if (pistolItem && pistolItem.model && !holsterOn && !wantWrist) {
+              // No holster mode / no hip: hide on camera rest
+              if (pistolItem.model.userData._bodyHolstered) {
+                  this.unmountViewmodelToCamera(pistolItem.model);
+                  this._bodyMountedModels.delete(pistolItem.model);
+              }
+          }
+      }
+
+      mountPistolHolster(model, hipSocket) {
+          if (!model || !hipSocket) return;
+          const holster = (typeof BODY_DEF !== 'undefined' && BODY_DEF.holster) ? BODY_DEF.holster : null;
+          const wasOnWrist = this.body.toolMount && model.parent === this.body.toolMount;
+          if (model.parent !== hipSocket) {
+              if (!model.userData._camParentRest) {
+                  model.userData._camParentRest = {
+                      parent: model.parent,
+                      pos: model.position.clone(),
+                      rot: model.rotation.clone(),
+                      scale: model.scale.clone()
+                  };
+              }
+              if (wasOnWrist) {
+                  try { if (this.body.setAction) this.body.setAction('use'); } catch (e) {}
+                  try { if (this.body.emit) this.body.emit('holstered'); } catch (e) {}
+              }
+              hipSocket.add(model);
+          }
+          const itemId = (holster && holster.itemId) || 'pistol';
+          const sm = (typeof getViewmodelWorldScale === 'function')
+              ? getViewmodelWorldScale(itemId)
+              : 0.30;
+          model.scale.setScalar(sm);
+          model.visible = true;
+          model.userData._bodyHolstered = true;
+          model.userData._bodyMountedTool = true;
+          delete model.userData.originalPosition;
+
+          const gl = (holster && holster.local) || [0, -0.12, 0.13];
+          const palm = (holster && holster.palm) || [0.02, -0.02, 0.04];
+          const eu = (holster && holster.euler) || [1.15, Math.PI, 0.2];
+          model.rotation.set(eu[0], eu[1], eu[2]);
+          const grip = new THREE.Vector3(gl[0], gl[1], gl[2]).multiplyScalar(sm);
+          grip.applyEuler(model.rotation);
+          model.position.set(palm[0] - grip.x, palm[1] - grip.y, palm[2] - grip.z);
+      }
+
+      mountViewmodelOnSocket(model, socket, opts) {
+          opts = opts || {};
+          if (!model || !socket) return;
+          const grip = opts.grip || this.getBodyGripSpec(opts.itemId || 'pistol');
+          if (model.parent !== socket) {
+              if (!model.userData._camParentRest) {
+                  model.userData._camParentRest = {
+                      parent: model.parent,
+                      pos: model.position.clone(),
+                      rot: model.rotation.clone(),
+                      scale: model.scale.clone()
+                  };
+              }
+              const wasHolstered = !!(model.userData && model.userData._bodyHolstered);
+              socket.add(model);
+              model.visible = true;
+              delete model.userData.originalPosition;
+              model.userData._bodyMountedTool = true;
+              delete model.userData._bodyHolstered;
+              if (wasHolstered) {
+                  try { if (this.body && this.body.emit) this.body.emit('drawn'); } catch (e) {}
+              }
+              const gl = grip.local || [0, -0.12, 0.13];
+              model.userData._gunGripLocal = new THREE.Vector3(gl[0], gl[1], gl[2]);
+              const palm = grip.palm || [0.015, 0.028, 0.012];
+              model.userData._bodyPalm = new THREE.Vector3(palm[0], palm[1], palm[2]);
+              model.userData._bodyGripSpec = grip;
+          }
+          const itemId = opts.itemId || 'pistol';
+          const sm = (typeof getViewmodelWorldScale === 'function')
+              ? getViewmodelWorldScale(itemId)
+              : ((this.config.viewmodelToWorld != null) ? this.config.viewmodelToWorld : 0.30);
+          model.scale.setScalar(sm);
+          if (opts.holster) {
+              this.mountPistolHolster(model, socket);
+              return;
+          }
+          this.applyBodyToolHold(model, socket, model.userData._bodyGripSpec || grip);
+      }
+
+      unmountViewmodelToCamera(model) {
+          if (!model) return;
+          const onWrist = this.body && this.body.toolMount && model.parent === this.body.toolMount;
+          const hip = this.body && this.body.sockets && this.body.sockets.hip_R;
+          const onHip = hip && model.parent === hip;
+          if (onWrist || onHip) {
+              const rest = model.userData._camParentRest;
+              const parent = (rest && rest.parent) || this.camera;
+              parent.add(model);
+              if (rest) {
+                  model.position.copy(rest.pos);
+                  model.rotation.copy(rest.rot);
+                  model.scale.copy(rest.scale);
+              } else if (this.weaponBasePosition) {
+                  model.position.copy(this.weaponBasePosition);
+              }
+              model.visible = false;
+          }
+          delete model.userData._bodyMountedTool;
+          delete model.userData._bodyMountedGun;
+          delete model.userData._bodyHolstered;
+          delete model.userData._gunGripLocal;
+          delete model.userData._bodyAlign;
+          delete model.userData._bodyPalm;
+          delete model.userData._bodyGripSpec;
+          delete model.userData._bodyMountRest;
+          delete model.userData.originalPosition;
+      }
+
+      /** @deprecated use syncBodyToolMount */
+      syncGunBodyMount() { this.syncBodyToolMount(); }
+
+      /**
+       * Natural hand hold: grip in palm, shaft/barrel in holdEuler relative to camera.
+       * Handle tools keep +Y as shaft (up/forward in hand) — NOT pointed at crosshair.
+       * lookFollow only adds a light pitch bias; smooth slerps so it doesn't twitch.
+       */
+      applyBodyToolHold(model, mount, grip) {
+          if (!model || !mount || !this.camera) return;
+          grip = grip || {};
+          if (!this._gunAimMountQ) {
+              this._gunAimMountQ = new THREE.Quaternion();
+              this._gunAimCamQ = new THREE.Quaternion();
+              this._gunAimLocalQ = new THREE.Quaternion();
+              this._gunAimHold = new THREE.Quaternion();
+              this._gunAimCorr = new THREE.Quaternion();
+              this._gunAimGrip = new THREE.Vector3();
+              this._gunAimPalm = new THREE.Vector3();
+          }
+
+          mount.updateWorldMatrix(true, false);
+          this.camera.updateMatrixWorld(true);
+          this.camera.getWorldQuaternion(this._gunAimCamQ);
+          mount.getWorldQuaternion(this._gunAimMountQ);
+
+          const he = grip.holdEuler || [0, 0, 0];
+          const follow = grip.lookFollow != null ? grip.lookFollow : 0.1;
+          // Base pose in camera space + light pitch from look (subtle).
+          const pitchBias = (this.camera.rotation.x || 0) * follow;
+          // Extra 1P tool lag from look rates (pairs with driver arm sway; keep small).
+          let swayY = 0;
+          let swayP = 0;
+          const isGunHold = this.currentTool === (typeof TOOLS !== 'undefined' ? TOOLS.GUN : 'gun');
+          if (isGunHold) {
+              const yr = this._lookYawRate || 0;
+              const pr = this._lookPitchRate || 0;
+              swayY = Math.max(-0.12, Math.min(0.12, -yr * 0.012));
+              swayP = Math.max(-0.10, Math.min(0.10, pr * 0.012));
+          }
+          this._gunAimHold.setFromEuler(new THREE.Euler(
+              he[0] + pitchBias + swayP,
+              he[1] + swayY,
+              he[2],
+              'YXZ'
+          ));
+          // desiredWorld = cam * hold
+          this._gunAimLocalQ.copy(this._gunAimCamQ).multiply(this._gunAimHold);
+          // local = inv(mount) * desiredWorld
+          this._gunAimMountQ.invert();
+          this._gunAimLocalQ.premultiply(this._gunAimMountQ);
+
+          const smooth = grip.smooth != null ? grip.smooth : 8;
+          const dt = (this._bodyToolDt > 0 && this._bodyToolDt < 0.1) ? this._bodyToolDt : 0.016;
+          const alpha = 1 - Math.exp(-smooth * dt);
+          model.quaternion.slerp(this._gunAimLocalQ, alpha);
+
+          const gripLocal = model.userData._gunGripLocal || this._gunAimGrip.set(0, -0.12, 0.13);
+          const sm = model.scale.x || 1;
+          this._gunAimGrip.copy(gripLocal).multiplyScalar(sm);
+          if (model.userData._bodyPalm) this._gunAimPalm.copy(model.userData._bodyPalm);
+          else this._gunAimPalm.set(0.015, 0.028, 0.012);
+          this._gunAimGrip.applyQuaternion(model.quaternion);
+          model.position.copy(this._gunAimPalm).sub(this._gunAimGrip);
+
+          if (!model.userData._bodyMountRest) {
+              model.userData._bodyMountRest = { pos: new THREE.Vector3(), rot: new THREE.Euler() };
+          }
+          model.userData._bodyMountRest.pos.copy(model.position);
+          model.userData._bodyMountRest.rot.setFromQuaternion(model.quaternion);
+      }
+
+      /** @deprecated */
+      aimBodyToolAtCrosshair(model, mount, align) {
+          this.applyBodyToolHold(model, mount, this.getBodyGripSpec('pistol'));
+      }
+      aimBodyGunAtCrosshair(model, mount) {
+          this.applyBodyToolHold(model, mount, this.getBodyGripSpec('pistol'));
       }
 
       updateFootsteps(delta, isMoving) {
@@ -951,8 +1876,24 @@
             this.isSprinting = false;
           }
 
-          // Jump handling
-          if ((keys[' '] || this.mobileJumpPressed) && 
+          // Crouch: C = toggle, Control = hold (PR5)
+          if (this.config.crouchEnabled !== false) {
+              const ctrl = !!(keys['control'] || keys['ControlLeft'] || keys['ControlRight']);
+              if (ctrl) {
+                  this._crouchHold = true;
+                  this.setCrouched(true);
+              } else if (this._crouchHold) {
+                  this._crouchHold = false;
+                  this.setCrouched(false);
+              } else if (keys['c'] && !this._crouchTogglePrev) {
+                  this.setCrouched(!this.crouched);
+              }
+              this._crouchTogglePrev = !!keys['c'];
+          }
+
+          // Jump handling (blocked while crouched — crouchPolicy.canJump)
+          const canJumpCrouch = !(this.crouched && (typeof BODY_DEF === 'undefined' || !BODY_DEF.crouchPolicy || BODY_DEF.crouchPolicy.canJump === false));
+          if (canJumpCrouch && (keys[' '] || this.mobileJumpPressed) && 
               (this.isOnGround || this.coyoteTime > 0)) {
               if(this.stamina >= this.staminaJumpCost) {
                   this.velocity.y = this.config.jumpSpeed;
@@ -1042,6 +1983,10 @@
               basePosition.copy(this.heldItemOffset);
           } else if (this.inventory.equippedItem?.model) {
               activeToolModel = this.inventory.equippedItem.model;
+              // Body-mounted tools: skip camera sway (mesh follows toolMount / aim).
+              if (this.body && this.body.toolMount && activeToolModel.parent === this.body.toolMount) {
+                  return;
+              }
               if (this.currentTool === TOOLS.GUN) {
                   basePosition.copy(this.weaponBasePosition);
               } else if (this.currentTool === TOOLS.HAMMER) {
@@ -1117,8 +2062,15 @@
       getMeleeStatsForTool(tool) {
           const t = tool || this.currentTool || (typeof TOOLS !== 'undefined' ? TOOLS.HANDS : 'hands');
           const table = (typeof MELEE_STATS !== 'undefined') ? MELEE_STATS : null;
-          if (table && table[t]) return table[t];
-          return { damage: 4, reach: 2.2 };
+          const base = (table && table[t]) ? table[t] : { damage: 4, reach: 2.2 };
+          return {
+              damage: base.damage != null ? base.damage : 4,
+              reach: base.reach != null ? base.reach : 2.2,
+              cooldown: base.cooldown != null ? base.cooldown : 0.42,
+              peak: base.peak != null ? base.peak : 0.18,
+              duration: base.duration != null ? base.duration : 0.42,
+              stagger: base.stagger != null ? base.stagger : 0.15
+          };
       }
 
       // ¿Hay un NPC enemigo bajo la mira dentro de reach?
@@ -1162,90 +2114,20 @@
           return null;
       }
 
-      // Golpe cuerpo a cuerpo. damage/reach opcionales (default según herramienta).
+      /** Tool melee or fists strike (peak-resolved on Character). */
       meleeAttack(damage, reach) {
           if (isGamePaused || !this.camera) return false;
+          // Fists lab: always MELEE_FISTS — ignore tool-stat overrides (mobile/hands path)
+          if (this.usesFistsCombat()) {
+              return this.startStrike({ fists: true });
+          }
           if (typeof meleeCooldown !== 'undefined' && meleeCooldown > 0) return false;
-
-          const stats = this.getMeleeStatsForTool(this.currentTool);
-          const dmg = (typeof damage === 'number') ? damage : stats.damage;
-          const rng = (typeof reach === 'number') ? reach : stats.reach;
-
-          const origin = this.camera.getWorldPosition(new THREE.Vector3());
-          const dir = this.camera.getWorldDirection(new THREE.Vector3());
-          const ray = new THREE.Raycaster(origin, dir, 0, rng);
-          const guestCombat = (typeof onlineIsGuestCombat === 'function' && onlineIsGuestCombat());
-          const targets = [];
-          try { npcs.forEach(n => { if (n && n.health > 0 && n.mesh) targets.push(n.mesh); }); } catch (e) {}
-          // PR5b FF: host can melee remotes; guest sends atk intent.
-          try {
-              if (typeof ONLINE_CONFIG !== 'undefined' && ONLINE_CONFIG.friendlyFire &&
-                  typeof remotes !== 'undefined' && remotes &&
-                  typeof onlineCombatSync === 'function' && onlineCombatSync()) {
-                  for (const uid in remotes) {
-                      if (remotes[uid] && remotes[uid].mesh) targets.push(remotes[uid].mesh);
-                  }
-              }
-          } catch (e) {}
-          const hits = targets.length ? ray.intersectObjects(targets, true) : [];
-          let hitNpc = false;
-          for (let i = 0; i < hits.length; i++) {
-              let p = hits[i].object, npc = null, remoteUid = null;
-              while (p) {
-                  if (p.userData && p.userData.parentCharacter instanceof NPC) {
-                      npc = p.userData.parentCharacter;
-                      break;
-                  }
-                  if (p.userData && p.userData.isRemotePlayer && p.userData.remoteUid) {
-                      remoteUid = p.userData.remoteUid;
-                      break;
-                  }
-                  p = p.parent;
-              }
-              if (npc && npc.health > 0) {
-                  if (guestCombat) {
-                      try {
-                          if (typeof onlineSendAtkIntent === 'function') {
-                              onlineSendAtkIntent({ eid: npc.eid || null, x: origin.x, y: origin.y, z: origin.z });
-                          }
-                      } catch (e) {}
-                  } else {
-                      try { npc.takeDamage(dmg); } catch (e) {}
-                  }
-                  try { createHarvestEffect(hits[i].point); } catch (e) {}
-                  try { playSound('hit'); } catch (e) {}
-                  hitNpc = true;
-                  break;
-              }
-              if (remoteUid) {
-                  if (guestCombat) {
-                      try {
-                          if (typeof onlineSendAtkIntent === 'function') {
-                              onlineSendAtkIntent({ targetUid: remoteUid, x: origin.x, y: origin.y, z: origin.z });
-                          }
-                      } catch (e) {}
-                  } else if (typeof onlineHostDamagePlayer === 'function' &&
-                             typeof ONLINE !== 'undefined' && ONLINE.isHost) {
-                      try {
-                          const me = (typeof onlineUser === 'function') ? onlineUser() : null;
-                          onlineHostDamagePlayer(remoteUid, dmg, me ? ('player:' + me.uid) : 'env');
-                      } catch (e) {}
-                  }
-                  try { createHarvestEffect(hits[i].point); } catch (e) {}
-                  try { playSound('hit'); } catch (e) {}
-                  hitNpc = true;
-                  break;
-              }
-          }
-          try { this.applyRecoil(); } catch (e) {}
-          try {
-              if (typeof meleeCooldown !== 'undefined') meleeCooldown = 0.42;
-              else if (typeof shootCooldown !== 'undefined') shootCooldown = Math.max(shootCooldown || 0, 0.35);
-          } catch (e) {}
-          if (!hitNpc) {
-              try { playSound('weapon_empty'); } catch (e) {}
-          }
-          return hitNpc;
+          return this.startStrike({
+              fists: false,
+              damage: damage,
+              reach: reach,
+              tool: this.currentTool
+          });
       }
 
       handleMouseMove(event, sensitivity = this.config.sensitivity) {
@@ -1314,9 +2196,11 @@
       }
 
       updateToolModelVisibility() {
-        // Hide all item models first
+        // Hide all item models first (holstered pistol stays visible — syncBodyToolMount owns it)
         this.inventory.items.forEach(item => {
-          if (item.model) item.model.visible = false;
+          if (!item.model) return;
+          if (item.model.userData && item.model.userData._bodyHolstered) return;
+          item.model.visible = false;
         });
 
         // Show equipped item if any
@@ -1848,6 +2732,14 @@
                   return;
               }
 
+              // Fase C: harvest swing on body
+              try {
+                  if (this.body) {
+                      if (typeof this.body.playSwing === 'function') this.body.playSwing();
+                      else if (typeof this.body.setAction === 'function') this.body.setAction('swing');
+                  }
+              } catch (e) {}
+
               // PR6 guest: swing FX + harvest intent; grant vía event node.gained.
               const lootSyncGuest = (typeof onlineLootSync === 'function' && onlineLootSync() &&
                   typeof ONLINE !== 'undefined' && !ONLINE.isHost);
@@ -1929,7 +2821,7 @@
               case 'toxin':
                   this.health -= collectible.userData.damageAmount || 30;
                   if (this.health < 0) this.health = 0;
-                  this.applyDamageEffect();
+                  this.applyDamageEffect({ heavy: true });
                   this.updateStatsHUD();
 
                   this.toxinsCollected++;
@@ -1961,20 +2853,83 @@
           
           this.updateStatsHUD?.();
       }
-      // Player-specific damage effect (e.g., screen flash)
-      applyDamageEffect() {
-          // Optional: Call super.applyDamageEffect() if Character has base effect too
-          // super.applyDamageEffect();
-
-          // Flash red screen overlay
-          const damageOverlay = document.getElementById('damageOverlay'); // Assume exists in HTML
+      // Player-specific damage effect (screen flash + camera kick + 1P flinch)
+      applyDamageEffect(opts) {
+          opts = opts || {};
+          const heavy = !!opts.heavy || (this.maxHealth > 0 && this.health <= this.maxHealth * 0.35);
+          const damageOverlay = document.getElementById('damageOverlay');
           if (damageOverlay) {
-              damageOverlay.style.opacity = '0.7';
+              damageOverlay.style.opacity = heavy ? '0.88' : '0.62';
+              damageOverlay.style.transition = 'opacity 0.04s linear';
               setTimeout(() => {
+                  damageOverlay.style.transition = heavy ? 'opacity 0.45s ease-out' : 'opacity 0.3s ease-out';
                   damageOverlay.style.opacity = '0';
-              }, 150);
+              }, heavy ? 80 : 50);
+          }
+          // Camera kick + body flinch (1P arms react)
+          try {
+              this.applyRecoil(heavy ? 0.24 : 0.14);
+              if (this.body && typeof this.body.playHit === 'function') {
+                  this.body.playHit({
+                      side: Math.random() < 0.5 ? -1 : 1,
+                      heavy: heavy
+                  });
+              }
+          } catch (e) {}
+      }
+
+      /**
+       * Symmetric with NPC.takeDamage: guard chips damage (future shield).
+       * @param {number} amount
+       * @param {object} [opts]
+       */
+      takeDamage(amount, opts) {
+          if (this.health <= 0) return;
+          opts = opts || {};
+          let dmg = amount;
+          let zone = opts.zone || null;
+          if (!zone && opts.hitY != null && typeof classifyHitOnCharacter === 'function') {
+              zone = classifyHitOnCharacter(this, opts.hitY);
+          }
+          if (zone && typeof hitZoneMultiplier === 'function' && opts.scaleByZone !== false && opts.preScaled !== true) {
+              dmg = Math.max(1, Math.round(amount * hitZoneMultiplier(zone)));
+          }
+          let blocked = false;
+          if (this.isGuarding && opts.ignoreGuard !== true) {
+              const fs = (typeof this.getFistsStats === 'function') ? this.getFistsStats() : null;
+              let mult = (fs && fs.guardDamageMult != null) ? fs.guardDamageMult : 0.18;
+              // S1 Soft: tired guard absorbs worse
+              if (fs && (this.stamina || 0) < (fs.guardTiredBelow != null ? fs.guardTiredBelow : 15)) {
+                  mult = fs.guardTiredMult != null ? fs.guardTiredMult : 0.45;
+              }
+              dmg = Math.max(1, Math.round(dmg * mult));
+              blocked = true;
+              try {
+                  if (typeof this.spendFistsStamina === 'function') {
+                      this.spendFistsStamina(fs && fs.blockHitCost != null ? fs.blockHitCost : 4);
+                  }
+              } catch (e) {}
+              try {
+                  if (this.body && typeof this.body.emit === 'function') this.body.emit('blocked', zone);
+              } catch (e) {}
+              try {
+                  if (typeof noteCombatLabBlock === 'function') noteCombatLabBlock('player');
+              } catch (e) {}
+          }
+          this.health -= dmg;
+          if (this.health < 0) this.health = 0;
+          if (blocked) {
+              // Guard holds: chip only — no screen flinch / body hit react
+              try { this.updateStatsHUD(); } catch (e) {}
           } else {
-              console.warn("Damage overlay element not found");
+              const heavy = opts.heavy != null
+                  ? !!opts.heavy
+                  : (zone === 'head' || dmg >= 18 || (this.maxHealth > 0 && this.health <= this.maxHealth * 0.35));
+              try { this.applyDamageEffect({ heavy: heavy }); } catch (e) {}
+              try { this.updateStatsHUD(); } catch (e) {}
+          }
+          if (this.health <= 0) {
+              try { showGameOver(); } catch (e) {}
           }
       }
   }
@@ -2018,6 +2973,9 @@
           this.energyRegenRate = 5;
           this.attackMode = 'melee';
           this.attackCooldownBase = 1.5;
+          // Fists AI (Combat Lab): chance to raise guard instead of striking
+          this.guardChance = 0;
+          this.guardDuration = 0.65;
           this.rangedRange = 15;
           this.rangedDamage = 6;
           this.healthRegenRate = 6;       // HP/sec while fleeing to safety
@@ -2026,7 +2984,9 @@
           this.isHostile = true;
           this.servoTimer = 2.5 + Math.random() * 5;
 
-          // Visual representation (can be passed in or created)
+          // Visual representation (can be passed in or created).
+          // Playground/spawns often pass a custom robotGroup — that skipped createVisual() and
+          // never mounted bodyRig. Always attach bodyRig when available; hide legacy mesh.
           this.mesh = visualMesh || this.createVisual();
           this.mesh.userData.parentCharacter = this; // Link mesh back to character
           this.container.add(this.mesh); // Add visual mesh to the container
@@ -2037,6 +2997,41 @@
           // Let's put health reference on the mesh userData for bullets to find easily
           this.mesh.health = this.health;
           this.mesh.userData.health = this.health;
+
+          if (typeof createBody === 'function' && !this.body) {
+              this.attachBodyRig();
+          }
+          if (this.body && this.mesh) {
+              // Hide legacy robot/capsule drawing but KEEP hit meshes raycastable
+              // (Three Raycaster skips object.visible === false).
+              function makeInvisibleHit(o) {
+                  if (!o || !o.isMesh) return;
+                  o.visible = true;
+                  if (o.material) {
+                      o.material = o.material.clone();
+                      o.material.transparent = true;
+                      o.material.opacity = 0;
+                      o.material.depthWrite = false;
+                      if ('colorWrite' in o.material) o.material.colorWrite = false;
+                  }
+              }
+              const namedHit = this.mesh.getObjectByName && this.mesh.getObjectByName('NPC_Body');
+              if (namedHit) {
+                  this.mesh.traverse(function (o) {
+                      if (o.isSprite) o.visible = false;
+                      else if (o.isMesh && o !== namedHit) o.visible = false;
+                  });
+                  makeInvisibleHit(namedHit);
+              } else if (this.mesh.isMesh) {
+                  makeInvisibleHit(this.mesh);
+              } else {
+                  this.mesh.traverse(function (o) {
+                      if (o.isSprite) o.visible = false;
+                      else if (o.isMesh) makeInvisibleHit(o);
+                  });
+              }
+          }
+
           // Health bar
           const hbGeo = new THREE.PlaneGeometry(1.2, 0.08);
           const hbMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.9 });
@@ -2046,23 +3041,52 @@
           this.container.add(this.healthBar);
           this.healthBarRangeSq = 18 * 18;
           this._hbTarget = new THREE.Vector3();
-          this.eyeGlow = (this.mesh && typeof this.mesh.getObjectByName === 'function')
-              ? this.mesh.getObjectByName('NPC_EyeGlow')
-              : null;
+          this.eyeGlow = null; // legacy robot eye sprite removed (boss may reintroduce later)
+      }
+
+      /** Mount shared box-doll under container. Safe to call once from constructor / createVisual. */
+      attachBodyRig(bodyTypeId, palette) {
+          if (this.body || typeof createBody !== 'function') return this.body;
+          const types = (typeof BODY_DEF !== 'undefined' && BODY_DEF.bodyTypes)
+              ? Object.keys(BODY_DEF.bodyTypes) : ['normie'];
+          const id = bodyTypeId || types[Math.floor(Math.random() * types.length)] || 'normie';
+          const shirts = [0xa53a3a, 0x3f9a4a, 0xd6b73a, 0x3a5a8a, 0x8a3a8a];
+          this.body = createBody({
+              mode: 'npc',
+              bodyTypeId: id,
+              palette: palette || { shirt: shirts[Math.floor(Math.random() * shirts.length)] },
+              showGunStub: false,
+              mountOnCharacter: true
+          });
+          const feetY = (typeof BODY_MOUNT !== 'undefined' && BODY_MOUNT.feetYFromHalfHeight)
+              ? BODY_MOUNT.feetYFromHalfHeight(this.halfHeight)
+              : -this.halfHeight;
+          this.body.root.position.y = feetY;
+          this.container.add(this.body.root);
+          return this.body;
       }
 
       createVisual() {
-          // Default visual if none provided (e.g., a simple capsule or cylinder)
+          // Hit proxy capsule (bullets / isEnemy). Visible only as fallback when bodyRig is missing.
           const geo = new THREE.CapsuleGeometry(this.radius, this.height - 2 * this.radius, 8, 16);
+          const useBody = typeof createBody === 'function';
           const mat = new THREE.MeshStandardMaterial({
-              color: 0xff0000, // Red for enemy
+              color: 0xff0000,
               roughness: 0.6,
+              transparent: useBody,
+              opacity: useBody ? 0 : 1,
+              depthWrite: !useBody
           });
           const mesh = new THREE.Mesh(geo, mat);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
+          mesh.castShadow = !useBody;
+          mesh.receiveShadow = !useBody;
           mesh.position.y = this.radius; // Align bottom with container base
-          mesh.name = "NPC_Visual";
+          mesh.name = useBody ? 'NPC_HitProxy' : 'NPC_Visual';
+          // Keep proxy raycastable but not drawn when bodyRig is active.
+          mesh.visible = true;
+          if (useBody) mesh.material.colorWrite = false;
+
+          // Body mount happens in constructor via attachBodyRig() so custom visualMesh paths also get it.
           return mesh;
       }
       // Override Character update
@@ -2077,6 +3101,8 @@
             updateSpatialPartition();
           }
           this._lastPosition = this.container.position.clone();
+
+          this.updateBodyRig(delta, { hasGun: false, fp: false });
 
           // Mirror health changes (if bullets hit mesh directly)
            // This is a bit fragile, better to have bullets damage the Character directly
@@ -2102,13 +3128,6 @@
                    else if (hpRatio > 0.3) this.healthBar.material.color.set(0xffaa00);
                    else this.healthBar.material.color.set(0xff0000);
                }
-           }
-           if (this.eyeGlow) {
-               this.eyeGlow.visible = this.health > 0;
-               const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0045);
-               this.eyeGlow.material.opacity = 0.55 + pulse * 0.4;
-               const gs = 0.9 + pulse * 0.4;
-               this.eyeGlow.scale.set(gs, gs, 1);
            }
            // Update attack cooldown
           if (this.attackCooldown > 0) {
@@ -2172,8 +3191,24 @@
           // Reset input each frame
           this.input = { forward: 0, backward: 0, left: 0, right: 0 };
 
+          if (this.state === 'dead' || this._deadCounted) return;
           if (!player || this.health <= 0) {
-              this.state = 'idle';
+              return;
+          }
+          // Melee stagger: hold still briefly (feel), keep facing threat
+          if (this._staggerT > 0) {
+              this._staggerT -= delta;
+              this.input = this.input || { forward: 0, backward: 0, left: 0, right: 0 };
+              this.input.forward = 0;
+              this.input.backward = 0;
+              this.input.left = 0;
+              this.input.right = 0;
+              try {
+                  const face = (this.target && this.target.container)
+                      ? this.target.container.position
+                      : (player && player.container ? player.container.position : null);
+                  if (face) this.turnTowards(face, delta, 2.5);
+              } catch (e) {}
               return;
           }
           if (typeof creatorMode !== 'undefined' && creatorMode) {
@@ -2186,8 +3221,12 @@
               this.velocity.y = Math.max(this.velocity.y, -0.1);
           }
           const focus = this.selectFocus(player);
-          // Distancia real al objetivo elegido (jugador o mesa de trabajo).
+          // Distancia real al objetivo elegido (jugador, npc o mesa).
           const focusDist = this.container.position.distanceTo(focus.pos);
+          try {
+              this._combatAimPos = focus.pos.clone ? focus.pos.clone() : focus.pos;
+              if (focus.kind === 'npc' || focus.kind === 'player') this.target = focus.ref;
+          } catch (e) {}
           const playerDist = this.container.position.distanceTo(player.container.position);
           const hasLOS = this.hasLineOfSight(player, collidables);
           // Un bloque construido justo delante: primero se rompe, si no se
@@ -2198,7 +3237,15 @@
           // --- State Machine ---
           switch (this.state) {
               case 'idle':
-                  if (this.isHostile && playerDist < this.detectionRange && hasLOS) {
+                  // Lab NPC threat does not need LOS to player
+                  if (focus.kind === 'npc' && focusDist < this.detectionRange) {
+                      this.state = 'chasing';
+                      this.target = focus.ref;
+                  } else if (this.isHostile && focus.kind === 'player' &&
+                             focusDist < this.detectionRange && hasLOS) {
+                      this.state = 'chasing';
+                      this.target = focus.ref || player;
+                  } else if (this.isHostile && playerDist < this.detectionRange && hasLOS) {
                       this.state = 'chasing';
                       this.target = player;
                   } else {
@@ -2211,7 +3258,12 @@
                   break;
 
               case 'wandering': {
-                  // Si ve al jugador, lo persigue; si encontró una base, va por ella.
+                  // Si ve amenaza (player u otro npc en lab), la persigue; si encontró una base, va por ella.
+                  if (focus.kind === 'npc' && focusDist < this.detectionRange) {
+                      this.state = 'chasing';
+                      this.target = focus.ref;
+                      break;
+                  }
                   if (this.isHostile && playerDist < this.detectionRange && hasLOS) {
                       this.state = 'chasing';
                       this.target = player;
@@ -2236,6 +3288,7 @@
               }
 
               case 'chasing':
+                  if (this.isGuarding) this.setGuard(false);
                   if (this.health <= this.maxHealth * this.fleeHealthThreshold && focusDist < this.detectionRange) {
                       this.state = 'fleeing';
                       break;
@@ -2260,7 +3313,8 @@
                       this.input.forward = -1;
                       this.turnTowards(focus.pos, delta, this.config.speed * 2.0);
                       // Fire on the move: shoot while closing the distance
-                      if (focusDist <= this.rangedRange && this.attackCooldown <= 0 &&
+                      if (this.canRanged !== false && this.rangedRange > 0 &&
+                          focusDist <= this.rangedRange && this.attackCooldown <= 0 &&
                           (focus.kind === 'base' || this.energy > 30) &&
                           (focus.kind === 'base' || hasLOS)) {
                           this.shootAt(focus.target);
@@ -2287,11 +3341,13 @@
               case 'attacking': {
                   const attackLimit = this.attackRange + (focus.kind === 'base' ? 0.5 : 0);
                   if (this.health <= this.maxHealth * this.fleeHealthThreshold && focusDist < this.detectionRange) {
+                      this.setGuard(false);
                       this.state = 'fleeing';
                       break;
                   }
                   if (blockingBlock) {
                       // No atacar la mesa a través de un muro: romperlo primero.
+                      this.setGuard(false);
                       this.turnTowards(focus.pos, delta, 3.0);
                       if (this.attackCooldown <= 0) {
                           this.attackPlacedBlock(blockingBlock);
@@ -2299,7 +3355,50 @@
                       }
                       break;
                   }
-                  if (focusDist > attackLimit && focusDist <= this.rangedRange &&
+                  // Fists / boxing: same strike+guard contract as player
+                  if (typeof this.usesFistsCombat === 'function' && this.usesFistsCombat()) {
+                      this.attackMode = 'melee';
+                      this.turnTowards(focus.pos, delta, 3.0);
+                      const fs = (typeof this.getFistsStats === 'function') ? this.getFistsStats() : null;
+                      const strikeReach = (fs && fs.reach) || this.attackRange || 1.35;
+                      // Dead-zone fix: leave attacking as soon as out of punch reach
+                      // (old exit was attackRange*2 → soft-lock ring with no move/strike)
+                      const outOfReach = focusDist > strikeReach * 1.12;
+                      if (outOfReach) {
+                          this.setGuard(false);
+                          this.state = 'chasing';
+                          break;
+                      }
+                      // Drop AI guard when timer ends
+                      if (this.isGuarding && this._guardAiT <= 0) {
+                          this.setGuard(false);
+                      }
+                      if (this.isGuarding) break;
+                      if (this.attackCooldown <= 0) {
+                          const gc = (this.guardChance != null) ? this.guardChance : 0.35;
+                          const inPunch = focusDist <= strikeReach * 1.05;
+                          if (inPunch && Math.random() < gc) {
+                              this.setGuard(true);
+                              this._guardAiT = (this.guardDuration != null) ? this.guardDuration : 0.65;
+                              this.attackCooldown = 0.35;
+                          } else if (inPunch) {
+                              this.startStrike({
+                                  fists: true,
+                                  damage: this.attackDamage,
+                                  reach: strikeReach,
+                                  aimAt: focus.ref,
+                                  aimPos: focus.pos
+                              });
+                              this.attackCooldown = (fs && fs.cooldown) ? (fs.cooldown + 0.1) : 0.42;
+                          } else {
+                              // Safety: shouldn't hit often after outOfReach check
+                              this.state = 'chasing';
+                          }
+                      }
+                      break;
+                  }
+                  if (this.canRanged !== false && this.rangedRange > 0 &&
+                      focusDist > attackLimit && focusDist <= this.rangedRange &&
                       (focus.kind === 'base' || this.energy > 30)) {
                       this.attackMode = 'ranged';
                   } else {
@@ -2372,6 +3471,21 @@
       attack(target) {
           if (!target || !target.container) return;
           const distanceToTarget = this.container.position.distanceTo(target.container.position);
+          // Fists layer: peak-resolved strike (same pipeline as player)
+          if (typeof this.usesFistsCombat === 'function' && this.usesFistsCombat()) {
+              const fs = (typeof this.getFistsStats === 'function') ? this.getFistsStats() : null;
+              const strikeReach = (fs && fs.reach) || this.attackRange || 1.35;
+              if (distanceToTarget <= strikeReach * 1.05) {
+                  this.startStrike({
+                      fists: true,
+                      damage: this.attackDamage,
+                      reach: strikeReach,
+                      aimAt: target,
+                      aimPos: target.container ? target.container.position : null
+                  });
+              }
+              return;
+          }
           if (this.attackMode === 'melee' && distanceToTarget <= this.attackRange * 1.1) {
               // PR5b: host NPC melee vs remote player proxy → hurt event
               if (target.isRemoteProxy && target.remoteUid) {
@@ -2383,14 +3497,23 @@
                   return;
               }
               if (target instanceof Player) {
-                  target.health -= this.attackDamage;
-                  target.applyDamageEffect();
-                  target.updateStatsHUD();
-                  if (target.health <= 0) {
-                      showGameOver();
+                  if (typeof target.takeDamage === 'function') {
+                      target.takeDamage(this.attackDamage, {
+                          heavy: this.attackDamage >= 12,
+                          from: this.container ? this.container.position : null
+                      });
+                  } else {
+                      target.health -= this.attackDamage;
+                      if (target.health < 0) target.health = 0;
+                      const heavyHit = this.attackDamage >= 12 ||
+                          (target.maxHealth > 0 && target.health <= target.maxHealth * 0.35);
+                      target.applyDamageEffect({ heavy: heavyHit });
+                      target.updateStatsHUD();
+                      if (target.health <= 0) showGameOver();
                   }
               }
-          } else if (this.attackMode === 'ranged' && distanceToTarget <= this.rangedRange) {
+          } else if (this.canRanged !== false && this.attackMode === 'ranged' &&
+                     this.rangedRange > 0 && distanceToTarget <= this.rangedRange) {
               this.shootAt(target);
           }
       }
@@ -2477,6 +3600,50 @@
                   target: { container: { position: best.pos }, height: 1.4, collider: best.mesh, mesh: best.mesh }
               };
           }
+
+          // Combat Lab: sticky last attacker briefly, else nearest-threat (player | NPCs)
+          if (typeof this.allowsNpcFights === 'function' && this.allowsNpcFights()) {
+              try {
+                  if (this._lastAttacker && this._lastAttacker.health > 0 &&
+                      this._lastAttacker.state !== 'dead' && this._lastAttacker.container &&
+                      performance.now() < (this._lastAttackerUntil || 0)) {
+                      const dAtt = this.container.position.distanceTo(this._lastAttacker.container.position);
+                      if (dAtt < this.detectionRange) {
+                          return {
+                              kind: 'npc',
+                              ref: this._lastAttacker,
+                              pos: this._lastAttacker.container.position.clone(),
+                              target: this._lastAttacker
+                          };
+                      }
+                  }
+              } catch (e) {}
+              let bestNpc = null;
+              let bestNpcD = Infinity;
+              try {
+                  if (typeof npcs !== 'undefined' && npcs) {
+                      for (let i = 0; i < npcs.length; i++) {
+                          const n = npcs[i];
+                          if (!n || n === this || n.health <= 0 || n.state === 'dead') continue;
+                          if (!n.container) continue;
+                          const d = this.container.position.distanceTo(n.container.position);
+                          if (d < bestNpcD && d < this.detectionRange) {
+                              bestNpcD = d;
+                              bestNpc = n;
+                          }
+                      }
+                  }
+              } catch (e) {}
+              if (bestNpc && bestNpcD <= toPlayer) {
+                  return {
+                      kind: 'npc',
+                      ref: bestNpc,
+                      pos: bestNpc.container.position.clone(),
+                      target: bestNpc
+                  };
+              }
+          }
+
           const pos = focusPlayer && focusPlayer.container ? focusPlayer.container.position : player.container.position;
           return { kind: 'player', ref: focusPlayer, pos: pos, target: focusPlayer };
       }
@@ -2497,7 +3664,8 @@
       // atacarlo en lugar de quedar empujando el muro.
       findBlockingBlock(reach) {
           if (typeof placedBlocks === 'undefined' || !placedBlocks.length) return null;
-          const fwd = new THREE.Vector3(0, 0, -1).applyEuler(this.container.rotation).normalize();
+          // Body / chase forward = local +Z (see getForwardDir / BODY_MOUNT)
+          const fwd = this.getForwardDir(new THREE.Vector3());
           const maxReach = reach || (this.attackRange || 2.5) + 1.1;
           const feetY = this.container.position.y - this.halfHeight;
           const heights = [0.45, 1.15, 1.85];
@@ -2601,25 +3769,119 @@
           }
       }
 
-      takeDamage(amount) {
-          this.health -= amount;
+      /**
+       * @param {number} amount
+       * @param {object} [opts] { zone, hitY, from, heavy }
+       */
+      takeDamage(amount, opts) {
+          if (this.state === 'dead' || this._deadCounted) return;
+          opts = opts || {};
+          let dmg = amount;
+          let zone = opts.zone || null;
+          if (!zone && opts.hitY != null && typeof classifyHitOnCharacter === 'function') {
+              zone = classifyHitOnCharacter(this, opts.hitY);
+          }
+          if (zone && typeof hitZoneMultiplier === 'function' && opts.scaleByZone !== false && opts.preScaled !== true) {
+              dmg = Math.max(1, Math.round(amount * hitZoneMultiplier(zone)));
+          }
+          // Guard / block (future shield): low chip; NO stagger / knockback / flinch
+          let blocked = false;
+          if (this.isGuarding && opts.ignoreGuard !== true) {
+              const fs = (typeof this.getFistsStats === 'function') ? this.getFistsStats() : null;
+              let mult = (fs && fs.guardDamageMult != null) ? fs.guardDamageMult : 0.18;
+              if (fs && (this.stamina || 0) < (fs.guardTiredBelow != null ? fs.guardTiredBelow : 15)) {
+                  mult = fs.guardTiredMult != null ? fs.guardTiredMult : 0.45;
+              }
+              dmg = Math.max(1, Math.round(dmg * mult));
+              blocked = true;
+              try {
+                  if (typeof this.spendFistsStamina === 'function') {
+                      this.spendFistsStamina(fs && fs.blockHitCost != null ? fs.blockHitCost : 4);
+                  }
+              } catch (e) {}
+              try {
+                  if (this.body && typeof this.body.emit === 'function') this.body.emit('blocked', zone);
+              } catch (e) {}
+              try {
+                  if (typeof noteCombatLabBlock === 'function') noteCombatLabBlock('npc');
+              } catch (e) {}
+          }
+          this.health -= dmg;
+          if (this.health < 0) this.health = 0;
           this.lastDamageTs = performance.now();
-          this.mesh.userData.health = this.health; // Sync health
+          this.lastHitZone = zone || this.lastHitZone || null;
+          if (this.mesh) this.mesh.userData.health = this.health;
 
-          // Si el jugador le pega, deja de obsesionarse con la base y lo enfrenta
+          // Si le pegan, deja de obsesionarse con la base y enfrenta la amenaza
           this.baseHunt = null;
 
-          // Become hostile if not already
-          if (this.state === 'idle' || this.state === 'wandering') {
+          // Sticky retaliation (~1.6s) then nearest-threat resumes in selectFocus
+          if (opts.fromNpc && opts.fromNpc !== this && opts.fromNpc.health > 0) {
+              this.isHostile = true;
+              this.target = opts.fromNpc;
+              this._lastAttacker = opts.fromNpc;
+              this._lastAttackerUntil = performance.now() + 1600;
+              if (this.state === 'idle' || this.state === 'wandering' || this.state === 'fleeing') {
+                  this.state = 'chasing';
+              }
+          } else if (this.state === 'idle' || this.state === 'wandering') {
               this.isHostile = true;
               this.state = 'chasing';
               this.target = player;
           }
 
-          playSound('hit');
-          
-          // Apply damage effect
-          this.applyDamageEffect();
+          const from = opts.from || ((typeof player !== 'undefined' && player && player.container)
+              ? player.container.position : null);
+
+          if (blocked) {
+              // Held guard: absorb — stay planted, keep guarding pose
+              try { playSound('hit'); } catch (e) {}
+          } else {
+              try { playSound('hit'); } catch (e) {}
+              try { this.applyDamageEffect(); } catch (e) {}
+
+              const heavy = opts.heavy != null
+                  ? !!opts.heavy
+                  : (dmg >= 25 || zone === 'head' || this.health <= this.maxHealth * 0.35);
+              try { this.playBodyHit(from, heavy); } catch (e) {}
+              try {
+                  if (this.body && typeof this.body.emit === 'function' && zone) {
+                      this.body.emit('hit', zone);
+                  }
+              } catch (e) {}
+
+              // Soft stagger: brief AI lock + attackCooldown bump
+              try {
+                  let st = (opts.stagger != null) ? opts.stagger : (heavy ? 0.28 : 0.12);
+                  if (st > 0 && this.health > 0) {
+                      this._staggerT = Math.max(this._staggerT || 0, st);
+                      this.attackCooldown = Math.max(this.attackCooldown || 0, st * 0.85);
+                      this.input = this.input || { forward: 0, backward: 0, left: 0, right: 0 };
+                      this.input.forward = 0;
+                      this.input.backward = 0;
+                      this.input.left = 0;
+                      this.input.right = 0;
+                      this.velocity.x *= 0.35;
+                      this.velocity.z *= 0.35;
+                  }
+              } catch (e) {}
+
+              // Soft knockback away from attacker
+              try {
+                  if (from && this.health > 0) {
+                      const away = new THREE.Vector3().subVectors(this.container.position, from);
+                      away.y = 0;
+                      if (away.lengthSq() > 1e-4) {
+                          const knock = heavy ? 4.5 : 2.8;
+                          const headBoost = zone === 'head' ? 1.15 : 1;
+                          away.normalize().multiplyScalar(knock * headBoost);
+                          this.velocity.x += away.x;
+                          this.velocity.z += away.z;
+                          if (heavy) this.velocity.y = Math.max(this.velocity.y, zone === 'head' ? 2.2 : 1.6);
+                      }
+                  }
+              } catch (e) {}
+          }
           
           if (this.health <= 0) {
               this.die();
@@ -2630,7 +3892,7 @@
           const origin = this.container.position.clone();
           origin.y += this.height * 0.5; // cast from chest height
 
-          const forwardDir = new THREE.Vector3(0, 0, -1).applyEuler(this.container.rotation).normalize();
+          const forwardDir = this.getForwardDir(new THREE.Vector3());
           const leftDir = forwardDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 6);  // 30° left
           const rightDir = forwardDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 6); // 30° right
 
@@ -2670,12 +3932,32 @@
       die() {
           if (this._deadCounted) return;
           this._deadCounted = true;
+          // Mark dead BEFORE hydra count so combatLabCountAlive never overcounts
+          this.state = 'dead';
+          this.health = 0;
+          if (this.mesh) this.mesh.userData.health = 0;
           try { enemiesKilled++; } catch (e) {}
           if (this.tutorialCombat && typeof directorOnTutorialRobotKilled === 'function') {
               try { directorOnTutorialRobotKilled(); } catch (e) {}
           }
-          this.state = 'dead';
+          try {
+              if (typeof noteCombatLabKill === 'function') noteCombatLabKill();
+          } catch (e) {}
           this.velocity.set(0, 0, 0);
+          this.isOnGround = false; // allow death knockup ballistic
+
+          // Stop blocking movement / targeting immediately (corpse is visual-only)
+          try {
+              if (this.healthBar) this.healthBar.visible = false;
+              if (this.mesh) {
+                  const mi = collidableObjects.indexOf(this.mesh);
+                  if (mi > -1) collidableObjects.splice(mi, 1);
+              }
+              if (this.collider) {
+                  const ci = collidableObjects.indexOf(this.collider);
+                  if (ci > -1) collidableObjects.splice(ci, 1);
+              }
+          } catch (e) {}
 
           // PR6: host spawns shared death loot (guests see via event loot).
           try {
@@ -2684,64 +3966,92 @@
               }
           } catch (e) {}
           
-          // Create death effect
-          this.createDeathEffect(this.mesh);
-          
-          // Remove from game after delay
+          // Theatrical death: crumple → flat, then VFX, then remove (procedural ragdoll feel)
+          try {
+              if (this.body) {
+                  if (typeof this.body.playDeath === 'function') this.body.playDeath();
+                  else if (typeof this.body.setDown === 'function') this.body.setDown('dead');
+              }
+          } catch (e) {}
+          try {
+              const from = (typeof player !== 'undefined' && player && player.container)
+                  ? player.container.position : null;
+              if (from) {
+                  const away = new THREE.Vector3().subVectors(this.container.position, from);
+                  away.y = 0;
+                  if (away.lengthSq() > 1e-4) {
+                      away.normalize().multiplyScalar(3.6);
+                      this.velocity.x = away.x;
+                      this.velocity.z = away.z;
+                      this.velocity.y = 2.8;
+                  }
+              }
+          } catch (e) {}
+
+          // VFX as body goes flat (~0.5s crumple in driver)
           setTimeout(() => {
-              if (this.mesh.parent) this.scene.remove(this.mesh);
-              if (this.container.parent) this.scene.remove(this.container);
+              try {
+                  if (!this.container || !this.container.parent) return;
+                  if (this.mesh) this.createDeathEffect(this.mesh);
+                  else if (this.container) this.createDeathEffect(this.container);
+              } catch (e) {}
+          }, 520);
+          
+          // Remove after flat pose reads
+          setTimeout(() => {
+              try {
+                  if (this.body && typeof this.body.dispose === 'function') this.body.dispose();
+              } catch (e) {}
+              this.body = null;
+              if (this.mesh && this.mesh.parent) this.scene.remove(this.mesh);
+              if (this.container && this.container.parent) this.scene.remove(this.container);
               
-              // Remove from arrays
               const npcIndex = npcs.indexOf(this);
               if (npcIndex > -1) npcs.splice(npcIndex, 1);
-              
-              const collidableIndex = collidableObjects.indexOf(this.mesh);
-              if (collidableIndex > -1) collidableObjects.splice(collidableIndex, 1);
-          }, 1000);
+          }, 1450);
       }
 
       createDeathEffect(enemy) {
-          const particleCount = 30;
+          const particleCount = 36;
           const particles = new THREE.Group();
 
           const deathPos = new THREE.Vector3();
           enemy.getWorldPosition(deathPos);
 
-          playSoundAt('explosion', deathPos, { gain: 0.9, maxDist: 60 });
+          playSoundAt('explosion', deathPos, { gain: 0.95, maxDist: 60 });
 
           for (let i = 0; i < particleCount; i++) {
-              const isBlood = Math.random() > 0.3;
-              const size = isBlood ? 0.1 + Math.random() * 0.1 : 0.05 + Math.random() * 0.05;
+              const isBlood = Math.random() > 0.28;
+              const size = isBlood ? 0.08 + Math.random() * 0.12 : 0.04 + Math.random() * 0.06;
               const color = isBlood ? 0x8A0303 : 0x00ffff;
 
               const mat = new THREE.MeshStandardMaterial({
                   color,
-                  emissive: isBlood ? 0x000000 : color,
+                  emissive: isBlood ? 0x220000 : color,
+                  emissiveIntensity: isBlood ? 0.15 : 0.6,
                   transparent: true,
                   opacity: 1.0,
-                  roughness: 0.5
+                  roughness: 0.55
               });
 
               const particle = new THREE.Mesh(
-                  new THREE.SphereGeometry(size, 8, 8),
+                  new THREE.SphereGeometry(size, 6, 6),
                   mat
               );
 
-              // Random scatter
+              // Scatter around torso height
               particle.position.copy(deathPos);
-              particle.position.x += (Math.random() - 0.5) * 0.5;
-              particle.position.y += (Math.random() - 0.5) * 0.5;
-              particle.position.z += (Math.random() - 0.5) * 0.5;
+              particle.position.x += (Math.random() - 0.5) * 0.55;
+              particle.position.y += 0.2 + (Math.random() - 0.3) * 0.6;
+              particle.position.z += (Math.random() - 0.5) * 0.55;
 
-              // Initial velocity
               particle.userData = {
                   velocity: new THREE.Vector3(
-                      (Math.random() - 0.5) * 5,
-                      Math.random() * 3,
-                      (Math.random() - 0.5) * 5
+                      (Math.random() - 0.5) * 6.5,
+                      1.2 + Math.random() * 3.5,
+                      (Math.random() - 0.5) * 6.5
                   ),
-                  lifetime: 1.0 + Math.random()
+                  lifetime: 0.85 + Math.random() * 0.7
               };
 
               particles.add(particle);
@@ -2750,10 +4060,11 @@
           scene.add(particles);
 
           // Flash light burst
-          const flash = new THREE.PointLight(0xffffff, 2, 3);
+          const flash = new THREE.PointLight(0xff8866, 2.4, 4);
           flash.position.copy(deathPos);
+          flash.position.y += 0.4;
           scene.add(flash);
-          setTimeout(() => scene.remove(flash), 150);
+          setTimeout(() => { try { scene.remove(flash); } catch (e) {} }, 120);
 
           // Animate particles
           const animateParticles = () => {

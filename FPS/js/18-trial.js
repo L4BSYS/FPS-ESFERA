@@ -139,6 +139,33 @@ function trialFinish() {
   trialDraw();
   try { showTrialModal(ms, isBest); } catch (e) {}
   try { playSound('health-regen'); } catch (e) {}
+  reportTrialInfluence(trialActive.def.id, ms);
+}
+
+/**
+ * Reporta el mejor tiempo de una prueba al sistema de influencia global.
+ * La prueba suma al puntaje compuesto de la sesión (30-influence.js), que
+ * después se reporta como un único score de FPS.
+ */
+function reportTrialInfluence(trialId, ms) {
+  try {
+    if (typeof fpsInfluenceTrialFinished === 'function') {
+      fpsInfluenceTrialFinished(trialId, ms);
+      return;
+    }
+    // Respaldo: si el módulo de influencia no cargó, reportamos sólo la prueba.
+    if (!window.LaGrietaInfluence || !firebase.auth().currentUser) return;
+    const seconds = Math.max(1, ms / 1000);
+    const score = Math.round(600000 / seconds);
+    window.LaGrietaInfluence.report('fps', score, {
+      trial: trialId,
+      timeMs: ms
+    }).catch(function (error) {
+      console.warn('No se pudo reportar la prueba del FPS:', error);
+    });
+  } catch (e) {
+    console.warn('Influencia FPS no disponible:', e);
+  }
 }
 function trialUpdate() {
   if (!trialActive || trialActive.finished) return;

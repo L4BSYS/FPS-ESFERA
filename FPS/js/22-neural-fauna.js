@@ -453,7 +453,11 @@ function updateEnemyBrains(delta) {
     let blocked = 0;
     try {
       const origin = pos.clone(); origin.y += (npc.height || 1.6) * 0.5;
-      const fwd = new THREE.Vector3(0, 0, -1).applyEuler(npc.container.rotation).normalize();
+      // NPC body / chase facing = local +Z (same as Character.getForwardDir)
+      const yaw = npc.container.rotation.y;
+      const fwd = (typeof npc.getForwardDir === 'function')
+        ? npc.getForwardDir(new THREE.Vector3())
+        : new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
       const ray = new THREE.Raycaster(origin, fwd, 0, 2.2);
       blocked = ray.intersectObjects(collidableObjects, true).length ? 1 : 0;
     } catch (e) {}

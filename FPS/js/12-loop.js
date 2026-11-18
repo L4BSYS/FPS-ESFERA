@@ -33,6 +33,14 @@
           return;
       }
 
+      // Body events + recoil pose
+      try {
+          if (player.body) {
+              if (typeof player.body.setAction === 'function') player.body.setAction('use');
+              if (typeof player.body.emit === 'function') player.body.emit('fired');
+          }
+      } catch (e) {}
+
       // Bullet creation
       const bulletOrigin = new THREE.Vector3();
       muzzle.getWorldPosition(bulletOrigin);
@@ -78,12 +86,22 @@
           muzzleFlash.intensity = 0;
       }, 50);
 
-      // Weapon kickback
-      if (model.userData.originalPosition === undefined) {
-          model.userData.originalPosition = model.position.clone();
+      // Weapon kickback: camera-viewmodel only.
+      // Body-mounted gun must NOT accumulate position.z — sway is skipped on toolMount,
+      // so the old +=0.05 drifted the prop to infinity.
+      const gunOnBody = !!(player.body && player.body.toolMount && model.parent === player.body.toolMount);
+      if (gunOnBody) {
+          try {
+              if (typeof player.body.setAction === 'function') player.body.setAction('use');
+              // Aim is reapplied every frame in syncGunBodyMount — no positional kick here.
+          } catch (e) {}
+      } else {
+          if (model.userData.originalPosition === undefined) {
+              model.userData.originalPosition = model.position.clone();
+          }
+          model.position.z += 0.05;
+          model.position.y -= 0.01;
       }
-      model.position.z += 0.05;
-      model.position.y -= 0.01;
 
       // Set cooldown
       shootCooldown = 0.12;
@@ -112,6 +130,18 @@
       if (!isGamePaused) {
           shootCooldown = Math.max(0, shootCooldown - delta);
           try { if (typeof meleeCooldown !== 'undefined') meleeCooldown = Math.max(0, meleeCooldown - delta); } catch (e) {}
+          try {
+              if (typeof isCombatLabActive === 'function' && isCombatLabActive() &&
+                  typeof updateCombatLabHud === 'function' && (meleeCooldown > 0 || (LAB && LAB.stats))) {
+                  // Refresh cd readout without spamming DOM every frame when idle ready
+                  if (!updateCombatLabHud._acc) updateCombatLabHud._acc = 0;
+                  updateCombatLabHud._acc += delta;
+                  if (updateCombatLabHud._acc > 0.15) {
+                      updateCombatLabHud._acc = 0;
+                      updateCombatLabHud();
+                  }
+              }
+          } catch (e) {}
 
           // Update Player
           if (player) {
@@ -122,8 +152,41 @@
           // Update NPCs (skip puppets — PR5b guest mirrors pose from mobs)
           npcs.forEach(npc => {
               if (npc.isPuppet) return;
-              if (npc.health > 0 && npc.container.parent) { // Only update living NPCs in scene
+              if (!npc.container || !npc.container.parent) return;
+              if (npc.health > 0) {
                   npc.update(delta, collidableObjects, player);
+              } else if (npc.state === 'dead') {
+                  // Corpse ballistic + crumple/death poses until despawn
+                  try {
+                      const g = (npc.gravity != null) ? npc.gravity : -20;
+                      if (!npc.isOnGround) {
+                          npc.velocity.y += g * delta;
+                      } else {
+                          npc.velocity.x *= Math.pow(0.82, delta * 60);
+                          npc.velocity.z *= Math.pow(0.82, delta * 60);
+                          if (npc.velocity.y < 0) npc.velocity.y = 0;
+                      }
+                      npc.container.position.x += npc.velocity.x * delta;
+                      npc.container.position.y += npc.velocity.y * delta;
+                      npc.container.position.z += npc.velocity.z * delta;
+                      if (typeof npc.checkGround === 'function') {
+                          npc.checkGround(collidableObjects);
+                      }
+                      if (npc.isOnGround && npc.velocity.y <= 0) {
+                          npc.velocity.y = 0;
+                      }
+                      if (npc.updateColliderPosition) npc.updateColliderPosition();
+                      if (npc.body && typeof npc.updateBodyRig === 'function') {
+                          const deathT = (npc.body.driver && npc.body.driver.deathT) || 0;
+                          npc.updateBodyRig(delta, {
+                              hasGun: false,
+                              fp: false,
+                              onGround: !!npc.isOnGround,
+                              moving: false,
+                              down: deathT > 0.55 ? 'dead' : 'limp'
+                          });
+                      }
+                  } catch (e) {}
               }
           });
 

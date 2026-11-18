@@ -46,14 +46,61 @@ const TOOLS = {
     TORCH: 'torch'
 };
 
-// Melee Fase A: daño / alcance por herramienta (gun = culataza).
+// Melee feel: daño / alcance / timings por herramienta (gun = culataza).
+// peak = segundos desde el click hasta la ventana de impacto (ray resuelve ahí, no al click).
+// duration = largo del swing pose; cooldown = hasta el próximo swing.
+//
+// Rangos canónicos (escala futura: puño → daga → machete). Tools map onto these bands.
+const MELEE_RANGE = {
+    short: 1.35, // fists / knife — body-to-body
+    mid:   2.2,  // dagger / short blade
+    long:  2.9   // machete / axe-class
+};
+
+function meleeReachFor(bandOrMeters) {
+    if (typeof bandOrMeters === 'number' && isFinite(bandOrMeters)) return bandOrMeters;
+    const b = String(bandOrMeters || 'short').toLowerCase();
+    if (typeof MELEE_RANGE !== 'undefined' && MELEE_RANGE[b] != null) return MELEE_RANGE[b];
+    if (b === 'medium' && MELEE_RANGE) return MELEE_RANGE.mid;
+    return (MELEE_RANGE && MELEE_RANGE.short) || 1.35;
+}
+
 const MELEE_STATS = {
-    hands:   { damage: 4, reach: 2.2 },
-    axe:     { damage: 10, reach: 2.8 },
-    pickaxe: { damage: 9, reach: 2.7 },
-    hammer:  { damage: 8, reach: 2.5 },
-    gun:     { damage: 6, reach: 2.4 },
-    torch:   { damage: 5, reach: 2.5 }
+    hands:   { damage: 5,  rangeBand: 'short', reach: MELEE_RANGE.short, cooldown: 0.36, peak: 0.14, duration: 0.34, stagger: 0.10 },
+    axe:     { damage: 12, rangeBand: 'long',  reach: MELEE_RANGE.long,  cooldown: 0.58, peak: 0.24, duration: 0.50, stagger: 0.32 },
+    pickaxe: { damage: 10, rangeBand: 'long',  reach: MELEE_RANGE.long,  cooldown: 0.52, peak: 0.22, duration: 0.46, stagger: 0.26 },
+    hammer:  { damage: 9,  rangeBand: 'mid',   reach: MELEE_RANGE.mid,   cooldown: 0.48, peak: 0.20, duration: 0.44, stagger: 0.28 },
+    gun:     { damage: 6,  rangeBand: 'mid',   reach: MELEE_RANGE.mid,   cooldown: 0.42, peak: 0.16, duration: 0.38, stagger: 0.14 },
+    torch:   { damage: 6,  rangeBand: 'mid',   reach: MELEE_RANGE.mid,   cooldown: 0.44, peak: 0.18, duration: 0.40, stagger: 0.16 }
+};
+
+/**
+ * Fists / boxing layer (Combat Lab). Symmetric player ↔ enemy.
+ * strike = future weapon swing hook; guard = future shield hook (RMB hold).
+ * Future ladder: fists(short) → dagger(mid) → machete(long).
+ */
+const MELEE_FISTS = {
+    damage: 7,
+    rangeBand: 'short',
+    reach: MELEE_RANGE.short,
+    peak: 0.12,
+    duration: 0.28,
+    cooldown: 0.32,
+    stagger: 0.14,
+    // Block = real guard: low chip, NO stagger/knockback/flinch on defender.
+    guardDamageMult: 0.18,
+    chipDamage: true,
+    forgive: 0.08,
+    // S1 Strict Soft (Combat Lab): clash priority + Aguante
+    clashWindowMs: 140,
+    punchCost: 9,
+    guardDrainPerSec: 12,
+    blockHitCost: 4,
+    guardTiredBelow: 15,
+    guardTiredMult: 0.45,
+    softDamageMult: 0.5,
+    softCooldownMult: 1.4,
+    note: 'S1: earlier start wins clash; punch/guard spend stamina; low = soft/tired chip.'
 };
 const ITEM_DEFINITIONS = {
     // Tools and Weapons
@@ -730,5 +777,27 @@ const PLAYER_CONFIG = {
 
     blockReach: 5, // Max distance for block interactions
     interactionReach: 3, // Max distance for interacting/picking up
+
+    // BodyRig (js/bodyRig.js) — PR3+
+    useBodyRig: true,          // player 1P box-doll
+    useBodyHeadCamera: true,   // camera follows head joint
+    bodyHeadForwardNudge: 0.12, // local −Z peek so hands stay in FOV
+    gunOnBodyMount: true,      // pistol on wrist_R; other tools stay on camera
+    crouchEnabled: true,
+    crouchHeightFactor: 0.65,  // mirror BODY_DEF.crouchPolicy
+    crouchSpeedFactor: 0.5,
+    // Scale: 1 unit = 1 m; height above is the human reference. Viewmodels are oversized for
+    // camera FOV — body sockets use BODY_DEF.scale / getViewmodelWorldScale(itemId).
+    viewmodelToWorld: 0.30,
+    // All TOOLS.* with models mount on wrist (not only gun). Set false to revert melee to camera VM.
+    bodyToolsOnMount: true,
+    holsterGun: true,          // Fase D: pistol on hip_R when not equipped
+    // --- Fase F freeze (dead flags — do not flip without a dedicated plan) ---
+    // thirdPerson: local 1P only. Body is already 3P-capable as NPC visuals; enabling this
+    // means a cam-orbit branch (head visible, aim retarget). See BODY_DEF.portNotes.deferred.
+    thirdPerson: false,
+    // onlineBody: remotes stay capsules in 17-net.js netAvatar. Flip only after
+    // ONLINE_BODY_PLACEHOLDER work (createBody on remotes + poseId drive). Never stream bones.
+    onlineBody: false
 };
 

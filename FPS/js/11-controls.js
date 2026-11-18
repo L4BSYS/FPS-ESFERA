@@ -3,6 +3,17 @@
   function setupControls() {
       const canvas = renderer.domElement;
 
+      // Aviso de captura del mouse: sólo mientras se juega y sin pointer lock.
+      function updatePointerHint() {
+          try {
+              const hint = document.getElementById('pointerHint');
+              if (!hint) return;
+              const locked = document.pointerLockElement === canvas;
+              hint.hidden = isGamePaused || locked || isMobile;
+          } catch (e) {}
+      }
+      window.__updatePointerHint = updatePointerHint;
+
       // Pointer Lock
       canvas.addEventListener('click', () => {
           if (!isGamePaused && document.pointerLockElement !== canvas) {
@@ -15,6 +26,7 @@
       document.addEventListener('pointerlockerror', onPointerLockError, false);
 
       function onPointerLockChange() {
+          updatePointerHint();
           if (document.pointerLockElement === canvas) {
                console.log("Pointer Locked");
               document.addEventListener('mousemove', onMouseMove, false);
@@ -59,6 +71,16 @@
           if (typeof benchOpen !== 'undefined' && benchOpen && (e.key || '').toLowerCase() === KeyMap.interact && !isTypingTarget(e)) { toggleBench(false); return; }
           if (typeof containerOpen !== 'undefined' && containerOpen && (e.key || '').toLowerCase() === KeyMap.interact && !isTypingTarget(e)) { toggleContainer(false); return; }
           if (isGamePaused) return; // Ignore game keys if paused
+
+          // Combat Lab restart (F8) — before lowercasing (e.key is 'F8')
+          if ((e.key === 'F8' || e.code === 'F8') && !isTypingTarget(e)) {
+              if (typeof isCombatLabActive === 'function' && isCombatLabActive() &&
+                  typeof restartCombatLab === 'function') {
+                  e.preventDefault();
+                  try { restartCombatLab(); } catch (err) {}
+                  return;
+              }
+          }
 
           const key = e.key.toLowerCase();
           keys[key] = true; // Update global keys state
@@ -129,6 +151,11 @@
                   if (e.button === 2) { e.preventDefault(); cancelPlacement(true); return; }
               }
               if (e.button === 0) { // Left click
+                  // Fists lab: strike (no inventory tools)
+                  if (typeof player.usesFistsCombat === 'function' && player.usesFistsCombat()) {
+                      if (!player.isGuarding) player.startStrike({ fists: true });
+                      return;
+                  }
                   // First check if we're looking at a pickup item
                   const lookingAtPickup = checkForPickupItems();
                   if (lookingAtPickup) {
@@ -138,6 +165,11 @@
                   performToolPrimaryAction();
               } else if (e.button === 2) { // Right click
                   e.preventDefault();
+                  // Fists / guard hold (future shield)
+                  if (typeof player.usesFistsCombat === 'function' && player.usesFistsCombat()) {
+                      player.setGuard(true);
+                      return;
+                  }
                   if (typeof creatorMode !== 'undefined' && creatorMode) {
                       paletteHold = true;
                       togglePalette(true);
@@ -154,14 +186,23 @@
                           break;
                   }
               }
-          } else if (!isGamePaused && !document.pointerLockElement) {
-              // If click outside when not locked, try to lock pointer
-              // canvas.requestPointerLock();
+          } else if (!isGamePaused && !document.pointerLockElement && e.button === 0) {
+              // Cualquier clic dentro del juego captura el mouse, no sólo el canvas.
+              lockPointer();
+          }
+      });
+
+      window.addEventListener('mouseup', (e) => {
+          if (e.button === 2 && player && typeof player.usesFistsCombat === 'function' &&
+              player.usesFistsCombat() && typeof player.setGuard === 'function') {
+              player.setGuard(false);
           }
       });
 
       // Prevent context menu on right-click in game window
       canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+      updatePointerHint();
   }
   function setupMobileControls() {
       if (window.__mobileControlsReady) return;
@@ -354,10 +395,11 @@
           }
 
           case TOOLS.HAMMER: {
+              const labNoCraft = (typeof combatLabBlocksCraft === 'function' && combatLabBlocksCraft());
               const npc = (typeof player.lookAtHostileNpc === 'function')
                   ? player.lookAtHostileNpc(stats.reach)
                   : null;
-              if (npc) {
+              if (npc || labNoCraft) {
                   player.meleeAttack(stats.damage, stats.reach);
               } else if (typeof creatorMode !== 'undefined' && creatorMode) {
                   creatorPlace();
@@ -385,6 +427,11 @@
       if (typeof isGamePaused !== 'undefined' && isGamePaused) return;
       if (typeof player === 'undefined' || !player) return;
       if (typeof pendingPlacement !== 'undefined' && pendingPlacement) { confirmPlacement(); return; }
+      // Fists lab: same as desktop LMB
+      if (typeof player.usesFistsCombat === 'function' && player.usesFistsCombat()) {
+          if (!player.isGuarding) player.startStrike({ fists: true });
+          return;
+      }
       try {
           if (typeof tryOpenWorkbench === 'function' && tryOpenWorkbench()) return;
           if (typeof tryOpenWorldContainer === 'function' && tryOpenWorldContainer()) return;
@@ -400,6 +447,11 @@
       if (typeof isGamePaused !== 'undefined' && isGamePaused) return;
       if (typeof player === 'undefined' || !player) return;
       if (typeof pendingPlacement !== 'undefined' && pendingPlacement) { cancelPlacement(true); return; }
+      // Fists lab: tap secondary = toggle guard (hold model is mouse-only)
+      if (typeof player.usesFistsCombat === 'function' && player.usesFistsCombat()) {
+          if (typeof player.setGuard === 'function') player.setGuard(!player.isGuarding);
+          return;
+      }
       if (typeof creatorMode !== 'undefined' && creatorMode) { paletteHold = true; togglePalette(true); return; }
       switch (player.currentTool) {
           case TOOLS.HAMMER: creatorDelete(); break;
